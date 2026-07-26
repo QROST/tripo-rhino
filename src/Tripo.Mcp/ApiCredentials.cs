@@ -942,11 +942,32 @@ internal sealed class WindowsCredentialManagerApiKeyStore :
     private const uint CredentialPersistLocalMachine = 2;
     private const int ErrorNotFound = 1168;
     private const int MaximumCredentialBytes = 5120;
-    private static readonly string TargetName =
+    private const int MaximumTargetNameCharacters = 32_767;
+    private static readonly string DefaultTargetName =
         "TripoMCPs/TripoV3/" +
         (string.IsNullOrWhiteSpace(Environment.UserName)
             ? "current-user"
             : Environment.UserName);
+    private readonly string _targetName;
+
+    public WindowsCredentialManagerApiKeyStore()
+        : this(DefaultTargetName)
+    {
+    }
+
+    internal WindowsCredentialManagerApiKeyStore(string targetName)
+    {
+        if (string.IsNullOrWhiteSpace(targetName) ||
+            targetName.Contains('\0') ||
+            targetName.Length > MaximumTargetNameCharacters)
+        {
+            throw new ArgumentException(
+                "A valid Windows Credential Manager target is required.",
+                nameof(targetName));
+        }
+
+        _targetName = targetName;
+    }
 
     public string BackendName => "windows-credential-manager";
 
@@ -955,7 +976,7 @@ internal sealed class WindowsCredentialManagerApiKeyStore :
     public string? Read()
     {
         if (!CredRead(
-                TargetName,
+                _targetName,
                 CredentialTypeGeneric,
                 0,
                 out IntPtr credentialPointer))
@@ -1022,7 +1043,7 @@ internal sealed class WindowsCredentialManagerApiKeyStore :
             NativeCredential credential = new()
             {
                 Type = CredentialTypeGeneric,
-                TargetName = TargetName,
+                TargetName = _targetName,
                 CredentialBlobSize = (uint)bytes.Length,
                 CredentialBlob = blob,
                 Persist = CredentialPersistLocalMachine,
@@ -1049,7 +1070,7 @@ internal sealed class WindowsCredentialManagerApiKeyStore :
 
     public void Delete()
     {
-        if (!CredDelete(TargetName, CredentialTypeGeneric, 0))
+        if (!CredDelete(_targetName, CredentialTypeGeneric, 0))
         {
             int error = Marshal.GetLastWin32Error();
             if (error != ErrorNotFound)

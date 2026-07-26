@@ -27,4 +27,6 @@ jobs:
       - name: Build
         run: dotnet build Tripo.Rhino.sln --configuration Release --no-restore
       - name: Test
+        env:
+          TRIPO_RUN_WINDOWS_CREDENTIAL_MANAGER_CANARY: ${{ runner.os == 'Windows' && '1' || '0' }}
         run: dotnet test Tripo.Rhino.sln --configuration Release --no-build

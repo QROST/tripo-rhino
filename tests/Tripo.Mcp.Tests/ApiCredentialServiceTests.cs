@@ -312,6 +312,60 @@ public sealed class ApiCredentialServiceTests
         Assert.False(store.UsesWeakerFileFallback);
     }
 
+    [Fact]
+    public void WindowsPlatformSelectionNeverDowngradesToPrivateFileFallback()
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        Tripo.Mcp.IPlatformApiKeyStore store =
+            Tripo.Mcp.PlatformApiKeyStore.Create();
+
+        Assert.IsType<
+            Tripo.Mcp.WindowsCredentialManagerApiKeyStore>(store);
+        Assert.False(store.UsesWeakerFileFallback);
+    }
+
+    [Fact]
+    public void WindowsCredentialManagerCanaryUsesAnIsolatedTarget()
+    {
+        if (!OperatingSystem.IsWindows() ||
+            !string.Equals(
+                Environment.GetEnvironmentVariable(
+                    "TRIPO_RUN_WINDOWS_CREDENTIAL_MANAGER_CANARY"),
+                "1",
+                StringComparison.Ordinal))
+        {
+            return;
+        }
+
+        string target =
+            "TripoMCPs/Tests/Tripo.Mcp.Tests/" +
+            Environment.ProcessId +
+            "/" +
+            Guid.NewGuid().ToString("N");
+        const string sentinel =
+            "synthetic-windows-credential-canary-not-a-secret";
+        Tripo.Mcp.WindowsCredentialManagerApiKeyStore store =
+            new(target);
+
+        try
+        {
+            store.Delete();
+            Assert.Null(store.Read());
+            store.Write(sentinel);
+            Assert.Equal(sentinel, store.Read());
+            store.Delete();
+            Assert.Null(store.Read());
+        }
+        finally
+        {
+            store.Delete();
+        }
+    }
+
     private sealed class FakeStore : Tripo.Mcp.IPlatformApiKeyStore
     {
         public string BackendName => "fake-store";
