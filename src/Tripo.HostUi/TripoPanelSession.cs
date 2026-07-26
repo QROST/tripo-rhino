@@ -1,0 +1,1220 @@
+namespace Tripo.HostUi;
+
+public sealed record PreparedTextGeneration(
+    string Prompt,
+    int FaceLimit,
+    bool WithMaterials,
+    string DocumentSessionId,
+    string OperationId);
+
+public sealed record PreparedObjConversion(
+    string SourceTaskId,
+    int FaceLimit,
+    bool WithMaterials,
+    string DocumentSessionId,
+    string OperationId);
+
+public sealed record PreparedObjImport(
+    string ConversionTaskId,
+    string Name,
+    string DocumentSessionId,
+    string OperationId,
+    string ImportMode,
+    bool ApplyMaterials);
+
+public sealed record TripoPanelState(
+    bool Connected,
+    bool Busy,
+    Tripo.Bridge.HostContextReceipt? Context,
+    Tripo.Bridge.HostControlCredentialStatusReceipt? CredentialStatus,
+    PreparedTextGeneration? PreparedGeneration,
+    bool GenerationDispatchAttempted,
+    Tripo.Bridge.HostControlTextTaskCreationReceipt? GenerationReceipt,
+    Tripo.Bridge.HostControlOperationStatusReceipt? GenerationOperationStatus,
+    Tripo.Bridge.HostControlTaskStatusReceipt? GenerationStatus,
+    PreparedObjConversion? PreparedConversion,
+    bool ConversionDispatchAttempted,
+    Tripo.Bridge.HostControlObjConversionCreationReceipt? ConversionReceipt,
+    Tripo.Bridge.HostControlOperationStatusReceipt? ConversionOperationStatus,
+    Tripo.Bridge.HostControlTaskStatusReceipt? ConversionStatus,
+    PreparedObjImport? PreparedImport,
+    bool ImportDispatchAttempted,
+    Tripo.Bridge.HostControlObjTaskImportReceipt? ImportReceipt,
+    string? LastError)
+{
+    public static TripoPanelState Initial { get; } = new(
+        Connected: false,
+        Busy: false,
+        Context: null,
+        CredentialStatus: null,
+        PreparedGeneration: null,
+        GenerationDispatchAttempted: false,
+        GenerationReceipt: null,
+        GenerationOperationStatus: null,
+        GenerationStatus: null,
+        PreparedConversion: null,
+        ConversionDispatchAttempted: false,
+        ConversionReceipt: null,
+        ConversionOperationStatus: null,
+        ConversionStatus: null,
+        PreparedImport: null,
+        ImportDispatchAttempted: false,
+        ImportReceipt: null,
+        LastError: null);
+
+    public bool HasWorkflowState =>
+        PreparedGeneration is not null ||
+        GenerationDispatchAttempted ||
+        GenerationReceipt is not null ||
+        GenerationOperationStatus is not null ||
+        GenerationStatus is not null ||
+        PreparedConversion is not null ||
+        ConversionDispatchAttempted ||
+        ConversionReceipt is not null ||
+        ConversionOperationStatus is not null ||
+        ConversionStatus is not null ||
+        PreparedImport is not null ||
+        ImportDispatchAttempted ||
+        ImportReceipt is not null;
+
+    public bool HasUnresolvedPaidDispatch =>
+        (GenerationDispatchAttempted &&
+         GenerationReceipt is null &&
+         GenerationOperationStatus?.TaskIdDurable != true) ||
+        (ConversionDispatchAttempted &&
+         ConversionReceipt is null &&
+         ConversionOperationStatus?.TaskIdDurable != true);
+
+    public bool HasUnresolvedDispatch =>
+        HasUnresolvedPaidDispatch ||
+        (ImportDispatchAttempted && ImportReceipt is null);
+
+    public bool HasDurableGenerationTask =>
+        GenerationReceipt is not null ||
+        GenerationOperationStatus?.TaskIdDurable == true;
+
+    public bool CanDispatchPreparedGeneration =>
+        PreparedGeneration is not null &&
+        !HasDurableGenerationTask;
+
+    public bool GenerationRetryRequired =>
+        CanDispatchPreparedGeneration &&
+        GenerationDispatchAttempted;
+
+    public bool GenerationRetryAllowed =>
+        GenerationRetryRequired &&
+        GenerationOperationStatus?.CanResumeCreation == true;
+
+    public bool HasDurableConversionTask =>
+        ConversionReceipt is not null ||
+        ConversionOperationStatus?.TaskIdDurable == true;
+
+    public bool CanDispatchPreparedConversion =>
+        PreparedConversion is not null &&
+        !HasDurableConversionTask;
+
+    public bool ConversionRetryRequired =>
+        CanDispatchPreparedConversion &&
+        ConversionDispatchAttempted;
+
+    public bool ConversionRetryAllowed =>
+        ConversionRetryRequired &&
+        ConversionOperationStatus?.CanResumeCreation == true;
+
+    public bool CanDispatchPreparedImport =>
+        PreparedImport is not null &&
+        ImportReceipt is null;
+
+    public bool ImportRetryRequired =>
+        CanDispatchPreparedImport &&
+        ImportDispatchAttempted;
+}
+
+public sealed class TripoPanelSession : IAsyncDisposable
+{
+    private readonly Tripo.Bridge.IHostSidecarConnector _connector;
+    private readonly TripoPanelRecoveryStore? _recoveryStore;
+    private readonly SemaphoreSlim _operationGate = new(1, 1);
+    private readonly CancellationTokenSource _lifetime = new();
+    private readonly object _stateGate = new();
+    private Tripo.Bridge.IHostControlClient? _client;
+    private TripoPanelState _state = TripoPanelState.Initial;
+    private TripoPanelRecoveryLoadResult _recovery;
+    private long _recoveryRevision;
+    private Task? _disposeTask;
+    private volatile bool _disposed;
+
+    public TripoPanelSession(
+        Tripo.Bridge.IHostSidecarConnector connector,
+        TripoPanelRecoveryStore? recoveryStore = null)
+    {
+        _connector = connector ?? throw new ArgumentNullException(nameof(connector));
+        _recoveryStore = recoveryStore;
+        _recovery =
+            recoveryStore?.LoadStale() ??
+            TripoPanelRecoveryLoadResult.Empty;
+    }
+
+    public event EventHandler<TripoPanelState>? StateChanged;
+
+    public event EventHandler<TripoPanelRecoveryLoadResult>? RecoveryChanged;
+
+    public TripoPanelState State
+    {
+        get
+        {
+            lock (_stateGate)
+            {
+                return _state;
+            }
+        }
+    }
+
+    public TripoPanelRecoveryLoadResult Recovery
+    {
+        get
+        {
+            lock (_stateGate)
+            {
+                return _recovery;
+            }
+        }
+    }
+
+    public Task ConnectAsync(CancellationToken cancellationToken = default) =>
+        RunExclusiveAsync(
+            async token =>
+            {
+                Tripo.Bridge.IHostControlClient client =
+                    await _connector.EnsureConnectedAsync(token)
+                        .ConfigureAwait(false);
+                Tripo.Bridge.HostControlHealthReceipt health =
+                    await client.GetHealthAsync(token).ConfigureAwait(false);
+                Tripo.Bridge.HostContextReceipt context =
+                    await client.GetHostContextAsync(token).ConfigureAwait(false);
+                EnsureHealthMatchesContext(health, context);
+                TripoPanelState current = State;
+                if (current.Context is not null &&
+                    !IsSameDocumentSession(current.Context, context) &&
+                    current.HasWorkflowState)
+                {
+                    throw new InvalidOperationException(
+                        "The active host document changed while this panel still " +
+                        "owns workflow state. Return to the original document, or " +
+                        "resolve the existing operation before starting a new workflow.");
+                }
+
+                Tripo.Bridge.HostControlCredentialStatusReceipt credentials =
+                    await client.GetCredentialStatusAsync(token)
+                        .ConfigureAwait(false);
+                _client = client;
+                UpdateState(state => state with
+                {
+                    Connected = true,
+                    Context = context,
+                    CredentialStatus = credentials,
+                    LastError = null,
+                });
+            },
+            cancellationToken);
+
+    public Task SetApiKeyAsync(
+        string apiKey,
+        bool persist,
+        CancellationToken cancellationToken = default) =>
+        RunExclusiveAsync(
+            async token =>
+            {
+                using IDisposable? lease =
+                    _recoveryStore?.AcquireCredentialWorkflowLease();
+                EnsureNoStaleRecovery();
+                EnsureCredentialMutationAllowed();
+                Tripo.Bridge.IHostControlClient client = RequireClient();
+                Tripo.Bridge.HostControlCredentialMutationReceipt receipt =
+                    await client.SetApiKeyAsync(apiKey, persist, token)
+                        .ConfigureAwait(false);
+                UpdateState(state => state with
+                {
+                    CredentialStatus = receipt.Status,
+                    LastError = null,
+                });
+            },
+            cancellationToken);
+
+    public Task ClearApiKeyAsync(
+        CancellationToken cancellationToken = default) =>
+        RunExclusiveAsync(
+            async token =>
+            {
+                using IDisposable? lease =
+                    _recoveryStore?.AcquireCredentialWorkflowLease();
+                EnsureNoStaleRecovery();
+                EnsureCredentialMutationAllowed();
+                Tripo.Bridge.IHostControlClient client = RequireClient();
+                Tripo.Bridge.HostControlCredentialMutationReceipt receipt =
+                    await client.ClearApiKeyAsync(token).ConfigureAwait(false);
+                UpdateState(state => state with
+                {
+                    CredentialStatus = receipt.Status,
+                    LastError = null,
+                });
+            },
+            cancellationToken);
+
+    public PreparedTextGeneration PrepareGeneration(
+        string prompt,
+        int faceLimit,
+        bool withMaterials)
+    {
+        EnterSynchronousMutation();
+        try
+        {
+            EnsureNoStaleRecovery();
+            ValidatePrompt(prompt);
+            ValidateFaceLimit(faceLimit);
+            if (State.HasWorkflowState)
+            {
+                throw new InvalidOperationException(
+                    "Use the prepared generation operation or start a new workflow " +
+                    "before creating another operation ID.");
+            }
+
+            Tripo.Bridge.HostContextReceipt context = RequireContext();
+            PreparedTextGeneration prepared = new(
+                prompt,
+                faceLimit,
+                withMaterials,
+                context.DocumentSessionId,
+                Guid.NewGuid().ToString("D"));
+            UpdateState(state => state with
+            {
+                PreparedGeneration = prepared,
+                GenerationDispatchAttempted = false,
+                GenerationReceipt = null,
+                GenerationOperationStatus = null,
+                GenerationStatus = null,
+                PreparedConversion = null,
+                ConversionDispatchAttempted = false,
+                ConversionReceipt = null,
+                ConversionOperationStatus = null,
+                ConversionStatus = null,
+                PreparedImport = null,
+                ImportDispatchAttempted = false,
+                ImportReceipt = null,
+                LastError = null,
+            });
+            return prepared;
+        }
+        finally
+        {
+            _operationGate.Release();
+        }
+    }
+
+    public Task DispatchPreparedGenerationAsync(
+        bool userConfirmedExternalCost,
+        CancellationToken cancellationToken = default)
+    {
+        if (!userConfirmedExternalCost)
+        {
+            throw new InvalidOperationException(
+                "Generation was not sent because external cost was not confirmed.");
+        }
+
+        return RunExclusiveAsync(
+            async token =>
+            {
+                using IDisposable? lease =
+                    _recoveryStore?.AcquireCredentialWorkflowLease();
+                EnsureNoStaleRecovery();
+                Tripo.Bridge.IHostControlClient client = RequireClient();
+                TripoPanelState current = State;
+                PreparedTextGeneration prepared =
+                    current.PreparedGeneration ??
+                    throw new InvalidOperationException(
+                        "Prepare a generation operation before dispatch.");
+                EnsurePaidDispatchAllowed(
+                    current.CanDispatchPreparedGeneration,
+                    current.GenerationRetryRequired,
+                    current.GenerationOperationStatus,
+                    "generation");
+                await EnsureSessionStillActiveAsync(
+                        client,
+                        prepared.DocumentSessionId,
+                        token)
+                    .ConfigureAwait(false);
+                UpdateState(state => state with
+                {
+                    GenerationDispatchAttempted = true,
+                });
+                Tripo.Bridge.HostControlTextTaskCreationReceipt receipt =
+                    await client.CreateTextTaskAsync(
+                            new Tripo.Bridge.HostControlCreateTextTaskRequest(
+                                prepared.Prompt,
+                                prepared.FaceLimit,
+                                prepared.WithMaterials,
+                                prepared.DocumentSessionId,
+                                prepared.OperationId,
+                                ConfirmExternalCost: true,
+                                RequireExistingOperation:
+                                    current.GenerationRetryRequired),
+                            token)
+                        .ConfigureAwait(false);
+                UpdateState(state => state with
+                {
+                    GenerationReceipt = receipt,
+                    GenerationOperationStatus = null,
+                    LastError = null,
+                });
+            },
+            cancellationToken);
+    }
+
+    public Task RefreshGenerationStatusAsync(
+        CancellationToken cancellationToken = default) =>
+        RunExclusiveAsync(
+            async token =>
+            {
+                Tripo.Bridge.IHostControlClient client = RequireClient();
+                string taskId =
+                    await ResolveGenerationTaskIdAsync(client, token)
+                        .ConfigureAwait(false);
+                Tripo.Bridge.HostControlTaskStatusReceipt status =
+                    await client.GetTaskStatusAsync(taskId, token)
+                        .ConfigureAwait(false);
+                UpdateState(state => state with
+                {
+                    GenerationStatus = status,
+                    LastError = null,
+                });
+            },
+            cancellationToken);
+
+    public PreparedObjConversion PrepareConversion(
+        int faceLimit,
+        bool withMaterials)
+    {
+        EnterSynchronousMutation();
+        try
+        {
+            EnsureNoStaleRecovery();
+            ValidateFaceLimit(faceLimit);
+            TripoPanelState state = State;
+            EnsureSuccessfulTask(state.GenerationStatus, "generation");
+            if (state.PreparedConversion is not null ||
+                state.ConversionDispatchAttempted ||
+                state.ConversionReceipt is not null ||
+                state.ConversionOperationStatus is not null ||
+                state.ConversionStatus is not null)
+            {
+                throw new InvalidOperationException(
+                    "Use the prepared conversion operation or start a new workflow " +
+                    "before creating another operation ID.");
+            }
+
+            PreparedObjConversion prepared = new(
+                state.GenerationStatus!.TaskId,
+                faceLimit,
+                withMaterials,
+                state.PreparedGeneration!.DocumentSessionId,
+                Guid.NewGuid().ToString("D"));
+            UpdateState(current => current with
+            {
+                PreparedConversion = prepared,
+                ConversionDispatchAttempted = false,
+                ConversionReceipt = null,
+                ConversionOperationStatus = null,
+                ConversionStatus = null,
+                PreparedImport = null,
+                ImportDispatchAttempted = false,
+                ImportReceipt = null,
+                LastError = null,
+            });
+            return prepared;
+        }
+        finally
+        {
+            _operationGate.Release();
+        }
+    }
+
+    public Task DispatchPreparedConversionAsync(
+        bool userConfirmedExternalCost,
+        CancellationToken cancellationToken = default)
+    {
+        if (!userConfirmedExternalCost)
+        {
+            throw new InvalidOperationException(
+                "Conversion was not sent because external cost was not confirmed.");
+        }
+
+        return RunExclusiveAsync(
+            async token =>
+            {
+                using IDisposable? lease =
+                    _recoveryStore?.AcquireCredentialWorkflowLease();
+                EnsureNoStaleRecovery();
+                Tripo.Bridge.IHostControlClient client = RequireClient();
+                TripoPanelState current = State;
+                PreparedObjConversion prepared =
+                    current.PreparedConversion ??
+                    throw new InvalidOperationException(
+                        "Prepare a conversion operation before dispatch.");
+                EnsurePaidDispatchAllowed(
+                    current.CanDispatchPreparedConversion,
+                    current.ConversionRetryRequired,
+                    current.ConversionOperationStatus,
+                    "conversion");
+                await EnsureSessionStillActiveAsync(
+                        client,
+                        prepared.DocumentSessionId,
+                        token)
+                    .ConfigureAwait(false);
+                UpdateState(state => state with
+                {
+                    ConversionDispatchAttempted = true,
+                });
+                Tripo.Bridge.HostControlObjConversionCreationReceipt receipt =
+                    await client.CreateObjConversionAsync(
+                            new Tripo.Bridge.HostControlCreateObjConversionRequest(
+                                prepared.SourceTaskId,
+                                prepared.FaceLimit,
+                                prepared.WithMaterials,
+                                prepared.DocumentSessionId,
+                                prepared.OperationId,
+                                ConfirmExternalCost: true,
+                                RequireExistingOperation:
+                                    current.ConversionRetryRequired),
+                            token)
+                        .ConfigureAwait(false);
+                UpdateState(state => state with
+                {
+                    ConversionReceipt = receipt,
+                    ConversionOperationStatus = null,
+                    LastError = null,
+                });
+            },
+            cancellationToken);
+    }
+
+    public Task RefreshConversionStatusAsync(
+        CancellationToken cancellationToken = default) =>
+        RunExclusiveAsync(
+            async token =>
+            {
+                Tripo.Bridge.IHostControlClient client = RequireClient();
+                string taskId =
+                    await ResolveConversionTaskIdAsync(client, token)
+                        .ConfigureAwait(false);
+                Tripo.Bridge.HostControlTaskStatusReceipt status =
+                    await client.GetTaskStatusAsync(taskId, token)
+                        .ConfigureAwait(false);
+                UpdateState(state => state with
+                {
+                    ConversionStatus = status,
+                    LastError = null,
+                });
+            },
+            cancellationToken);
+
+    public PreparedObjImport PrepareImport(
+        string name,
+        string importMode,
+        bool applyMaterials)
+    {
+        EnterSynchronousMutation();
+        try
+        {
+            EnsureNoStaleRecovery();
+            ValidateName(name);
+            string normalizedMode = ValidateImportMode(importMode);
+            TripoPanelState state = State;
+            EnsureSuccessfulTask(state.ConversionStatus, "conversion");
+            if (state.PreparedImport is not null ||
+                state.ImportDispatchAttempted ||
+                state.ImportReceipt is not null)
+            {
+                throw new InvalidOperationException(
+                    "Use the prepared import operation or start a new workflow before " +
+                    "creating another operation ID.");
+            }
+
+            PreparedObjImport prepared = new(
+                state.ConversionStatus!.TaskId,
+                name,
+                state.PreparedConversion!.DocumentSessionId,
+                Guid.NewGuid().ToString("D"),
+                normalizedMode,
+                applyMaterials);
+            UpdateState(current => current with
+            {
+                PreparedImport = prepared,
+                ImportDispatchAttempted = false,
+                ImportReceipt = null,
+                LastError = null,
+            });
+            return prepared;
+        }
+        finally
+        {
+            _operationGate.Release();
+        }
+    }
+
+    public Task ImportPreparedAsync(
+        CancellationToken cancellationToken = default) =>
+        RunExclusiveAsync(
+            async token =>
+            {
+                EnsureNoStaleRecovery();
+                Tripo.Bridge.IHostControlClient client = RequireClient();
+                TripoPanelState current = State;
+                PreparedObjImport prepared =
+                    current.PreparedImport ??
+                    throw new InvalidOperationException(
+                        "Prepare an import operation before dispatch.");
+                if (!current.CanDispatchPreparedImport)
+                {
+                    throw new InvalidOperationException(
+                        "The prepared import already has a durable receipt.");
+                }
+                await EnsureSessionStillActiveAsync(
+                        client,
+                        prepared.DocumentSessionId,
+                        token)
+                    .ConfigureAwait(false);
+                UpdateState(state => state with
+                {
+                    ImportDispatchAttempted = true,
+                });
+                Tripo.Bridge.HostControlObjTaskImportReceipt receipt =
+                    await client.ImportObjTaskAsync(
+                            new Tripo.Bridge.HostControlImportObjTaskRequest(
+                                prepared.ConversionTaskId,
+                                prepared.Name,
+                                prepared.DocumentSessionId,
+                                prepared.OperationId,
+                                prepared.ImportMode,
+                                prepared.ApplyMaterials),
+                            token)
+                        .ConfigureAwait(false);
+                UpdateState(state => state with
+                {
+                    ImportReceipt = receipt,
+                    LastError = null,
+                });
+            },
+            cancellationToken);
+
+    public void ResetWorkflow()
+    {
+        EnterSynchronousMutation();
+        try
+        {
+            EnsureNoStaleRecovery();
+            if (State.HasUnresolvedDispatch)
+            {
+                throw new InvalidOperationException(
+                    "This panel has an unresolved dispatched operation. Keep its " +
+                    "displayed operation ID and use Refresh or retry the same stage; " +
+                    "a new workflow cannot discard that recovery identity.");
+            }
+
+            UpdateState(state => state with
+            {
+                PreparedGeneration = null,
+                GenerationDispatchAttempted = false,
+                GenerationReceipt = null,
+                GenerationOperationStatus = null,
+                GenerationStatus = null,
+                PreparedConversion = null,
+                ConversionDispatchAttempted = false,
+                ConversionReceipt = null,
+                ConversionOperationStatus = null,
+                ConversionStatus = null,
+                PreparedImport = null,
+                ImportDispatchAttempted = false,
+                ImportReceipt = null,
+                LastError = null,
+            });
+        }
+        finally
+        {
+            _operationGate.Release();
+        }
+    }
+
+    public async Task<Tripo.Bridge.HostControlOperationStatusReceipt>
+        InspectPaidRecoveryAsync(
+            string operationId,
+            CancellationToken cancellationToken = default)
+    {
+        if (!Guid.TryParseExact(operationId, "D", out Guid parsed) ||
+            !string.Equals(
+                parsed.ToString("D"),
+                operationId,
+                StringComparison.Ordinal))
+        {
+            throw new ArgumentException(
+                "operationId must be a canonical lowercase D-format UUID.",
+                nameof(operationId));
+        }
+
+        Tripo.Bridge.HostControlOperationStatusReceipt? receipt = null;
+        await RunExclusiveAsync(
+                async token =>
+                {
+                    receipt = await RequireClient()
+                        .GetOperationStatusAsync(operationId, token)
+                        .ConfigureAwait(false);
+                },
+                cancellationToken)
+            .ConfigureAwait(false);
+        return receipt ??
+            throw new InvalidOperationException(
+                "The paid-operation inspection returned no receipt.");
+    }
+
+    public void AcknowledgeRecoveredOperations(
+        string confirmation,
+        string displayedRecoveryToken)
+    {
+        ThrowIfDisposed();
+        if (!string.Equals(
+                confirmation,
+                "RECONCILED",
+                StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException(
+                "Type RECONCILED exactly after checking every recovered UUID.");
+        }
+
+        if (string.IsNullOrWhiteSpace(displayedRecoveryToken))
+        {
+            throw new InvalidOperationException(
+                "The panel has no rendered recovery snapshot to acknowledge.");
+        }
+
+        TripoPanelRecoveryStore store =
+            _recoveryStore ??
+            throw new InvalidOperationException(
+                "This panel has no recovery store.");
+        if (!_operationGate.Wait(0))
+        {
+            throw new InvalidOperationException(
+                "Wait for the current panel operation to finish before " +
+                "acknowledging recovered operations.");
+        }
+
+        try
+        {
+            TripoPanelRecoveryLoadResult notification =
+                TripoPanelRecoveryLoadResult.Empty;
+            bool notify = false;
+            try
+            {
+                lock (_stateGate)
+                {
+                    if (_state.Busy || _state.HasWorkflowState)
+                    {
+                        throw new InvalidOperationException(
+                            "Start with an empty, idle panel before acknowledging " +
+                            "recovered operations.");
+                    }
+
+                    TripoPanelRecoveryLoadResult current = store.LoadStale();
+                    _recovery = current;
+                    _recoveryRevision++;
+                    notification = current;
+                    notify = true;
+                    if (!string.Equals(
+                            displayedRecoveryToken,
+                            current.PresentationToken,
+                            StringComparison.Ordinal))
+                    {
+                        throw new InvalidOperationException(
+                            "The recovered operation list changed. Review the " +
+                            "refreshed list before typing RECONCILED again.");
+                    }
+
+                    if (current.Issues.Count > 0)
+                    {
+                        throw new InvalidOperationException(
+                            "Invalid recovery files must be inspected and moved aside " +
+                            "manually; the panel will not overwrite or archive them.");
+                    }
+
+                    try
+                    {
+                        foreach (LoadedTripoPanelRecoveryHint hint in current.Hints)
+                        {
+                            store.Archive(hint);
+                        }
+                    }
+                    finally
+                    {
+                        notification = store.LoadStale();
+                        _recovery = notification;
+                        _recoveryRevision++;
+                    }
+                }
+            }
+            finally
+            {
+                if (notify)
+                {
+                    RecoveryChanged?.Invoke(this, notification);
+                }
+            }
+        }
+        finally
+        {
+            _operationGate.Release();
+        }
+    }
+
+    public TripoPanelRecoveryLoadResult RefreshRecovery()
+    {
+        ThrowIfDisposed();
+        long observedRevision;
+        lock (_stateGate)
+        {
+            observedRevision = _recoveryRevision;
+        }
+
+        TripoPanelRecoveryLoadResult next =
+            _recoveryStore?.LoadStale() ??
+            TripoPanelRecoveryLoadResult.Empty;
+        lock (_stateGate)
+        {
+            if (_recoveryRevision != observedRevision)
+            {
+                return _recovery;
+            }
+
+            _recovery = next;
+            _recoveryRevision++;
+        }
+
+        RecoveryChanged?.Invoke(this, next);
+        return next;
+    }
+
+    public ValueTask DisposeAsync()
+    {
+        Task disposeTask;
+        lock (_stateGate)
+        {
+            _disposeTask ??= DisposeCoreAsync();
+            disposeTask = _disposeTask;
+        }
+
+        return new ValueTask(disposeTask);
+    }
+
+    private async Task DisposeCoreAsync()
+    {
+        _disposed = true;
+        _lifetime.Cancel();
+        await _operationGate.WaitAsync().ConfigureAwait(false);
+        _operationGate.Release();
+        _lifetime.Dispose();
+        _operationGate.Dispose();
+        _recoveryStore?.Dispose();
+        StateChanged = null;
+        RecoveryChanged = null;
+    }
+
+    private void EnsureNoStaleRecovery()
+    {
+        TripoPanelRecoveryLoadResult recovery =
+            _recoveryStore is null
+                ? Recovery
+                : RefreshRecovery();
+
+        if (recovery.HasBlock)
+        {
+            throw new InvalidOperationException(
+                "Recovered operation IDs require reconciliation before a new " +
+                "workflow or credential change can proceed.");
+        }
+    }
+
+    private static void EnsurePaidDispatchAllowed(
+        bool canDispatch,
+        bool retryRequired,
+        Tripo.Bridge.HostControlOperationStatusReceipt? operationStatus,
+        string stage)
+    {
+        if (!canDispatch)
+        {
+            throw new InvalidOperationException(
+                $"The prepared {stage} operation already has a durable task ID.");
+        }
+
+        if (retryRequired && operationStatus?.CanResumeCreation != true)
+        {
+            throw new InvalidOperationException(
+                $"Refresh the {stage} operation status before retrying the " +
+                "same UUID. A retry is enabled only when the journal reports " +
+                "that creation can resume.");
+        }
+    }
+
+    private void EnsureCredentialMutationAllowed()
+    {
+        if (State.HasUnresolvedPaidDispatch)
+        {
+            throw new InvalidOperationException(
+                "The API key cannot change while a paid operation has an " +
+                "unresolved dispatch. Reconcile it with Refresh or retry the " +
+                "same operation ID first.");
+        }
+
+        TripoPanelRecoveryLoadResult global =
+            _recoveryStore?.LoadCredentialMutationBlocks() ??
+            TripoPanelRecoveryLoadResult.Empty;
+        if (global.HasBlock)
+        {
+            throw new InvalidOperationException(
+                "The API key cannot change while another Rhino/Revit panel has " +
+                "an unresolved paid recovery hint, an unverifiable live owner, " +
+                "or invalid recovery storage. Reconcile it in the owning host " +
+                "first.");
+        }
+    }
+
+    private async Task RunExclusiveAsync(
+        Func<CancellationToken, Task> operation,
+        CancellationToken callerCancellationToken)
+    {
+        ThrowIfDisposed();
+        using CancellationTokenSource linked =
+            CancellationTokenSource.CreateLinkedTokenSource(
+                callerCancellationToken,
+                _lifetime.Token);
+        await _operationGate.WaitAsync(linked.Token).ConfigureAwait(false);
+        try
+        {
+            ThrowIfDisposed();
+            UpdateState(state => state with
+            {
+                Busy = true,
+                LastError = null,
+            });
+            await operation(linked.Token).ConfigureAwait(false);
+        }
+        catch (Exception exception)
+            when (!_disposed &&
+                  (exception is not OperationCanceledException ||
+                   !callerCancellationToken.IsCancellationRequested))
+        {
+            UpdateTransientState(state => state with
+            {
+                LastError = BoundError(exception.Message),
+            });
+            throw;
+        }
+        finally
+        {
+            try
+            {
+                if (!_disposed)
+                {
+                    UpdateTransientState(
+                        state => state with { Busy = false });
+                }
+            }
+            finally
+            {
+                _operationGate.Release();
+            }
+        }
+    }
+
+    private void EnterSynchronousMutation()
+    {
+        ThrowIfDisposed();
+        if (!_operationGate.Wait(0))
+        {
+            throw new InvalidOperationException(
+                "Wait for the current panel operation to finish before " +
+                "changing workflow state.");
+        }
+
+        try
+        {
+            ThrowIfDisposed();
+        }
+        catch
+        {
+            _operationGate.Release();
+            throw;
+        }
+    }
+
+    private async Task EnsureSessionStillActiveAsync(
+        Tripo.Bridge.IHostControlClient client,
+        string expectedSessionId,
+        CancellationToken cancellationToken)
+    {
+        Tripo.Bridge.HostContextReceipt current =
+            await client.GetHostContextAsync(cancellationToken)
+                .ConfigureAwait(false);
+        Tripo.Bridge.HostContextReceipt original = RequireContext();
+        if (current.ProcessId != original.ProcessId ||
+            !string.Equals(
+                current.Host,
+                original.Host,
+                StringComparison.Ordinal) ||
+            !string.Equals(
+                current.DocumentSessionId,
+                expectedSessionId,
+                StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException(
+                "The active host document changed. The prepared operation was " +
+                "not dispatched; refresh the panel and prepare a new operation.");
+        }
+    }
+
+    private async Task<string> ResolveGenerationTaskIdAsync(
+        Tripo.Bridge.IHostControlClient client,
+        CancellationToken cancellationToken)
+    {
+        TripoPanelState state = State;
+        if (state.GenerationReceipt is not null)
+        {
+            return state.GenerationReceipt.TaskId;
+        }
+
+        PreparedTextGeneration prepared =
+            state.PreparedGeneration ??
+            throw new InvalidOperationException(
+                "No generation operation is available to refresh.");
+        if (!state.GenerationDispatchAttempted)
+        {
+            throw new InvalidOperationException(
+                "Dispatch the prepared generation before refreshing it.");
+        }
+
+        Tripo.Bridge.HostControlOperationStatusReceipt operationStatus =
+            await client.GetOperationStatusAsync(
+                    prepared.OperationId,
+                    cancellationToken)
+                .ConfigureAwait(false);
+        UpdateState(current => current with
+        {
+            GenerationOperationStatus = operationStatus,
+        });
+        return RequireDurableTaskId(operationStatus, "generation");
+    }
+
+    private async Task<string> ResolveConversionTaskIdAsync(
+        Tripo.Bridge.IHostControlClient client,
+        CancellationToken cancellationToken)
+    {
+        TripoPanelState state = State;
+        if (state.ConversionReceipt is not null)
+        {
+            return state.ConversionReceipt.ConversionTaskId;
+        }
+
+        PreparedObjConversion prepared =
+            state.PreparedConversion ??
+            throw new InvalidOperationException(
+                "No conversion operation is available to refresh.");
+        if (!state.ConversionDispatchAttempted)
+        {
+            throw new InvalidOperationException(
+                "Dispatch the prepared conversion before refreshing it.");
+        }
+
+        Tripo.Bridge.HostControlOperationStatusReceipt operationStatus =
+            await client.GetOperationStatusAsync(
+                    prepared.OperationId,
+                    cancellationToken)
+                .ConfigureAwait(false);
+        UpdateState(current => current with
+        {
+            ConversionOperationStatus = operationStatus,
+        });
+        return RequireDurableTaskId(operationStatus, "conversion");
+    }
+
+    private static string RequireDurableTaskId(
+        Tripo.Bridge.HostControlOperationStatusReceipt status,
+        string stage)
+    {
+        if (status.TaskIdDurable &&
+            !string.IsNullOrWhiteSpace(status.CreatedTaskId))
+        {
+            return status.CreatedTaskId;
+        }
+
+        throw new InvalidOperationException(
+            $"The {stage} operation is {status.State}; its task ID is not " +
+            $"durable. {status.NextAction}");
+    }
+
+    private static bool IsSameDocumentSession(
+        Tripo.Bridge.HostContextReceipt first,
+        Tripo.Bridge.HostContextReceipt second) =>
+        first.ProcessId == second.ProcessId &&
+        string.Equals(first.Host, second.Host, StringComparison.Ordinal) &&
+        string.Equals(
+            first.DocumentSessionId,
+            second.DocumentSessionId,
+            StringComparison.Ordinal);
+
+    private static void EnsureHealthMatchesContext(
+        Tripo.Bridge.HostControlHealthReceipt health,
+        Tripo.Bridge.HostContextReceipt context)
+    {
+        if (health.HostProcessId != context.ProcessId ||
+            !string.Equals(
+                health.Host,
+                context.Host,
+                StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException(
+                "The sidecar is connected to a different host process.");
+        }
+    }
+
+    private Tripo.Bridge.IHostControlClient RequireClient() =>
+        _client ??
+        throw new InvalidOperationException(
+            "Connect the panel to its sidecar before continuing.");
+
+    private Tripo.Bridge.HostContextReceipt RequireContext() =>
+        State.Context ??
+        throw new InvalidOperationException(
+            "Refresh the active host document before continuing.");
+
+    private static void EnsureSuccessfulTask(
+        Tripo.Bridge.HostControlTaskStatusReceipt? status,
+        string stage)
+    {
+        if (!string.Equals(status?.Status, "success", StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException(
+                $"The {stage} task must report success before continuing.");
+        }
+    }
+
+    private static void ValidatePrompt(string prompt)
+    {
+        if (string.IsNullOrWhiteSpace(prompt) || prompt.Length > 1024)
+        {
+            throw new ArgumentException(
+                "The prompt must contain 1 to 1024 characters.",
+                nameof(prompt));
+        }
+    }
+
+    private static void ValidateFaceLimit(int faceLimit)
+    {
+        if (faceLimit is < 500 or > 200_000)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(faceLimit),
+                "faceLimit must be between 500 and 200000.");
+        }
+    }
+
+    private static void ValidateName(string name)
+    {
+        if (string.IsNullOrWhiteSpace(name) || name.Length > 128)
+        {
+            throw new ArgumentException(
+                "The imported object name must contain 1 to 128 characters.",
+                nameof(name));
+        }
+    }
+
+    private static string ValidateImportMode(string importMode)
+    {
+        string normalized = (importMode ?? string.Empty).Trim().ToLowerInvariant();
+        if (normalized is not "native" and
+            not "mesh" and
+            not "instance" and
+            not "family")
+        {
+            throw new ArgumentException(
+                "Import mode must be native, mesh, instance, or family.",
+                nameof(importMode));
+        }
+
+        return normalized;
+    }
+
+    private void UpdateState(Func<TripoPanelState, TripoPanelState> update)
+    {
+        TripoPanelState next = PersistAndAssignState(update);
+        StateChanged?.Invoke(this, next);
+    }
+
+    private void UpdateTransientState(
+        Func<TripoPanelState, TripoPanelState> update)
+    {
+        TripoPanelState next;
+        try
+        {
+            next = PersistAndAssignState(update);
+        }
+        catch (Exception exception)
+            when (IsRecoveryPersistenceFailure(exception))
+        {
+            lock (_stateGate)
+            {
+                next = update(_state);
+                _state = next;
+            }
+        }
+
+        StateChanged?.Invoke(this, next);
+    }
+
+    private TripoPanelState PersistAndAssignState(
+        Func<TripoPanelState, TripoPanelState> update)
+    {
+        lock (_stateGate)
+        {
+            TripoPanelState next = update(_state);
+            _recoveryStore?.Save(next);
+            _state = next;
+            return next;
+        }
+    }
+
+    private static bool IsRecoveryPersistenceFailure(Exception exception) =>
+        exception is IOException or
+        UnauthorizedAccessException or
+        InvalidDataException or
+        InvalidOperationException or
+        System.Text.Json.JsonException or
+        NotSupportedException;
+
+    private void ThrowIfDisposed()
+    {
+#pragma warning disable CA1513 // ObjectDisposedException.ThrowIf is unavailable on net7.0.
+        if (_disposed)
+        {
+            throw new ObjectDisposedException(nameof(TripoPanelSession));
+        }
+#pragma warning restore CA1513
+    }
+
+    private static string BoundError(string? message)
+    {
+        const string fallback = "The operation failed.";
+        if (string.IsNullOrWhiteSpace(message))
+        {
+            return fallback;
+        }
+
+        string trimmed = message.Trim();
+        return trimmed.Length <= 512 ? trimmed : trimmed[..512];
+    }
+}

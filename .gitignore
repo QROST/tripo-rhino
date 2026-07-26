@@ -1,0 +1,15 @@
+.DS_Store
+.env
+.idea/
+.vs/
+**/bin/
+**/obj/
+artifacts/
+TestResults/
+*.nupkg
+*.snupkg
+*.suo
+*.trx
+*.user
+PROGRESS.md
+Chat.md

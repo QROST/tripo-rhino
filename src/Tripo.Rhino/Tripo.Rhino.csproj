@@ -1,0 +1,32 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <AssemblyName>Tripo.Rhino</AssemblyName>
+    <CheckEolTargetFramework>false</CheckEolTargetFramework>
+    <CopyLocalLockFileAssemblies>true</CopyLocalLockFileAssemblies>
+    <OutputType>Library</OutputType>
+    <RootNamespace>Tripo.Rhino</RootNamespace>
+    <TargetExt>.rhp</TargetExt>
+    <TargetFramework>net7.0</TargetFramework>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="RhinoCommon" IncludeAssets="compile;build" PrivateAssets="all" />
+  </ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="../Tripo.Bridge/Tripo.Bridge.csproj" />
+    <ProjectReference Include="../Tripo.HostUi/Tripo.HostUi.csproj" />
+    <ProjectReference
+      Include="../Tripo.Rhino.Mcp/Tripo.Rhino.Mcp.csproj"
+      ReferenceOutputAssembly="false"
+      SkipGetTargetFrameworkProperties="true" />
+  </ItemGroup>
+  <Target Name="CopyTripoRhinoSidecar" AfterTargets="Build">
+    <ItemGroup>
+      <_TripoRhinoSidecarFiles
+        Include="$(MSBuildProjectDirectory)/../Tripo.Rhino.Mcp/bin/$(Configuration)/net8.0/**/*" />
+    </ItemGroup>
+    <Copy
+      SourceFiles="@(_TripoRhinoSidecarFiles)"
+      DestinationFiles="@(_TripoRhinoSidecarFiles->'$(TargetDir)sidecar/%(RecursiveDir)%(Filename)%(Extension)')"
+      SkipUnchangedFiles="true" />
+  </Target>
+</Project>

@@ -1,0 +1,37 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <AssemblyName>Tripo.Rhino.Grasshopper</AssemblyName>
+    <CheckEolTargetFramework>false</CheckEolTargetFramework>
+    <CopyLocalLockFileAssemblies>true</CopyLocalLockFileAssemblies>
+    <EnableDynamicLoading>true</EnableDynamicLoading>
+    <OutputType>Library</OutputType>
+    <RootNamespace>Tripo.Rhino.Grasshopper</RootNamespace>
+    <TargetExt>.gha</TargetExt>
+    <TargetFramework>net7.0</TargetFramework>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="Grasshopper" ExcludeAssets="runtime" PrivateAssets="all" />
+    <PackageReference
+      Include="Microsoft.NETFramework.ReferenceAssemblies.net48"
+      ExcludeAssets="all"
+      GeneratePathProperty="true"
+      PrivateAssets="all" />
+    <PackageReference Include="RhinoCommon" IncludeAssets="compile;build" PrivateAssets="all" />
+  </ItemGroup>
+  <ItemGroup>
+    <!--
+      Grasshopper's cross-platform Rhino 8 API still exposes context menus
+      through System.Windows.Forms types. This is the reference-only workaround
+      shipped by McNeel's official Rhino.Templates package for net7.0 on macOS;
+      Rhino supplies the runtime assembly.
+    -->
+    <Reference
+      Include="$(PkgMicrosoft_NETFramework_ReferenceAssemblies_net48)/build/.NETFramework/v4.8/System.Windows.Forms.dll"
+      Private="False" />
+  </ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="../Tripo.Bridge/Tripo.Bridge.csproj" />
+    <ProjectReference Include="../Tripo.HostUi/Tripo.HostUi.csproj" />
+    <ProjectReference Include="../Tripo.Rhino/Tripo.Rhino.csproj" />
+  </ItemGroup>
+</Project>

@@ -1,0 +1,11 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <AssemblyName>Tripo.Rhino.Mcp</AssemblyName>
+    <OutputType>Exe</OutputType>
+    <RootNamespace>Tripo.Rhino.Mcp</RootNamespace>
+    <TargetFramework>net8.0</TargetFramework>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="../Tripo.Mcp/Tripo.Mcp.csproj" />
+  </ItemGroup>
+</Project>

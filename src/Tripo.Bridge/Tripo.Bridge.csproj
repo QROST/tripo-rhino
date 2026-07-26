@@ -1,0 +1,8 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <AssemblyName>Tripo.Bridge</AssemblyName>
+    <CheckEolTargetFramework>false</CheckEolTargetFramework>
+    <RootNamespace>Tripo.Bridge</RootNamespace>
+    <TargetFramework>net7.0</TargetFramework>
+  </PropertyGroup>
+</Project>

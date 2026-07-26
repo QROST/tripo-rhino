@@ -1,0 +1,11 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <AssemblyName>Tripo.HostUi</AssemblyName>
+    <CheckEolTargetFramework>false</CheckEolTargetFramework>
+    <RootNamespace>Tripo.HostUi</RootNamespace>
+    <TargetFramework>net7.0</TargetFramework>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="../Tripo.Bridge/Tripo.Bridge.csproj" />
+  </ItemGroup>
+</Project>
