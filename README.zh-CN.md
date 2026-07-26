@@ -294,14 +294,20 @@ paid workflow 从 credential-derived fingerprint 直到 durable 或 ambiguous jo
 checkpoint 的全过程；即使 UI pipe 断开也不会提前释放。同一时间只允许一个 key
 mutation 或 paid create/convert；发生竞争时，必须等当前 operation checkpoint 后，
 以同一 UUID 重试。
-**Inspect paid IDs** 只查询本地 `operation_status`，不会重发付费 call 或 import。
-import 必须使用显示的同一 UUID 人工 reconciliation。核对全部 ID 后，
-**Acknowledge IDs…** 要求精确输入 `RECONCILED`，随后才会归档有效
-hint。如果已显示的集合发生变化，本次 acknowledgement 会被拒绝，必须先核对刷新
-后的集合。无效、超限、未知 schema、Unix 上非 private 或 symlink hint 会继续阻塞，
-等待人工检查。paid-operation journal 才是 authority，hint 不是。Eto panel 仍然只
-支持 text-to-3D；本地 image controls 目前由可选 Grasshopper components 与 MCP
-tools 提供。
+**Review recovery…** 会自动且只读地查询本地 `operation_status`，不会重发付费
+call 或 import。对话框会区分 durable task、same-UUID recovery、ambiguous outcome
+与缺失本地证据，并在归档本地提示前要求用户显式勾选确认。import 必须回到原始
+document 核对；本地证据缺失或 ambiguous 时，还必须检查 Tripo task 与 billing
+history。对话框会把 recovery 文件与完整的本地 journal receipt（或明确的
+unavailable 结果）一起绑定进用户看到的 snapshot；归档前会连续重新查询并比较。
+归档重查期间还会持有 paid UI/MCP 与 key mutation 共用的 execution lease。
+集合或 status 变化时会拒绝归档，仍在进行中的 operation 也会继续阻塞。若当前
+panel 还持有 workflow state，**Reload and review all work…** 会把已派发 ID
+保留为 recovery evidence，只清除从未发送的 setup，再统一审阅。手工修复无效
+文件后可直接点击 **Refresh recovery status**。无效、超限、未知 schema、Unix
+上非 private 或 symlink hint 会继续阻塞，等待人工检查。paid-operation journal
+才是 authority，hint 不是。Eto panel 仍然只支持 text-to-3D；本地 image
+controls 目前由可选 Grasshopper components 与 MCP tools 提供。
 
 ## 使用 Grasshopper components
 

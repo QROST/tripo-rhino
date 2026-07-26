@@ -999,14 +999,43 @@ public sealed class TripoPanelSessionTests
                         withMaterials: false));
             Assert.Contains("reconciliation", blocked.Message);
             Assert.Equal(0, restartedClient.CreateTextCalls);
-            Assert.Throws<InvalidOperationException>(
-                () => restarted.AcknowledgeRecoveredOperations(
-                    "yes",
-                    restarted.Recovery.PresentationToken));
+            Tripo.HostUi.TripoPanelRecoveryReviewSnapshot review =
+                await restarted.CreateRecoveryReviewSnapshotAsync();
+            string recoveryFile = Assert.Single(
+                Directory.GetFiles(
+                    Path.Combine(root, "ui-recovery", "rhino"),
+                    "*.json"));
+            byte[] recoveryBytes = File.ReadAllBytes(recoveryFile);
+            int operationStatusCalls =
+                restartedClient.OperationStatusCalls;
+            int recoveryChangedCount = 0;
+            restarted.RecoveryChanged +=
+                (_, _) => recoveryChangedCount++;
+            await Assert.ThrowsAsync<InvalidOperationException>(
+                () => restarted.UnlockRecoveredOperationsAsync(
+                    userConfirmed: false,
+                    review));
+            Assert.True(restarted.Recovery.HasBlock);
+            Assert.Equal(
+                operationStatusCalls,
+                restartedClient.OperationStatusCalls);
+            Assert.Equal(0, recoveryChangedCount);
+            Assert.Equal(recoveryBytes, File.ReadAllBytes(recoveryFile));
+            Assert.False(
+                Directory.Exists(
+                    Path.Combine(
+                        root,
+                        "ui-recovery",
+                        "rhino",
+                        "archive")));
+            Assert.Single(
+                Directory.GetFiles(
+                    Path.Combine(root, "ui-recovery", "rhino"),
+                    "*.json"));
 
-            restarted.AcknowledgeRecoveredOperations(
-                "RECONCILED",
-                restarted.Recovery.PresentationToken);
+            await restarted.UnlockRecoveredOperationsAsync(
+                userConfirmed: true,
+                review);
             Assert.False(restarted.Recovery.HasBlock);
             string archivedFile = Assert.Single(
                 Directory.GetFiles(
@@ -1036,7 +1065,7 @@ public sealed class TripoPanelSessionTests
     }
 
     [Fact]
-    public async Task ChangedRecoverySetMustBeRenderedBeforeAcknowledgement()
+    public async Task ChangedRecoverySetMustBeReviewedBeforeUnlock()
     {
         string root = CreateTemporaryRoot();
         try
@@ -1062,13 +1091,15 @@ public sealed class TripoPanelSessionTests
                         userConfirmedExternalCost: true));
             }
 
+            FakeHostControlClient observerClient = new();
             await using Tripo.HostUi.TripoPanelSession observer =
                 new(
-                    new FakeConnector(new FakeHostControlClient()),
+                    new FakeConnector(observerClient),
                     new Tripo.HostUi.TripoPanelRecoveryStore("rhino", root));
             Assert.Single(observer.Recovery.Hints);
-            string initiallyDisplayedToken =
-                observer.Recovery.PresentationToken;
+            await observer.ConnectAsync();
+            Tripo.HostUi.TripoPanelRecoveryReviewSnapshot initiallyReviewed =
+                await observer.CreateRecoveryReviewSnapshotAsync();
             string firstFile = Assert.Single(
                 Directory.GetFiles(
                     Path.Combine(root, "ui-recovery", "rhino"),
@@ -1104,12 +1135,15 @@ public sealed class TripoPanelSessionTests
             observer.RecoveryChanged += (_, recovery) => rendered = recovery;
 
             InvalidOperationException changed =
-                Assert.Throws<InvalidOperationException>(
-                    () => observer.AcknowledgeRecoveredOperations(
-                        "RECONCILED",
-                        initiallyDisplayedToken));
+                await Assert.ThrowsAsync<InvalidOperationException>(
+                    () => observer.UnlockRecoveredOperationsAsync(
+                        userConfirmed: true,
+                        initiallyReviewed));
 
             Assert.Contains("list changed", changed.Message);
+            Assert.Contains(
+                "Review the refreshed list before unlocking again.",
+                changed.Message);
             Tripo.HostUi.TripoPanelRecoveryLoadResult renderedSnapshot =
                 Assert.IsType<
                     Tripo.HostUi.TripoPanelRecoveryLoadResult>(rendered);
@@ -1121,13 +1155,404 @@ public sealed class TripoPanelSessionTests
                     Path.Combine(root, "ui-recovery", "rhino"),
                     "*.json").Length);
 
-            observer.AcknowledgeRecoveredOperations(
-                "RECONCILED",
-                renderedSnapshot.PresentationToken);
+            Tripo.HostUi.TripoPanelRecoveryReviewSnapshot refreshedReview =
+                await observer.CreateRecoveryReviewSnapshotAsync();
+            await observer.UnlockRecoveredOperationsAsync(
+                userConfirmed: true,
+                refreshedReview);
             Assert.Empty(
                 Directory.GetFiles(
                     Path.Combine(root, "ui-recovery", "rhino"),
                     "*.json"));
+            Assert.Equal(
+                2,
+                Directory.GetFiles(
+                    Path.Combine(
+                        root,
+                        "ui-recovery",
+                        "rhino",
+                        "archive"),
+                    "*.json").Length);
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task PaidJournalChangeAfterReviewBlocksUnlock()
+    {
+        string root = CreateTemporaryRoot();
+        try
+        {
+            (string operationId, string documentSessionId) =
+                await CreateLostResponseRecoveryAsync(root);
+            FakeHostControlClient client = new()
+            {
+                CurrentSessionId = documentSessionId,
+                OperationStatus = ResumableOperationStatus(operationId),
+            };
+            await using Tripo.HostUi.TripoPanelSession session =
+                new(
+                    new FakeConnector(client),
+                    new Tripo.HostUi.TripoPanelRecoveryStore("rhino", root));
+            await session.ConnectAsync();
+            Tripo.HostUi.TripoPanelRecoveryReviewSnapshot reviewed =
+                await session.CreateRecoveryReviewSnapshotAsync();
+            Assert.Contains(
+                "Local state: prepared",
+                Tripo.HostUi.TripoPanelRecoveryReviewFormatter.Format(
+                    reviewed));
+
+            client.OperationStatus =
+                DurableOperationStatus(operationId, "task_changed123");
+            InvalidOperationException changed =
+                await Assert.ThrowsAsync<InvalidOperationException>(
+                    () => session.UnlockRecoveredOperationsAsync(
+                        userConfirmed: true,
+                        reviewed));
+
+            Assert.Contains("status changed", changed.Message);
+            Assert.True(session.Recovery.HasBlock);
+            Assert.Single(
+                Directory.GetFiles(
+                    Path.Combine(root, "ui-recovery", "rhino"),
+                    "*.json"));
+
+            Tripo.HostUi.TripoPanelRecoveryReviewSnapshot refreshed =
+                await session.CreateRecoveryReviewSnapshotAsync();
+            int blockedCompetingGateCalls = 0;
+            Tripo.Bridge.CredentialWorkflowExecutionGate competingGate =
+                new(root);
+            client.BeforeOperationStatusCall = () =>
+            {
+                Tripo.Bridge.BridgeCallException gateBlocked =
+                    Assert.Throws<Tripo.Bridge.BridgeCallException>(
+                        () =>
+                        {
+                            using IDisposable unexpected =
+                                competingGate.Acquire();
+                        });
+                Assert.Equal(
+                    "credential_workflow_unavailable",
+                    gateBlocked.Code);
+                blockedCompetingGateCalls++;
+            };
+            await session.UnlockRecoveredOperationsAsync(
+                userConfirmed: true,
+                refreshed);
+            Assert.False(session.Recovery.HasBlock);
+            Assert.Equal(2, blockedCompetingGateCalls);
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task OperationInProgressCannotBeArchived()
+    {
+        string root = CreateTemporaryRoot();
+        try
+        {
+            (string operationId, string documentSessionId) =
+                await CreateLostResponseRecoveryAsync(root);
+            FakeHostControlClient client = new()
+            {
+                CurrentSessionId = documentSessionId,
+                OperationStatus = new(
+                    operationId,
+                    "text_task_creation",
+                    "dispatching",
+                    null,
+                    null,
+                    null,
+                    null,
+                    TaskIdDurable: false,
+                    MayHaveCreatedRemoteTask: true,
+                    CanResumeCreation: false,
+                    NextAction: "Wait and query again.",
+                    UpdatedAtUtc: DateTimeOffset.UtcNow,
+                    OperationInProgress: true),
+            };
+            await using Tripo.HostUi.TripoPanelSession session =
+                new(
+                    new FakeConnector(client),
+                    new Tripo.HostUi.TripoPanelRecoveryStore("rhino", root));
+            await session.ConnectAsync();
+            Tripo.HostUi.TripoPanelRecoveryReviewSnapshot reviewed =
+                await session.CreateRecoveryReviewSnapshotAsync();
+
+            Assert.True(reviewed.HasOperationInProgress);
+            InvalidOperationException blocked =
+                await Assert.ThrowsAsync<InvalidOperationException>(
+                    () => session.UnlockRecoveredOperationsAsync(
+                        userConfirmed: true,
+                        reviewed));
+            Assert.Contains("still active", blocked.Message);
+            Assert.True(session.Recovery.HasBlock);
+            Assert.Single(
+                Directory.GetFiles(
+                    Path.Combine(root, "ui-recovery", "rhino"),
+                    "*.json"));
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task ActiveSidecarExecutionGateBlocksRecoveryArchival()
+    {
+        string root = CreateTemporaryRoot();
+        try
+        {
+            (string operationId, string documentSessionId) =
+                await CreateLostResponseRecoveryAsync(root);
+            FakeHostControlClient client = new()
+            {
+                CurrentSessionId = documentSessionId,
+                OperationStatus = ResumableOperationStatus(operationId),
+            };
+            await using Tripo.HostUi.TripoPanelSession session =
+                new(
+                    new FakeConnector(client),
+                    new Tripo.HostUi.TripoPanelRecoveryStore("rhino", root));
+            await session.ConnectAsync();
+            Tripo.HostUi.TripoPanelRecoveryReviewSnapshot reviewed =
+                await session.CreateRecoveryReviewSnapshotAsync();
+            Tripo.Bridge.CredentialWorkflowExecutionGate activeGate =
+                new(root);
+
+            using (activeGate.Acquire())
+            {
+                Tripo.Bridge.BridgeCallException blocked =
+                    await Assert.ThrowsAsync<
+                        Tripo.Bridge.BridgeCallException>(
+                        () => session.UnlockRecoveredOperationsAsync(
+                            userConfirmed: true,
+                            reviewed));
+                Assert.Equal(
+                    "credential_workflow_unavailable",
+                    blocked.Code);
+            }
+
+            Assert.True(session.Recovery.HasBlock);
+            Assert.Single(
+                Directory.GetFiles(
+                    Path.Combine(root, "ui-recovery", "rhino"),
+                    "*.json"));
+            await session.UnlockRecoveredOperationsAsync(
+                userConfirmed: true,
+                reviewed);
+            Assert.False(session.Recovery.HasBlock);
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task CancellationDuringUnlockPreservesRecovery()
+    {
+        string root = CreateTemporaryRoot();
+        try
+        {
+            (string operationId, string documentSessionId) =
+                await CreateLostResponseRecoveryAsync(root);
+            FakeHostControlClient client = new()
+            {
+                CurrentSessionId = documentSessionId,
+                OperationStatus = ResumableOperationStatus(operationId),
+            };
+            await using Tripo.HostUi.TripoPanelSession session =
+                new(
+                    new FakeConnector(client),
+                    new Tripo.HostUi.TripoPanelRecoveryStore("rhino", root));
+            await session.ConnectAsync();
+            Tripo.HostUi.TripoPanelRecoveryReviewSnapshot reviewed =
+                await session.CreateRecoveryReviewSnapshotAsync();
+            client.OperationStatusEntered =
+                new TaskCompletionSource<bool>(
+                    TaskCreationOptions.RunContinuationsAsynchronously);
+            client.ContinueOperationStatus =
+                new TaskCompletionSource<bool>(
+                    TaskCreationOptions.RunContinuationsAsynchronously);
+            using CancellationTokenSource cancellation = new();
+
+            Task unlock = session.UnlockRecoveredOperationsAsync(
+                userConfirmed: true,
+                reviewed,
+                cancellation.Token);
+            await client.OperationStatusEntered.Task.WaitAsync(
+                TimeSpan.FromSeconds(5));
+            cancellation.Cancel();
+
+            await Assert.ThrowsAnyAsync<OperationCanceledException>(
+                () => unlock);
+            Assert.True(session.Recovery.HasBlock);
+            Assert.Single(
+                Directory.GetFiles(
+                    Path.Combine(root, "ui-recovery", "rhino"),
+                    "*.json"));
+            Assert.False(
+                Directory.Exists(
+                    Path.Combine(
+                        root,
+                        "ui-recovery",
+                        "rhino",
+                        "archive")));
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task CancellationAtArchiveBoundaryPreservesRecovery()
+    {
+        string root = CreateTemporaryRoot();
+        try
+        {
+            (string operationId, string documentSessionId) =
+                await CreateLostResponseRecoveryAsync(root);
+            FakeHostControlClient client = new()
+            {
+                CurrentSessionId = documentSessionId,
+                OperationStatus = ResumableOperationStatus(operationId),
+            };
+            await using Tripo.HostUi.TripoPanelSession session =
+                new(
+                    new FakeConnector(client),
+                    new Tripo.HostUi.TripoPanelRecoveryStore("rhino", root));
+            await session.ConnectAsync();
+            Tripo.HostUi.TripoPanelRecoveryReviewSnapshot reviewed =
+                await session.CreateRecoveryReviewSnapshotAsync();
+            using CancellationTokenSource cancellation = new();
+            client.AfterOperationStatusCall = callCount =>
+            {
+                if (callCount == 3)
+                {
+                    cancellation.Cancel();
+                }
+            };
+
+            await Assert.ThrowsAnyAsync<OperationCanceledException>(
+                () => session.UnlockRecoveredOperationsAsync(
+                    userConfirmed: true,
+                    reviewed,
+                    cancellation.Token));
+
+            Assert.True(session.Recovery.HasBlock);
+            Assert.Single(
+                Directory.GetFiles(
+                    Path.Combine(root, "ui-recovery", "rhino"),
+                    "*.json"));
+            Assert.False(
+                Directory.Exists(
+                    Path.Combine(
+                        root,
+                        "ui-recovery",
+                        "rhino",
+                        "archive")));
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task ReloadedSessionCanReviewCurrentAndStaleWorkTogether()
+    {
+        string root = CreateTemporaryRoot();
+        try
+        {
+            FakeHostControlClient currentClient = new();
+            Tripo.HostUi.TripoPanelSession current =
+                new(
+                    new FakeConnector(currentClient),
+                    new Tripo.HostUi.TripoPanelRecoveryStore("rhino", root));
+            await current.ConnectAsync();
+            current.PrepareGeneration(
+                "current chair",
+                10_000,
+                withMaterials: false);
+            await current.DispatchPreparedGenerationAsync(
+                userConfirmedExternalCost: true);
+            string currentFile = Assert.Single(
+                Directory.GetFiles(
+                    Path.Combine(root, "ui-recovery", "rhino"),
+                    "*.json"));
+            Tripo.HostUi.TripoPanelRecoveryHint currentHint =
+                System.Text.Json.JsonSerializer.Deserialize<
+                    Tripo.HostUi.TripoPanelRecoveryHint>(
+                    File.ReadAllText(currentFile),
+                    Tripo.Bridge.BridgeJson.Options)
+                ?? throw new InvalidOperationException(
+                    "The current recovery hint could not be read.");
+            Tripo.HostUi.TripoPanelRecoveryHint staleHint =
+                currentHint with
+                {
+                    RecoveryId = Guid.NewGuid().ToString("D"),
+                    OwnerProcessId = int.MaxValue,
+                    OwnerProcessStartedAtUtc = DateTimeOffset.UnixEpoch,
+                    DocumentSessionId = Guid.NewGuid().ToString("D"),
+                    UpdatedAtUtc = DateTimeOffset.UtcNow,
+                    Generation = currentHint.Generation! with
+                    {
+                        OperationId = Guid.NewGuid().ToString("D"),
+                        TaskId = null,
+                        JournalState = null,
+                        TaskIdDurable = false,
+                        CanResumeCreation = false,
+                    },
+                };
+            string staleFile = Path.Combine(
+                Path.GetDirectoryName(currentFile)!,
+                staleHint.RecoveryId + ".json");
+            File.WriteAllText(
+                staleFile,
+                System.Text.Json.JsonSerializer.Serialize(
+                    staleHint,
+                    CreateStrictRecoveryJsonOptions()));
+            Tripo.Bridge.BridgePaths.SetPrivateFileMode(staleFile);
+
+            Assert.True(current.State.HasWorkflowState);
+            Assert.Single(current.RefreshRecovery().Hints);
+            Tripo.HostUi.TripoPanelRecoveryReviewSnapshot blockedReview =
+                await current.CreateRecoveryReviewSnapshotAsync();
+            InvalidOperationException blocked =
+                await Assert.ThrowsAsync<InvalidOperationException>(
+                    () => current.UnlockRecoveredOperationsAsync(
+                        userConfirmed: true,
+                        blockedReview));
+            Assert.Contains("Reload the panel session", blocked.Message);
+
+            await current.DisposeAsync();
+            FakeHostControlClient reloadedClient = new()
+            {
+                CurrentSessionId =
+                    currentHint.DocumentSessionId,
+            };
+            await using Tripo.HostUi.TripoPanelSession reloaded =
+                new(
+                    new FakeConnector(reloadedClient),
+                    new Tripo.HostUi.TripoPanelRecoveryStore("rhino", root));
+            Assert.Equal(2, reloaded.Recovery.Hints.Count);
+            await reloaded.ConnectAsync();
+            Tripo.HostUi.TripoPanelRecoveryReviewSnapshot combined =
+                await reloaded.CreateRecoveryReviewSnapshotAsync();
+            await reloaded.UnlockRecoveredOperationsAsync(
+                userConfirmed: true,
+                combined);
+
+            Assert.False(reloaded.Recovery.HasBlock);
             Assert.Equal(
                 2,
                 Directory.GetFiles(
@@ -1759,6 +2184,39 @@ public sealed class TripoPanelSessionTests
             NextAction: "Retry the same operation ID.",
             UpdatedAtUtc: DateTimeOffset.UtcNow);
 
+    private static async Task<(string OperationId, string DocumentSessionId)>
+        CreateLostResponseRecoveryAsync(string root)
+    {
+        FakeHostControlClient client = new()
+        {
+            FailFirstTextResponse = true,
+        };
+        string operationId;
+        string documentSessionId;
+        await using (Tripo.HostUi.TripoPanelSession owner =
+                     new(
+                         new FakeConnector(client),
+                         new Tripo.HostUi.TripoPanelRecoveryStore(
+                             "rhino",
+                             root)))
+        {
+            await owner.ConnectAsync();
+            documentSessionId =
+                owner.State.Context!.DocumentSessionId;
+            operationId = owner.PrepareGeneration(
+                    "a chair",
+                    10_000,
+                    withMaterials: false)
+                .OperationId;
+            await Assert.ThrowsAsync<Tripo.Bridge.HostControlCallException>(
+                () => owner.DispatchPreparedGenerationAsync(
+                    userConfirmedExternalCost: true));
+        }
+
+        MakeRecoveryOwnerStale(root, "rhino");
+        return (operationId, documentSessionId);
+    }
+
     private static string CreateTemporaryRoot()
     {
         string root = Path.Combine(
@@ -1847,6 +2305,18 @@ public sealed class TripoPanelSessionTests
 
         public TaskCompletionSource<bool>? ContinueTaskStatus { get; set; }
 
+        public TaskCompletionSource<bool>? OperationStatusEntered
+        {
+            get;
+            set;
+        }
+
+        public TaskCompletionSource<bool>? ContinueOperationStatus
+        {
+            get;
+            set;
+        }
+
         public TaskCompletionSource<bool>? CredentialMutationEntered
         {
             get;
@@ -1874,6 +2344,12 @@ public sealed class TripoPanelSessionTests
             get;
             set;
         }
+
+        public int OperationStatusCalls { get; private set; }
+
+        public Action? BeforeOperationStatusCall { get; set; }
+
+        public Action<int>? AfterOperationStatusCall { get; set; }
 
         public List<Tripo.Bridge.HostControlCreateTextTaskRequest> TextRequests
         {
@@ -1994,19 +2470,34 @@ public sealed class TripoPanelSessionTests
                 null);
         }
 
-        public Task<Tripo.Bridge.HostControlOperationStatusReceipt>
+        public async Task<Tripo.Bridge.HostControlOperationStatusReceipt>
             GetOperationStatusAsync(
                 string operationId,
-                CancellationToken cancellationToken) =>
-            OperationStatus is not null &&
-            string.Equals(
-                OperationStatus.OperationId,
-                operationId,
-                StringComparison.Ordinal)
-                ? Task.FromResult(OperationStatus)
-                : throw new Tripo.Bridge.HostControlCallException(
+                CancellationToken cancellationToken)
+        {
+            OperationStatusCalls++;
+            BeforeOperationStatusCall?.Invoke();
+            OperationStatusEntered?.TrySetResult(true);
+            if (ContinueOperationStatus is not null)
+            {
+                await ContinueOperationStatus.Task
+                    .WaitAsync(cancellationToken);
+            }
+
+            if (OperationStatus is null ||
+                !string.Equals(
+                    OperationStatus.OperationId,
+                    operationId,
+                    StringComparison.Ordinal))
+            {
+                throw new Tripo.Bridge.HostControlCallException(
                     "workflow_error",
                     "No local paid operation was found.");
+            }
+
+            AfterOperationStatusCall?.Invoke(OperationStatusCalls);
+            return OperationStatus;
+        }
 
         public Task<Tripo.Bridge.HostControlObjConversionCreationReceipt>
             CreateObjConversionAsync(

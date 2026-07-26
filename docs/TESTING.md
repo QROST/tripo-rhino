@@ -60,11 +60,17 @@ Real Rhino 8 acceptance remains a separate gate:
    imports with explicit cost confirmations.
 5. Deliberately lose a paid response and recover with the displayed UUID
    without issuing a replacement POST.
-6. Switch or close documents during delayed work and confirm fail-closed
+6. In guided recovery, verify the checkbox starts clear, Cancel preserves every
+   file, journal drift invalidates the dialog, an active operation remains
+   blocked, and a repaired invalid file can be reloaded with **Refresh recovery
+   status**.
+7. Close the document while a recovery status query is delayed and verify no
+   dialog, archival, or API-key mutation continues after panel teardown.
+8. Switch or close documents during delayed work and confirm fail-closed
    behavior.
-7. Verify scale, handedness, material appearance, one-step Undo, restart
+9. Verify scale, handedness, material appearance, one-step Undo, restart
    recovery, and no unexpected document mutation from Grasshopper recompute.
-8. Verify package layout from a clean checkout rather than a developer `bin/`
+10. Verify package layout from a clean checkout rather than a developer `bin/`
    directory.
 
 Static checks, unit/process tests, real Rhino interaction, visual acceptance,

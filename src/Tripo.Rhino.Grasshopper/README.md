@@ -204,8 +204,9 @@ as `outcome_unknown` and is never automatically resent.
   reconcile a lost response.
 - Do not create a replacement UUID for `outcome_unknown`.
 - A conflicting recovery hint blocks a new canvas paid action. Open
-  `TripoPanel`, review the displayed IDs, run read-only checks, and use its
-  typed `RECONCILED` acknowledgement only after manual reconciliation.
+  `TripoPanel` and choose **Review recovery…**. The panel runs read-only local
+  checks, shows the evidence and risks, and asks for an explicit checkbox
+  confirmation only after manual reconciliation.
 - Loading a saved definition only restores local IDs/status text. Use an
   explicit refresh; loading never calls Tripo.
 

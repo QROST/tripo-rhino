@@ -326,16 +326,26 @@ MCP workflow from
 credential-derived fingerprinting through its durable or ambiguous journal
 checkpoint, even if the UI pipe disconnects. Only one key mutation or paid
 create/convert is admitted at a time; retry a contending request with the same
-UUID after the active operation checkpoints. **Inspect paid IDs** only queries
-local `operation_status`; it does not resend a paid call or import. Reconcile
-import manually with the displayed same UUID. After checking every ID,
-**Acknowledge IDs…** requires the exact text `RECONCILED`, then
-archives valid hints. If the displayed set changed, that acknowledgement is
-refused and the refreshed set must be reviewed first. Invalid, oversized,
-unknown-schema, non-private Unix, or symlinked hints remain blocked for manual
-inspection. The paid-operation journal—not the hint—is authoritative. The Eto
-panel remains text-only; local-image controls are currently available through
-the optional Grasshopper components and MCP tools.
+UUID after the active operation checkpoints. **Review recovery…** automatically
+queries only local `operation_status`; it does not resend a paid call or import.
+The dialog distinguishes durable tasks, same-UUID recovery, ambiguous outcomes,
+and missing local evidence, then asks for an explicit checkbox confirmation
+before archiving the local notice. Reconcile imports in the original document
+and check Tripo task and billing history whenever local evidence is missing or
+ambiguous. The dialog binds both the recovery files and the full local journal
+receipts or explicit unavailable results into the displayed snapshot. Before
+archival, the plug-in holds the same cross-UI/MCP execution lease used by paid
+work and key mutation, then queries and compares those receipts twice again. A
+changed set or status is refused, and an operation still in progress remains
+blocked. If the panel also owns current workflow state, **Reload and review all
+work…** preserves
+dispatched IDs as recovery evidence, clears only unsent setup, and reviews the
+combined set. After manually repairing an invalid file, use **Refresh recovery
+status** directly.
+Invalid, oversized, unknown-schema, non-private Unix, or symlinked hints remain
+blocked for manual inspection. The paid-operation journal—not the hint—is
+authoritative. The Eto panel remains text-only; local-image controls are
+currently available through the optional Grasshopper components and MCP tools.
 
 ## Use the Grasshopper components
 

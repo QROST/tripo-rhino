@@ -1,5 +1,163 @@
 namespace Tripo.HostUi;
 
+public static class TripoPanelRecoveryReviewFormatter
+{
+    public static string Format(
+        TripoPanelRecoveryReviewSnapshot snapshot)
+    {
+        ArgumentNullException.ThrowIfNull(snapshot);
+        Dictionary<string, TripoPanelRecoveryOperationInspection>
+            inspections = snapshot.PaidOperations.ToDictionary(
+                operation => operation.OperationId,
+                StringComparer.Ordinal);
+        List<string> lines = [];
+        foreach (LoadedTripoPanelRecoveryHint loaded in
+                 snapshot.Recovery.Hints)
+        {
+            lines.Add(
+                $"Recovered document: {loaded.Hint.DocumentSessionId}");
+            AppendPaidStatus(
+                lines,
+                inspections,
+                "Generation",
+                loaded.Hint.Generation);
+            AppendPaidStatus(
+                lines,
+                inspections,
+                "Conversion",
+                loaded.Hint.Conversion);
+            if (loaded.Hint.Import is not null)
+            {
+                lines.Add("Import");
+                lines.Add(
+                    "Operation ID: " +
+                    loaded.Hint.Import.OperationId);
+                lines.Add(
+                    "Safety: The Rhino import may already have changed the " +
+                    "original document. Check that document before unlocking.");
+            }
+
+            lines.Add(string.Empty);
+        }
+
+        return string.Join(Environment.NewLine, lines).TrimEnd();
+    }
+
+    private static void AppendPaidStatus(
+        List<string> lines,
+        Dictionary<
+            string,
+            TripoPanelRecoveryOperationInspection> inspections,
+        string stage,
+        TripoPanelPaidRecoveryHint? hint)
+    {
+        if (hint is null)
+        {
+            return;
+        }
+
+        lines.Add(stage);
+        lines.Add($"Operation ID: {hint.OperationId}");
+        if (!string.IsNullOrWhiteSpace(hint.TaskId))
+        {
+            lines.Add($"Recovered task ID: {hint.TaskId}");
+        }
+
+        if (!inspections.TryGetValue(
+                hint.OperationId,
+                out TripoPanelRecoveryOperationInspection? inspection) ||
+            inspection.Receipt is null)
+        {
+            lines.Add(
+                "Local status: unavailable" +
+                (string.IsNullOrWhiteSpace(inspection?.ErrorCode)
+                    ? string.Empty
+                    : $" ({inspection.ErrorCode})"));
+            lines.Add(
+                "Safety: Local evidence cannot prove whether Tripo accepted " +
+                "or charged this request. Check Tripo task and billing history " +
+                "before unlocking.");
+            if (!string.IsNullOrWhiteSpace(inspection?.ErrorMessage))
+            {
+                lines.Add(
+                    "Technical detail: " +
+                    inspection.ErrorMessage);
+            }
+
+            return;
+        }
+
+        Tripo.Bridge.HostControlOperationStatusReceipt status =
+            inspection.Receipt;
+        lines.Add($"Request kind: {status.Kind}");
+        lines.Add($"Local state: {status.State}");
+        lines.Add(
+            $"Last local journal update: {status.UpdatedAtUtc:O}");
+        if (!string.IsNullOrWhiteSpace(status.SourceTaskId))
+        {
+            lines.Add($"Source task ID: {status.SourceTaskId}");
+        }
+
+        lines.Add(
+            string.IsNullOrWhiteSpace(status.CreatedTaskId)
+                ? "Task ID: No task ID was recorded"
+                : $"Task ID: {status.CreatedTaskId}");
+        if (!string.IsNullOrWhiteSpace(status.FailureCode))
+        {
+            lines.Add($"Failure code: {status.FailureCode}");
+        }
+
+        if (!string.IsNullOrWhiteSpace(status.FailureStage))
+        {
+            lines.Add($"Failure stage: {status.FailureStage}");
+        }
+
+        if (!string.IsNullOrWhiteSpace(status.FailureMessage))
+        {
+            lines.Add($"Failure detail: {status.FailureMessage}");
+        }
+
+        if (status.OperationInProgress ||
+            string.Equals(
+                status.State,
+                "operation_in_progress",
+                StringComparison.Ordinal))
+        {
+            lines.Add(
+                "Safety: This operation is still active. Wait and refresh; " +
+                "Tripo will not unlock recovery while it is in progress.");
+        }
+        else if (status.TaskIdDurable)
+        {
+            lines.Add(
+                "Recovery: Refresh this task. Do not create a replacement " +
+                "request or UUID.");
+        }
+        else if (status.MayHaveCreatedRemoteTask ||
+                 string.Equals(
+                     status.State,
+                     "outcome_unknown",
+                     StringComparison.Ordinal))
+        {
+            lines.Add(
+                "Safety: Tripo may have accepted and charged this request. " +
+                "Do not send a replacement request.");
+            lines.Add(
+                "Check Tripo task and billing history before unlocking.");
+        }
+        else if (status.CanResumeCreation)
+        {
+            lines.Add(
+                "Recovery: Resume only with this same operation ID. A retry " +
+                "still requires explicit cost confirmation.");
+        }
+        else
+        {
+            lines.Add("Next action: " + status.NextAction);
+        }
+    }
+}
+
 public sealed class TripoPanelPresentation
 {
     private TripoPanelPresentation()
@@ -12,9 +170,14 @@ public sealed class TripoPanelPresentation
 
     public string CredentialStatus { get; private init; } = string.Empty;
 
+    public string ApiKeyText { get; private init; } = "API key…";
+
     public string RecoveryHeader { get; private init; } = string.Empty;
 
     public string RecoveryDetails { get; private init; } = string.Empty;
+
+    public string RecoveryActionText { get; private init; } =
+        "Review recovery…";
 
     public bool RecoveryHasBlock { get; private init; }
 
@@ -64,7 +227,7 @@ public sealed class TripoPanelPresentation
 
     public bool CheckRecoveryEnabled { get; private init; }
 
-    public bool AcknowledgeRecoveryEnabled { get; private init; }
+    public bool ReviewRecoveryEnabled { get; private init; }
 
     public bool GenerateEnabled { get; private init; }
 
@@ -141,11 +304,20 @@ public sealed class TripoPanelPresentation
             DocumentSessionId =
                 state.Context?.DocumentSessionId ?? "Not connected",
             CredentialStatus = FormatCredentialStatus(state),
+            ApiKeyText = RecoveryApiKeyText(state, recovery),
             RecoveryHeader = recoveryBlocked
-                ? "Recovery · Action required"
+                ? recovery.Issues.Count > 0
+                    ? "Recovery · Manual attention required"
+                    : "Recovery · Review before continuing"
                 : "Recovery · Clear",
             RecoveryDetails =
-                BuildRecoveryDetails(recovery, recoveryInspection),
+                BuildRecoveryDetails(
+                    state,
+                    recovery,
+                    recoveryInspection),
+            RecoveryActionText = state.HasWorkflowState
+                ? "Reload and review all work…"
+                : "Review recovery…",
             RecoveryHasBlock = recoveryBlocked,
             RecoveryToken = recovery.PresentationToken,
             LatestPreparedOperationId =
@@ -196,13 +368,14 @@ public sealed class TripoPanelPresentation
             ConnectEnabled = !state.Busy,
             ApiKeyEnabled =
                 ready &&
-                !recoveryBlocked &&
-                !state.HasUnresolvedPaidDispatch,
+                !state.HasUnresolvedPaidDispatch &&
+                (!recoveryBlocked ||
+                 (recovery.Hints.Count > 0 &&
+                  recovery.Issues.Count == 0)),
             CheckRecoveryEnabled =
-                state.Connected &&
                 !state.Busy &&
-                recovery.Hints.Count > 0,
-            AcknowledgeRecoveryEnabled =
+                recovery.HasBlock,
+            ReviewRecoveryEnabled =
                 !state.Busy &&
                 recovery.Hints.Count > 0 &&
                 recovery.Issues.Count == 0,
@@ -248,6 +421,7 @@ public sealed class TripoPanelPresentation
                             : "Request sent",
             RefreshConversionEnabled =
                 ready &&
+                !recoveryBlocked &&
                 (state.ConversionReceipt is not null ||
                  state.ConversionDispatchAttempted),
             ImportEnabled =
@@ -300,7 +474,27 @@ public sealed class TripoPanelPresentation
                    : string.Empty);
     }
 
+    private static string RecoveryApiKeyText(
+        TripoPanelState state,
+        TripoPanelRecoveryLoadResult recovery)
+    {
+        if (recovery.Issues.Count > 0)
+        {
+            return "Recovery needs attention…";
+        }
+
+        if (!recovery.HasBlock)
+        {
+            return "API key…";
+        }
+
+        return state.CredentialStatus?.HasApiKey == true
+            ? "Review recovery before changing API key…"
+            : "Review recovery to set API key…";
+    }
+
     private static string BuildRecoveryDetails(
+        TripoPanelState state,
         TripoPanelRecoveryLoadResult recovery,
         string? recoveryInspection)
     {
@@ -311,9 +505,38 @@ public sealed class TripoPanelPresentation
         }
         else
         {
-            lines.Add(
-                "Recovered IDs block new workflows and API-key changes until " +
-                "they are checked and explicitly acknowledged.");
+            if (recovery.Issues.Count > 0)
+            {
+                lines.Add(
+                    "Tripo cannot safely read one or more local recovery " +
+                    "records. API-key changes and new paid work remain paused.");
+                lines.Add(
+                    "The plug-in will not delete or overwrite this evidence. " +
+                    "Inspect or move the named files aside manually, then " +
+                    "refresh recovery.");
+            }
+            else
+            {
+                lines.Add(
+                    "Tripo paused new paid work and API-key changes because an " +
+                    "earlier request may have reached Tripo. This prevents an " +
+                    "accidental duplicate charge.");
+                if (state.HasWorkflowState)
+                {
+                    lines.Add(
+                        "This panel also has current workflow state. Choose " +
+                        "“Reload and review all work…” to preserve dispatched " +
+                        "operation IDs, clear only unsent setup, and review " +
+                        "everything together.");
+                }
+                else
+                {
+                    lines.Add(
+                        "Choose “Review recovery…” to inspect the saved " +
+                        "operation status, then confirm what you checked.");
+                }
+            }
+
             foreach (LoadedTripoPanelRecoveryHint loaded in recovery.Hints)
             {
                 lines.Add(
@@ -350,6 +573,7 @@ public sealed class TripoPanelPresentation
 
         if (!string.IsNullOrWhiteSpace(recoveryInspection))
         {
+            lines.Add("Latest local inspection:");
             lines.Add(recoveryInspection);
         }
 

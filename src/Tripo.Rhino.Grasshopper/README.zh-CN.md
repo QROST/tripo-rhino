@@ -188,8 +188,8 @@ upload。ambiguous upload 或 generation 会记录为 `outcome_unknown`，且绝
 - 使用 output `Operation ID` 与 `tripo_operation_status`/Tripo history 核对丢失响应。
 - 不要为 `outcome_unknown` 创建 replacement UUID。
 - conflicting recovery hint 会阻止新的 canvas paid action。打开 `TripoPanel`，核对
-  显示的 IDs，执行 read-only checks，并且只有完成人工 reconciliation 后才使用
-  typed `RECONCILED` acknowledgement。
+  **Review recovery…**；panel 会自动执行只读本地检查、展示证据与风险，并且只有
+  完成人工 reconciliation 后才允许显式勾选确认。
 - 打开已保存 definition 只恢复本地 IDs/status text；必须显式 refresh，加载本身
   不调用 Tripo。
 

@@ -221,11 +221,18 @@ disconnected UI client therefore cannot release the
 last protection around sidecar work, closing the cross-panel and MCP
 check-then-act gaps. Paid IDs can only be queried through the read-only
 operation-status path; imports require manual same-UUID reconciliation. Valid
-hints are archived only after the user types `RECONCILED`. Invalid
-UTF-8/JSON/schema/UUID/task IDs, oversized files, non-private Unix modes,
-symlinks, and unreadable hints fail closed. The hint is an index: the
-paid-operation journal remains the authority for paid POSTs, and host
-idempotency metadata remains the authority for imports.
+hints are archived only after the guided dialog performs that local inspection,
+shows the evidence and risks, and the user explicitly checks the confirmation.
+The dialog submits a snapshot token covering both the recovery files and every
+displayed full journal receipt or unavailable result. The session reloads the
+recovery set and, while holding the shared credential-workflow execution gate,
+queries the journal twice before archival. Any drift fails closed, and a receipt
+marked in progress cannot be archived. Existing panel
+workflow state is first reloaded into the same recovery review so dispatched
+identities are not discarded. Invalid UTF-8/JSON/schema/UUID/task IDs,
+oversized files, non-private Unix modes, symlinks, and unreadable hints fail
+closed. The hint is an index: the paid-operation journal remains the authority
+for paid POSTs, and host idempotency metadata remains the authority for imports.
 
 The GHA's component-owned private payload persists bounded local recovery
 state in the `.gh` definition: operation UUIDs/fingerprints, durable task IDs,
@@ -247,7 +254,7 @@ a paid call.
   panel entry or the `TripoPanel` command. The text UI exposes prompt, face
   limit, materials, import mode, key management, progress, and the three durable
   stage IDs as selectable fields. It also exposes read-only crash recovery and
-  explicit acknowledgement controls.
+  explicit snapshot-bound review controls.
 - All document reads and writes run on the Rhino UI thread.
 - A delayed request is rejected if the active document no longer matches the requested document session.
 - Geometry is prepared before mutation; each import (a mesh, or an instance plus its

@@ -166,6 +166,8 @@ public sealed class TripoPanelRecoveryStore : IDisposable
         new(StringComparer.Ordinal);
     private bool _disposed;
 
+    internal string RootDirectory => _rootDirectory;
+
     public TripoPanelRecoveryStore(
         string host,
         string? rootDirectory = null)

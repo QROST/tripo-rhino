@@ -134,10 +134,18 @@ The lock and journal protect cooperating processes under one login. They do not 
   call only local
   `operation_status`; no recovery scan automatically resends a paid POST or
   import. Imports require manual same-UUID reconciliation.
-- Archival requires the user to type `RECONCILED`. The hint is not an authority:
-  paid journals and host idempotency metadata remain the sources of truth.
-  Acknowledgement refreshes and compares the displayed set before archival and
-  is serialized against work in the same panel session.
+- The guided review automatically performs those read-only checks, displays
+  missing or ambiguous local evidence as a provider-history check, and requires
+  an unchecked-by-default confirmation before archival. The hint is not an
+  authority: paid journals and host idempotency metadata remain the sources of
+  truth. The review snapshot includes the exact recovery set plus each complete
+  local journal receipt or a bounded unavailable result. Before archival, the
+  session holds the shared UI/MCP credential-workflow execution gate while it
+  queries and compares the evidence twice again and archives. Any recovery or
+  journal drift fails closed, and a receipt marked `OperationInProgress` cannot
+  be archived. A panel
+  that already owns workflow state reloads first, preserving dispatched IDs as
+  recovery evidence while clearing only unsent setup.
 
 ## Local bridge
 

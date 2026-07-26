@@ -403,7 +403,13 @@ Accepted default:
   the displayed UUIDs/task IDs and minimum import retry metadata, but no prompt,
   credential, URL, fingerprint, or arbitrary path. A stale hint blocks new
   UUIDs and key changes until read-only paid checks/manual import reconciliation
-  and an explicit typed acknowledgement. The paid journal remains authoritative.
+  and an explicit confirmation bound to a snapshot of both the recovery files
+  and complete journal receipts or unavailable results. The session re-queries
+  that evidence twice while holding the same cross-UI/MCP execution gate through
+  archival; journal drift and active operations fail closed. If current panel
+  workflow state coexists with stale recovery, the
+  panel reloads first so dispatched IDs join the same review while unsent setup
+  is the only state cleared. The paid journal remains authoritative.
 - Credential mutation scans unresolved paid hints across both Rhino and Revit,
   including live panel sessions. A different host process cannot prove that a
   panel session inside the owner PID is still alive, so its hint is
@@ -586,7 +592,7 @@ claiming real-host acceptance or release.
 | --- | --- | --- |
 | 0 | Extract or isolate `Tripo.Core` behind stable workflow APIs; MCP remains green | **Implemented in place:** `ITripoWorkflow` and shared execution registration are used by MCP and host-control; portable regression gate required before merge |
 | 1 | Secret resolve/store + `Has/Set/ClearApiKey` + missing-key dialog wiring | **Implemented in source:** env/session/native store resolution, authenticated methods, and both dialogs; native store and real-host canaries remain |
-| 2 | Rhino Eto + Revit simple panel for **text** end-to-end via sidecar | **Implemented in source:** both host package layouts include their sidecar and prior package handshakes passed; the latest recovery, credential-concurrency, and shutdown-hardening delta still needs the complete portable/host compilation rerun, and real AEC host import/interaction and visual recovery canaries remain |
+| 2 | Rhino Eto + Revit simple panel for **text** end-to-end via sidecar | **Implemented in source:** both host package layouts include their sidecar; the current portable Release build and automated suites pass, while real AEC host import/interaction and visual recovery canaries remain |
 | 3 | Image upload + `tripo_create_image_task` + host-side image UX | **Partial implementation:** local PNG/JPEG transfer, multi-stage journal, MCP tools, and Rhino GHA image creation exist in source; Eto/Revit panel image controls, public URL/WebP input, full current gates, and real-host acceptance remain open |
 | 4 | Packaging scripts / zip layout; README dual-door rewrite | **Partial:** build output includes a complete sidecar and READMEs describe both doors; installer, signing, and release artifacts remain |
 

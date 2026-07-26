@@ -22,6 +22,90 @@ public sealed record PreparedObjImport(
     string ImportMode,
     bool ApplyMaterials);
 
+public sealed record TripoPanelRecoveryOperationInspection(
+    string OperationId,
+    Tripo.Bridge.HostControlOperationStatusReceipt? Receipt,
+    string? ErrorCode,
+    string? ErrorMessage)
+{
+    public bool Available => Receipt is not null;
+}
+
+public sealed class TripoPanelRecoveryReviewSnapshot
+{
+    private TripoPanelRecoveryReviewSnapshot(
+        TripoPanelRecoveryLoadResult recovery,
+        IReadOnlyList<TripoPanelRecoveryOperationInspection> paidOperations,
+        string evidenceToken)
+    {
+        Recovery = recovery;
+        PaidOperations = paidOperations;
+        EvidenceToken = evidenceToken;
+    }
+
+    public TripoPanelRecoveryLoadResult Recovery { get; }
+
+    public IReadOnlyList<TripoPanelRecoveryOperationInspection>
+        PaidOperations
+    {
+        get;
+    }
+
+    public string RecoveryToken => Recovery.PresentationToken;
+
+    public string EvidenceToken { get; }
+
+    public bool HasOperationInProgress =>
+        PaidOperations.Any(operation =>
+            operation.Receipt?.OperationInProgress == true ||
+            string.Equals(
+                operation.Receipt?.State,
+                "operation_in_progress",
+                StringComparison.Ordinal));
+
+    internal static TripoPanelRecoveryReviewSnapshot Create(
+        TripoPanelRecoveryLoadResult recovery,
+        IReadOnlyList<TripoPanelRecoveryOperationInspection> paidOperations)
+    {
+        ArgumentNullException.ThrowIfNull(recovery);
+        ArgumentNullException.ThrowIfNull(paidOperations);
+        System.Text.StringBuilder material = new();
+        AppendTokenPart(material, recovery.PresentationToken);
+        foreach (TripoPanelRecoveryOperationInspection operation in
+                 paidOperations.OrderBy(
+                     item => item.OperationId,
+                     StringComparer.Ordinal))
+        {
+            AppendTokenPart(material, operation.OperationId);
+            AppendTokenPart(
+                material,
+                System.Text.Json.JsonSerializer.Serialize(
+                    operation,
+                    Tripo.Bridge.BridgeJson.Options));
+        }
+
+        string token = Convert.ToHexString(
+            System.Security.Cryptography.SHA256.HashData(
+                System.Text.Encoding.UTF8.GetBytes(material.ToString())));
+        return new TripoPanelRecoveryReviewSnapshot(
+            recovery,
+            paidOperations.ToArray(),
+            token);
+    }
+
+    private static void AppendTokenPart(
+        System.Text.StringBuilder material,
+        string value)
+    {
+        material
+            .Append(
+                value.Length.ToString(
+                    System.Globalization.CultureInfo.InvariantCulture))
+            .Append(':')
+            .Append(value);
+    }
+}
+
 public sealed record TripoPanelState(
     bool Connected,
     bool Busy,
@@ -134,6 +218,8 @@ public sealed class TripoPanelSession : IAsyncDisposable
 {
     private readonly Tripo.Bridge.IHostSidecarConnector _connector;
     private readonly TripoPanelRecoveryStore? _recoveryStore;
+    private readonly Tripo.Bridge.ICredentialWorkflowExecutionGate?
+        _recoveryArchiveGate;
     private readonly SemaphoreSlim _operationGate = new(1, 1);
     private readonly CancellationTokenSource _lifetime = new();
     private readonly object _stateGate = new();
@@ -146,10 +232,17 @@ public sealed class TripoPanelSession : IAsyncDisposable
 
     public TripoPanelSession(
         Tripo.Bridge.IHostSidecarConnector connector,
-        TripoPanelRecoveryStore? recoveryStore = null)
+        TripoPanelRecoveryStore? recoveryStore = null,
+        Tripo.Bridge.ICredentialWorkflowExecutionGate?
+            recoveryArchiveGate = null)
     {
         _connector = connector ?? throw new ArgumentNullException(nameof(connector));
         _recoveryStore = recoveryStore;
+        _recoveryArchiveGate = recoveryStore is null
+            ? recoveryArchiveGate
+            : recoveryArchiveGate ??
+              new Tripo.Bridge.CredentialWorkflowExecutionGate(
+                  recoveryStore.RootDirectory);
         _recovery =
             recoveryStore?.LoadStale() ??
             TripoPanelRecoveryLoadResult.Empty;
@@ -675,102 +768,289 @@ public sealed class TripoPanelSession : IAsyncDisposable
                 "The paid-operation inspection returned no receipt.");
     }
 
-    public void AcknowledgeRecoveredOperations(
-        string confirmation,
-        string displayedRecoveryToken)
+    public async Task<TripoPanelRecoveryReviewSnapshot>
+        CreateRecoveryReviewSnapshotAsync(
+            CancellationToken cancellationToken = default)
+    {
+        TripoPanelRecoveryReviewSnapshot? snapshot = null;
+        await RunExclusiveAsync(
+                async token =>
+                {
+                    TripoPanelRecoveryStore store =
+                        _recoveryStore ??
+                        throw new InvalidOperationException(
+                            "This panel has no recovery store.");
+                    TripoPanelRecoveryLoadResult recovery =
+                        store.LoadStale();
+                    PublishRecovery(recovery);
+                    IReadOnlyList<TripoPanelRecoveryOperationInspection>
+                        inspections =
+                            await InspectRecoveryOperationsAsync(
+                                    recovery,
+                                    RequireClient(),
+                                    token)
+                                .ConfigureAwait(false);
+                    TripoPanelRecoveryLoadResult afterInspection =
+                        store.LoadStale();
+                    PublishRecovery(afterInspection);
+                    if (!string.Equals(
+                            recovery.PresentationToken,
+                            afterInspection.PresentationToken,
+                            StringComparison.Ordinal))
+                    {
+                        throw new InvalidOperationException(
+                            "The recovered operation list changed during " +
+                            "inspection. Review the refreshed list again.");
+                    }
+
+                    token.ThrowIfCancellationRequested();
+                    snapshot =
+                        TripoPanelRecoveryReviewSnapshot.Create(
+                            afterInspection,
+                            inspections);
+                },
+                cancellationToken)
+            .ConfigureAwait(false);
+        return snapshot ??
+            throw new InvalidOperationException(
+                "The recovery inspection produced no review snapshot.");
+    }
+
+    public Task UnlockRecoveredOperationsAsync(
+        bool userConfirmed,
+        TripoPanelRecoveryReviewSnapshot displayedSnapshot,
+        CancellationToken cancellationToken = default)
     {
         ThrowIfDisposed();
-        if (!string.Equals(
-                confirmation,
-                "RECONCILED",
-                StringComparison.Ordinal))
+        if (!userConfirmed)
         {
             throw new InvalidOperationException(
-                "Type RECONCILED exactly after checking every recovered UUID.");
+                "Confirm that every recovered operation has been reviewed " +
+                "before unlocking Tripo.");
         }
 
-        if (string.IsNullOrWhiteSpace(displayedRecoveryToken))
-        {
-            throw new InvalidOperationException(
-                "The panel has no rendered recovery snapshot to acknowledge.");
-        }
+        ArgumentNullException.ThrowIfNull(displayedSnapshot);
 
         TripoPanelRecoveryStore store =
             _recoveryStore ??
             throw new InvalidOperationException(
                 "This panel has no recovery store.");
-        if (!_operationGate.Wait(0))
-        {
-            throw new InvalidOperationException(
-                "Wait for the current panel operation to finish before " +
-                "acknowledging recovered operations.");
-        }
+        return RunExclusiveAsync(
+            async token =>
+            {
+                Tripo.Bridge.ICredentialWorkflowExecutionGate executionGate =
+                    _recoveryArchiveGate ??
+                    throw new InvalidOperationException(
+                        "This panel has no recovery archival execution gate.");
+                using IDisposable intentLease =
+                    store.AcquireCredentialWorkflowLease();
+                using IDisposable executionLease = executionGate.Acquire();
+                token.ThrowIfCancellationRequested();
+                TripoPanelRecoveryLoadResult current = store.LoadStale();
+                PublishRecovery(current);
+                if (!string.Equals(
+                        displayedSnapshot.RecoveryToken,
+                        current.PresentationToken,
+                        StringComparison.Ordinal))
+                {
+                    throw new InvalidOperationException(
+                        "The recovered operation list changed. Review the " +
+                        "refreshed list before unlocking again.");
+                }
 
-        try
+                if (current.Issues.Count > 0)
+                {
+                    throw new InvalidOperationException(
+                        "Invalid recovery files must be inspected and moved " +
+                        "aside manually; the panel will not overwrite or " +
+                        "archive them.");
+                }
+
+                if (State.HasWorkflowState)
+                {
+                    throw new InvalidOperationException(
+                        "This panel still owns current workflow state. Reload " +
+                        "the panel session so current and recovered operations " +
+                        "can be reviewed together.");
+                }
+
+                Tripo.Bridge.IHostControlClient client = RequireClient();
+                IReadOnlyList<TripoPanelRecoveryOperationInspection>
+                    firstPass =
+                        await InspectRecoveryOperationsAsync(
+                                current,
+                                client,
+                                token)
+                            .ConfigureAwait(false);
+                TripoPanelRecoveryLoadResult afterFirstPass =
+                    store.LoadStale();
+                PublishRecovery(afterFirstPass);
+                EnsureRecoveryTokenUnchanged(current, afterFirstPass);
+                TripoPanelRecoveryReviewSnapshot firstSnapshot =
+                    TripoPanelRecoveryReviewSnapshot.Create(
+                        afterFirstPass,
+                        firstPass);
+                if (!string.Equals(
+                        displayedSnapshot.EvidenceToken,
+                        firstSnapshot.EvidenceToken,
+                        StringComparison.Ordinal))
+                {
+                    throw new InvalidOperationException(
+                        "The local paid-operation status changed after it was " +
+                        "reviewed. Review the refreshed evidence before " +
+                        "unlocking again.");
+                }
+
+                IReadOnlyList<TripoPanelRecoveryOperationInspection>
+                    secondPass =
+                        await InspectRecoveryOperationsAsync(
+                                afterFirstPass,
+                                client,
+                                token)
+                            .ConfigureAwait(false);
+                TripoPanelRecoveryLoadResult beforeArchive =
+                    store.LoadStale();
+                PublishRecovery(beforeArchive);
+                EnsureRecoveryTokenUnchanged(afterFirstPass, beforeArchive);
+                TripoPanelRecoveryReviewSnapshot confirmedSnapshot =
+                    TripoPanelRecoveryReviewSnapshot.Create(
+                        beforeArchive,
+                        secondPass);
+                if (!string.Equals(
+                        displayedSnapshot.EvidenceToken,
+                        confirmedSnapshot.EvidenceToken,
+                        StringComparison.Ordinal))
+                {
+                    throw new InvalidOperationException(
+                        "The local paid-operation status changed while Tripo " +
+                        "was confirming it. Review the refreshed evidence " +
+                        "before unlocking again.");
+                }
+
+                if (confirmedSnapshot.HasOperationInProgress)
+                {
+                    throw new InvalidOperationException(
+                        "A recovered paid operation is still active. Wait for " +
+                        "it to finish, then refresh and review recovery again.");
+                }
+
+                token.ThrowIfCancellationRequested();
+                // Cancellation linearizes before this synchronous archive
+                // batch so it cannot deliberately split a multi-hint review.
+                try
+                {
+                    foreach (LoadedTripoPanelRecoveryHint hint in
+                             beforeArchive.Hints)
+                    {
+                        store.Archive(hint);
+                    }
+                }
+                finally
+                {
+                    PublishRecovery(store.LoadStale());
+                }
+            },
+            cancellationToken);
+    }
+
+    private async Task<IReadOnlyList<
+        TripoPanelRecoveryOperationInspection>>
+        InspectRecoveryOperationsAsync(
+            TripoPanelRecoveryLoadResult recovery,
+            Tripo.Bridge.IHostControlClient client,
+            CancellationToken cancellationToken)
+    {
+        string[] operationIds = recovery.Hints
+            .SelectMany(loaded => new[]
+            {
+                loaded.Hint.Generation?.OperationId,
+                loaded.Hint.Conversion?.OperationId,
+            })
+            .Where(operationId => operationId is not null)
+            .Cast<string>()
+            .Distinct(StringComparer.Ordinal)
+            .OrderBy(operationId => operationId, StringComparer.Ordinal)
+            .ToArray();
+        List<TripoPanelRecoveryOperationInspection> inspections = [];
+        foreach (string operationId in operationIds)
         {
-            TripoPanelRecoveryLoadResult notification =
-                TripoPanelRecoveryLoadResult.Empty;
-            bool notify = false;
             try
             {
-                lock (_stateGate)
+                Tripo.Bridge.HostControlOperationStatusReceipt receipt =
+                    await client.GetOperationStatusAsync(
+                            operationId,
+                            cancellationToken)
+                        .ConfigureAwait(false);
+                if (!string.Equals(
+                        receipt.OperationId,
+                        operationId,
+                        StringComparison.Ordinal))
                 {
-                    if (_state.Busy || _state.HasWorkflowState)
-                    {
-                        throw new InvalidOperationException(
-                            "Start with an empty, idle panel before acknowledging " +
-                            "recovered operations.");
-                    }
-
-                    TripoPanelRecoveryLoadResult current = store.LoadStale();
-                    _recovery = current;
-                    _recoveryRevision++;
-                    notification = current;
-                    notify = true;
-                    if (!string.Equals(
-                            displayedRecoveryToken,
-                            current.PresentationToken,
-                            StringComparison.Ordinal))
-                    {
-                        throw new InvalidOperationException(
-                            "The recovered operation list changed. Review the " +
-                            "refreshed list before typing RECONCILED again.");
-                    }
-
-                    if (current.Issues.Count > 0)
-                    {
-                        throw new InvalidOperationException(
-                            "Invalid recovery files must be inspected and moved aside " +
-                            "manually; the panel will not overwrite or archive them.");
-                    }
-
-                    try
-                    {
-                        foreach (LoadedTripoPanelRecoveryHint hint in current.Hints)
-                        {
-                            store.Archive(hint);
-                        }
-                    }
-                    finally
-                    {
-                        notification = store.LoadStale();
-                        _recovery = notification;
-                        _recoveryRevision++;
-                    }
+                    throw new InvalidDataException(
+                        "The local operation-status receipt returned a " +
+                        "different operation ID.");
                 }
+
+                inspections.Add(
+                    new TripoPanelRecoveryOperationInspection(
+                        operationId,
+                        receipt,
+                        ErrorCode: null,
+                        ErrorMessage: null));
             }
-            finally
+            catch (OperationCanceledException)
             {
-                if (notify)
-                {
-                    RecoveryChanged?.Invoke(this, notification);
-                }
+                throw;
+            }
+            catch (ObjectDisposedException)
+            {
+                throw;
+            }
+            catch (Exception exception)
+            {
+                inspections.Add(
+                    new TripoPanelRecoveryOperationInspection(
+                        operationId,
+                        Receipt: null,
+                        ErrorCode: exception switch
+                        {
+                            Tripo.Bridge.HostControlCallException call =>
+                                call.Code,
+                            InvalidDataException =>
+                                "invalid_operation_status",
+                            _ => exception.GetType().Name,
+                        },
+                        ErrorMessage: BoundError(exception.Message)));
             }
         }
-        finally
+
+        return inspections;
+    }
+
+    private static void EnsureRecoveryTokenUnchanged(
+        TripoPanelRecoveryLoadResult expected,
+        TripoPanelRecoveryLoadResult current)
+    {
+        if (!string.Equals(
+                expected.PresentationToken,
+                current.PresentationToken,
+                StringComparison.Ordinal))
         {
-            _operationGate.Release();
+            throw new InvalidOperationException(
+                "The recovered operation list changed. Review the refreshed " +
+                "list before unlocking again.");
         }
+    }
+
+    private void PublishRecovery(TripoPanelRecoveryLoadResult recovery)
+    {
+        lock (_stateGate)
+        {
+            _recovery = recovery;
+            _recoveryRevision++;
+        }
+
+        RecoveryChanged?.Invoke(this, recovery);
     }
 
     public TripoPanelRecoveryLoadResult RefreshRecovery()

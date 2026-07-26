@@ -18,7 +18,11 @@ public sealed class TripoPanelPresentationTests
         Assert.Equal("Document: not connected", presentation.DocumentStatus);
         Assert.Equal("Not connected", presentation.DocumentSessionId);
         Assert.Equal("API key: unknown", presentation.CredentialStatus);
+        Assert.Equal("API key…", presentation.ApiKeyText);
         Assert.Equal("Recovery · Clear", presentation.RecoveryHeader);
+        Assert.Equal(
+            "Review recovery…",
+            presentation.RecoveryActionText);
         Assert.Equal("Not prepared", presentation.GenerationOperationId);
         Assert.Equal("Not created", presentation.GenerationTaskId);
         Assert.Equal("Not started", presentation.GenerationStatus);
@@ -88,37 +92,22 @@ public sealed class TripoPanelPresentationTests
     }
 
     [Fact]
-    public void RecoveryBlockStaysProminentWithoutChangingExistingGates()
+    public void RecoveryBlockOffersGuidedPathWithoutOpeningPaidWorkGates()
     {
         Tripo.HostUi.TripoPanelRecoveryLoadResult recovery =
-            new(
-                [
-                    new Tripo.HostUi.LoadedTripoPanelRecoveryHint(
-                        "recovery.json",
-                        new Tripo.HostUi.TripoPanelRecoveryHint(
-                            Tripo.HostUi.TripoPanelRecoveryStore
-                                .CurrentSchemaVersion,
-                            "recovery-id",
-                            "rhino",
-                            123,
-                            DateTimeOffset.UnixEpoch,
-                            DocumentSessionId,
-                            DateTimeOffset.UnixEpoch,
-                            new Tripo.HostUi.TripoPanelPaidRecoveryHint(
-                                "cccccccc-cccc-4ccc-8ccc-cccccccccccc",
-                                true,
-                                null,
-                                "outcome_unknown",
-                                false,
-                                false),
-                            null,
-                            null)),
-                ],
-                []);
+            BlockingGenerationRecovery();
         Tripo.HostUi.TripoPanelState state =
             ReadyState() with
             {
-                ConversionDispatchAttempted = true,
+                CredentialStatus =
+                    new Tripo.Bridge
+                        .HostControlCredentialStatusReceipt(
+                            false,
+                            "none",
+                            false,
+                            false,
+                            "keychain",
+                            false),
             };
 
         Tripo.HostUi.TripoPanelPresentation presentation =
@@ -131,23 +120,78 @@ public sealed class TripoPanelPresentationTests
 
         Assert.True(presentation.RecoveryHasBlock);
         Assert.Equal(
-            "Recovery · Action required",
+            "Recovery · Review before continuing",
             presentation.RecoveryHeader);
+        Assert.Contains(
+            "Tripo paused new paid work and API-key changes",
+            presentation.RecoveryDetails);
+        Assert.Contains(
+            "Choose “Review recovery…”",
+            presentation.RecoveryDetails);
         Assert.Contains(
             "Generation UUID: cccccccc-cccc-4ccc-8ccc-cccccccccccc",
             presentation.RecoveryDetails);
         Assert.Contains(
             "Generation inspection pending.",
             presentation.RecoveryDetails);
-        Assert.False(presentation.ApiKeyEnabled);
+        Assert.True(presentation.ApiKeyEnabled);
+        Assert.Equal(
+            "Review recovery to set API key…",
+            presentation.ApiKeyText);
+        Assert.Equal(
+            "Review recovery…",
+            presentation.RecoveryActionText);
         Assert.False(presentation.GenerateEnabled);
-        Assert.True(presentation.RefreshConversionEnabled);
+        Assert.False(presentation.RefreshConversionEnabled);
         Assert.True(presentation.CheckRecoveryEnabled);
-        Assert.True(presentation.AcknowledgeRecoveryEnabled);
+        Assert.True(presentation.ReviewRecoveryEnabled);
         Assert.True(presentation.PromptEnabled);
         Assert.Equal(
             recovery.PresentationToken,
             presentation.RecoveryToken);
+    }
+
+    [Fact]
+    public void RecoveryShortcutCannotBypassCurrentUnresolvedPaidDispatch()
+    {
+        Tripo.HostUi.TripoPanelPresentation presentation =
+            Present(
+                ReadyState() with
+                {
+                    GenerationDispatchAttempted = true,
+                },
+                BlockingGenerationRecovery());
+
+        Assert.True(presentation.ReviewRecoveryEnabled);
+        Assert.False(presentation.ApiKeyEnabled);
+        Assert.False(presentation.GenerateEnabled);
+        Assert.Equal(
+            "Reload and review all work…",
+            presentation.RecoveryActionText);
+        Assert.Contains(
+            "preserve dispatched operation IDs",
+            presentation.RecoveryDetails);
+    }
+
+    [Fact]
+    public void RecoveryBlockDisablesBothWorkflowRefreshButtons()
+    {
+        Tripo.HostUi.TripoPanelPresentation presentation =
+            Present(
+                ReadyState() with
+                {
+                    GenerationDispatchAttempted = true,
+                    ConversionDispatchAttempted = true,
+                    ConversionReceipt = new(
+                        "dddddddd-dddd-4ddd-8ddd-dddddddddddd",
+                        "task_source123",
+                        "task_conversion123",
+                        "OBJ"),
+                },
+                BlockingGenerationRecovery());
+
+        Assert.False(presentation.RefreshGenerationEnabled);
+        Assert.False(presentation.RefreshConversionEnabled);
     }
 
     [Fact]
@@ -592,7 +636,7 @@ public sealed class TripoPanelPresentationTests
     }
 
     [Fact]
-    public void RecoveryIssuesCannotBeAcknowledged()
+    public void RecoveryIssuesRequireManualRepairAndCannotBeUnlocked()
     {
         Tripo.HostUi.TripoPanelRecoveryLoadResult recovery =
             new(
@@ -609,10 +653,40 @@ public sealed class TripoPanelPresentationTests
 
         Assert.True(presentation.RecoveryHasBlock);
         Assert.Contains("invalid_json", presentation.RecoveryDetails);
-        Assert.False(presentation.CheckRecoveryEnabled);
-        Assert.False(presentation.AcknowledgeRecoveryEnabled);
+        Assert.Contains(
+            "cannot safely read one or more local recovery records",
+            presentation.RecoveryDetails);
+        Assert.True(presentation.CheckRecoveryEnabled);
+        Assert.False(presentation.ReviewRecoveryEnabled);
         Assert.False(presentation.GenerateEnabled);
         Assert.False(presentation.ApiKeyEnabled);
+        Assert.Equal(
+            "Recovery needs attention…",
+            presentation.ApiKeyText);
+    }
+
+    [Fact]
+    public void MixedRecoveryIssuesKeepInspectionButDisableUnsafeUnlock()
+    {
+        Tripo.HostUi.TripoPanelRecoveryLoadResult hints =
+            BlockingGenerationRecovery();
+        Tripo.HostUi.TripoPanelRecoveryLoadResult mixed =
+            new(
+                hints.Hints,
+                [
+                    new Tripo.HostUi.TripoPanelRecoveryIssue(
+                        "blocked.json",
+                        "invalid_json",
+                        "The recovery record could not be parsed."),
+                ]);
+
+        Tripo.HostUi.TripoPanelPresentation presentation =
+            Present(ReadyState(), mixed);
+
+        Assert.True(presentation.CheckRecoveryEnabled);
+        Assert.False(presentation.ReviewRecoveryEnabled);
+        Assert.False(presentation.ApiKeyEnabled);
+        Assert.False(presentation.GenerateEnabled);
     }
 
     private const string DocumentSessionId =
@@ -630,6 +704,33 @@ public sealed class TripoPanelPresentationTests
             recoveryInspection: null,
             prompt,
             objectName);
+
+    private static Tripo.HostUi.TripoPanelRecoveryLoadResult
+        BlockingGenerationRecovery() =>
+        new(
+            [
+                new Tripo.HostUi.LoadedTripoPanelRecoveryHint(
+                    "recovery.json",
+                    new Tripo.HostUi.TripoPanelRecoveryHint(
+                        Tripo.HostUi.TripoPanelRecoveryStore
+                            .CurrentSchemaVersion,
+                        "recovery-id",
+                        "rhino",
+                        123,
+                        DateTimeOffset.UnixEpoch,
+                        DocumentSessionId,
+                        DateTimeOffset.UnixEpoch,
+                        new Tripo.HostUi.TripoPanelPaidRecoveryHint(
+                            "cccccccc-cccc-4ccc-8ccc-cccccccccccc",
+                            true,
+                            null,
+                            "outcome_unknown",
+                            false,
+                            false),
+                        null,
+                        null)),
+            ],
+            []);
 
     private static Tripo.Bridge.HostControlTaskStatusReceipt TaskStatus(
         string taskId,

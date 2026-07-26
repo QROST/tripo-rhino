@@ -186,7 +186,8 @@ public sealed record HostControlOperationStatusReceipt(
     bool CanResumeCreation,
     string NextAction,
     DateTimeOffset UpdatedAtUtc,
-    string? FailureStage = null);
+    string? FailureStage = null,
+    bool OperationInProgress = false);
 
 public sealed record HostControlCreateObjConversionRequest(
     string SourceTaskId,

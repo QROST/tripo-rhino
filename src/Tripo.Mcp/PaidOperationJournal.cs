@@ -48,7 +48,8 @@ public sealed record PaidOperationStatusReceipt(
     bool CanResumeCreation,
     string NextAction,
     DateTimeOffset UpdatedAtUtc,
-    string? FailureStage = null);
+    string? FailureStage = null,
+    bool OperationInProgress = false);
 
 internal static class PaidOperationKinds
 {
@@ -1046,7 +1047,8 @@ internal sealed class PaidOperationJournal : IPaidOperationJournal
             canResumeCreation,
             nextAction,
             entry.UpdatedAtUtc,
-            entry.FailureStage);
+            entry.FailureStage,
+            OperationInProgress: operationInProgress);
     }
 
     private sealed class FilePaidOperationLease : PaidOperationLease

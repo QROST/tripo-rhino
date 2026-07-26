@@ -249,7 +249,8 @@ internal sealed class HostControlDispatcher :
             receipt.CanResumeCreation,
             receipt.NextAction,
             receipt.UpdatedAtUtc,
-            receipt.FailureStage);
+            receipt.FailureStage,
+            receipt.OperationInProgress);
     }
 
     private async Task<Tripo.Bridge.HostControlObjConversionCreationReceipt>
