@@ -33,6 +33,7 @@ public sealed class ApiCredentialService :
     private string? _sessionKey;
     private string? _storedKey;
     private bool _storedKeyPresenceKnown;
+    private bool _storeReadSuppressed;
 
     public ApiCredentialService()
         : this(
@@ -126,15 +127,40 @@ public sealed class ApiCredentialService :
         bool persist)
     {
         ValidateApiKey(apiKey);
+        if (!string.IsNullOrWhiteSpace(_environmentProvider()))
+        {
+            throw new TripoApiException(
+                $"{TripoV3Client.ApiKeyEnvironmentVariable} is set and " +
+                "overrides credentials entered in the panel. Remove the " +
+                "environment variable and restart the host before saving a key.");
+        }
+
         using IDisposable executionLease = _executionGate.Acquire();
         lock (_gate)
         {
             if (persist)
             {
-                _store.Write(apiKey);
-                _storedKey = apiKey;
-                _storedKeyPresenceKnown = true;
                 _sessionKey = null;
+                _storedKey = null;
+                _storedKeyPresenceKnown = false;
+                _storeReadSuppressed = true;
+                _store.Write(apiKey);
+                string? persistedKey = _store.Read();
+                if (!string.Equals(
+                        persistedKey,
+                        apiKey,
+                        StringComparison.Ordinal))
+                {
+                    throw new TripoApiException(
+                        "The persistent credential mutation completed, but the " +
+                        "store did not return the submitted API key. This " +
+                        "sidecar will not use a stored credential until a later " +
+                        "save is verified.");
+                }
+
+                _storedKey = persistedKey;
+                _storedKeyPresenceKnown = true;
+                _storeReadSuppressed = false;
             }
             else
             {
@@ -157,6 +183,7 @@ public sealed class ApiCredentialService :
             _store.Delete();
             _storedKey = null;
             _storedKeyPresenceKnown = true;
+            _storeReadSuppressed = false;
             return new Tripo.Bridge.HostControlCredentialMutationReceipt(
                 GetStatusWhileLocked(includeStoredState: true));
         }
@@ -169,7 +196,7 @@ public sealed class ApiCredentialService :
             apiKey.Any(character =>
                 char.IsWhiteSpace(character) || char.IsControl(character)))
         {
-            throw new TripoApiException(
+            throw new TripoCredentialException(
                 "The Tripo API key is missing or is not a valid opaque credential.");
         }
     }
@@ -226,6 +253,13 @@ public sealed class ApiCredentialService :
 
     private void ReloadStore()
     {
+        if (_storeReadSuppressed)
+        {
+            _storedKey = null;
+            _storedKeyPresenceKnown = false;
+            return;
+        }
+
         string? stored = _store.Read();
         if (stored is not null)
         {
@@ -408,86 +442,144 @@ internal sealed class PrivateFileApiKeyStore : IPlatformApiKeyStore
 
 internal sealed class MacOsKeychainApiKeyStore : IPlatformApiKeyStore
 {
-    private const string SecurityTool = "/usr/bin/security";
-    private const string ServiceName = "ai.qrost.TripoMCPs.TripoV3";
-    internal const int MaximumHelperOutputCharacters = 8 * 1024;
-    private static readonly TimeSpan HelperTimeout = TimeSpan.FromSeconds(5);
-    private static readonly string AccountName =
-        string.IsNullOrWhiteSpace(Environment.UserName)
-            ? "current-user"
-            : Environment.UserName;
+    private const string DefaultServiceName = "ai.qrost.TripoMCPs.TripoV3";
+    private readonly string _serviceName;
+    private readonly string _accountName;
+
+    public MacOsKeychainApiKeyStore()
+        : this(
+            DefaultServiceName,
+            string.IsNullOrWhiteSpace(Environment.UserName)
+                ? "current-user"
+                : Environment.UserName)
+    {
+    }
+
+    internal MacOsKeychainApiKeyStore(
+        string serviceName,
+        string accountName)
+    {
+        if (string.IsNullOrWhiteSpace(serviceName))
+        {
+            throw new ArgumentException(
+                "The Keychain service name cannot be empty.",
+                nameof(serviceName));
+        }
+
+        if (string.IsNullOrWhiteSpace(accountName))
+        {
+            throw new ArgumentException(
+                "The Keychain account name cannot be empty.",
+                nameof(accountName));
+        }
+
+        _serviceName = serviceName;
+        _accountName = accountName;
+    }
 
     public string BackendName => "macos-keychain";
 
     public bool UsesWeakerFileFallback => false;
 
-    public string? Read()
-    {
-        SecurityResult result = Run(
-            [
-                "find-generic-password",
-                "-a",
-                AccountName,
-                "-s",
-                ServiceName,
-                "-w",
-            ],
-            standardInput: null);
-        if (result.ExitCode == 44)
-        {
-            return null;
-        }
-
-        EnsureSuccess(result);
-        return result.StandardOutput.TrimEnd('\r', '\n');
-    }
+    public string? Read() =>
+        MacOsSecurityFramework.ReadGenericPassword(
+            _serviceName,
+            _accountName);
 
     public void Write(string apiKey)
     {
-        SecurityResult result = Run(
-            [
-                "add-generic-password",
-                "-U",
-                "-a",
-                AccountName,
-                "-s",
-                ServiceName,
-                "-w",
-            ],
-            apiKey);
-        EnsureSuccess(result);
+        try
+        {
+            WriteAndVerify(apiKey);
+        }
+        catch (MacOsKeychainStatusException exception)
+            when (exception.RequiresLegacyMigration)
+        {
+            LegacyMacOsKeychainItem.Delete(
+                _serviceName,
+                _accountName);
+            WriteAndVerify(apiKey);
+        }
     }
 
     public void Delete()
     {
-        SecurityResult result = Run(
-            [
-                "delete-generic-password",
-                "-a",
-                AccountName,
-                "-s",
-                ServiceName,
-            ],
-            standardInput: null);
-        if (result.ExitCode != 44)
+        try
         {
-            EnsureSuccess(result);
+            MacOsSecurityFramework.DeleteGenericPassword(
+                _serviceName,
+                _accountName);
+        }
+        catch (MacOsKeychainStatusException exception)
+            when (exception.RequiresLegacyMigration)
+        {
+            LegacyMacOsKeychainItem.Delete(
+                _serviceName,
+                _accountName);
         }
     }
 
-    private static SecurityResult Run(
-        IReadOnlyList<string> arguments,
-        string? standardInput)
+    private void WriteAndVerify(string apiKey)
+    {
+        MacOsSecurityFramework.WriteGenericPassword(
+            _serviceName,
+            _accountName,
+            apiKey);
+        string? persisted = MacOsSecurityFramework.ReadGenericPassword(
+            _serviceName,
+            _accountName);
+        if (!string.Equals(persisted, apiKey, StringComparison.Ordinal))
+        {
+            throw new TripoApiException(
+                "The macOS Keychain did not return the credential that was " +
+                "just written.");
+        }
+    }
+}
+
+internal sealed class MacOsKeychainStatusException : TripoApiException
+{
+    private const int AuthenticationFailed = -25293;
+    private const int InteractionNotAllowed = -25308;
+
+    public MacOsKeychainStatusException(int status)
+        : base(
+            "The macOS Keychain rejected the credential operation. " +
+            "The API key was not exposed or written to a fallback file.",
+            innerException: new InvalidOperationException(
+                $"Security.framework returned OSStatus {status}."))
+    {
+        Status = status;
+    }
+
+    public int Status { get; }
+
+    public bool RequiresLegacyMigration =>
+        Status is AuthenticationFailed or InteractionNotAllowed;
+}
+
+internal static class LegacyMacOsKeychainItem
+{
+    private const string SecurityTool = "/usr/bin/security";
+    private static readonly TimeSpan HelperTimeout = TimeSpan.FromSeconds(5);
+
+    public static void Delete(string serviceName, string accountName)
     {
         ProcessStartInfo startInfo = new(SecurityTool)
         {
             CreateNoWindow = true,
             RedirectStandardError = true,
-            RedirectStandardInput = standardInput is not null,
             RedirectStandardOutput = true,
             UseShellExecute = false,
         };
-        foreach (string argument in arguments)
+        foreach (string argument in new[]
+                 {
+                     "delete-generic-password",
+                     "-a",
+                     accountName,
+                     "-s",
+                     serviceName,
+                 })
         {
             startInfo.ArgumentList.Add(argument);
         }
@@ -496,59 +588,37 @@ internal sealed class MacOsKeychainApiKeyStore : IPlatformApiKeyStore
         {
             using Process process = Process.Start(startInfo)
                 ?? throw new InvalidOperationException(
-                    "The macOS Keychain helper did not start.");
-            if (standardInput is not null)
-            {
-                process.StandardInput.WriteLine(standardInput);
-                process.StandardInput.Close();
-            }
-
+                    "The legacy macOS Keychain cleanup helper did not start.");
             using CancellationTokenSource deadline = new(HelperTimeout);
-            Task<string> standardOutputTask = ReadBoundedAsync(
-                process.StandardOutput,
+            Task<string> standardOutput = process.StandardOutput.ReadToEndAsync(
                 deadline.Token);
-            Task<string> standardErrorTask = ReadBoundedAsync(
-                process.StandardError,
+            Task<string> standardError = process.StandardError.ReadToEndAsync(
                 deadline.Token);
             try
             {
                 Task.WhenAll(
                         process.WaitForExitAsync(deadline.Token),
-                        standardOutputTask,
-                        standardErrorTask)
+                        standardOutput,
+                        standardError)
                     .GetAwaiter()
                     .GetResult();
             }
             catch (OperationCanceledException exception)
             {
-                try
-                {
-                    if (!process.HasExited)
-                    {
-                        process.Kill();
-                    }
-                }
-                catch (InvalidOperationException)
-                {
-                    // The helper exited between the checks.
-                }
-
+                TryKill(process);
                 throw new TripoApiException(
-                    "The macOS Keychain helper did not respond. " +
-                    "The API key was not exposed or written to a fallback file.",
+                    "The legacy macOS Keychain item could not be replaced " +
+                    "within the safety deadline. No API key was passed to the " +
+                    "cleanup helper.",
                     innerException: exception);
             }
-            catch (TripoApiException)
-            {
-                TryKill(process);
-                throw;
-            }
 
-            string standardOutput = standardOutputTask
-                .GetAwaiter()
-                .GetResult();
-            _ = standardErrorTask.GetAwaiter().GetResult();
-            return new SecurityResult(process.ExitCode, standardOutput);
+            if (process.ExitCode is not 0 and not 44)
+            {
+                throw new TripoApiException(
+                    "The legacy macOS Keychain item could not be replaced. " +
+                    "Remove the Tripo credential in Keychain Access and try again.");
+            }
         }
         catch (Exception exception)
             when (exception is Win32Exception or
@@ -556,38 +626,9 @@ internal sealed class MacOsKeychainApiKeyStore : IPlatformApiKeyStore
                   IOException)
         {
             throw new TripoApiException(
-                "The macOS Keychain helper is unavailable. " +
-                "The API key was not persisted.",
+                "The legacy macOS Keychain cleanup helper is unavailable. " +
+                "No API key was passed to a subprocess.",
                 innerException: exception);
-        }
-    }
-
-    internal static async Task<string> ReadBoundedAsync(
-        TextReader reader,
-        CancellationToken cancellationToken)
-    {
-        ArgumentNullException.ThrowIfNull(reader);
-        char[] buffer = new char[1024];
-        StringBuilder output = new();
-        while (true)
-        {
-            int count = await reader.ReadAsync(
-                    buffer.AsMemory(),
-                    cancellationToken)
-                .ConfigureAwait(false);
-            if (count == 0)
-            {
-                return output.ToString();
-            }
-
-            if (count > MaximumHelperOutputCharacters - output.Length)
-            {
-                throw new TripoApiException(
-                    "The macOS Keychain helper returned oversized output. " +
-                    "No output was exposed or persisted.");
-            }
-
-            output.Append(buffer, 0, count);
         }
     }
 
@@ -605,18 +646,293 @@ internal sealed class MacOsKeychainApiKeyStore : IPlatformApiKeyStore
             // The helper exited between the checks.
         }
     }
+}
 
-    private static void EnsureSuccess(SecurityResult result)
+internal static class MacOsSecurityFramework
+{
+    private const string SecurityFramework =
+        "/System/Library/Frameworks/Security.framework/Security";
+    private const string CoreFoundationFramework =
+        "/System/Library/Frameworks/CoreFoundation.framework/CoreFoundation";
+    private const int Success = 0;
+    private const int DuplicateItem = -25299;
+    private const int ItemNotFound = -25300;
+    private const int MaximumCredentialBytes = 8 * 1024;
+    private static readonly UTF8Encoding StrictUtf8 =
+        new(encoderShouldEmitUTF8Identifier: false, throwOnInvalidBytes: true);
+
+    public static string? ReadGenericPassword(
+        string serviceName,
+        string accountName)
     {
-        if (result.ExitCode != 0)
+        DisableUserInteraction();
+        byte[] serviceBytes = Encoding.UTF8.GetBytes(serviceName);
+        byte[] accountBytes = Encoding.UTF8.GetBytes(accountName);
+        IntPtr item = IntPtr.Zero;
+        IntPtr passwordData = IntPtr.Zero;
+        try
         {
-            throw new TripoApiException(
-                "The macOS Keychain rejected the credential operation. " +
-                "The API key was not exposed or written to a fallback file.");
+            int status = SecKeychainFindGenericPasswordWithData(
+                IntPtr.Zero,
+                checked((uint)serviceBytes.Length),
+                serviceBytes,
+                checked((uint)accountBytes.Length),
+                accountBytes,
+                out uint passwordLength,
+                out passwordData,
+                out item);
+            if (status == ItemNotFound)
+            {
+                return null;
+            }
+
+            EnsureSuccess(status);
+            if (passwordLength == 0)
+            {
+                return string.Empty;
+            }
+
+            if (passwordLength > MaximumCredentialBytes)
+            {
+                throw new TripoApiException(
+                    "The macOS Keychain returned an oversized credential.");
+            }
+
+            byte[] passwordBytes = new byte[passwordLength];
+            try
+            {
+                Marshal.Copy(
+                    passwordData,
+                    passwordBytes,
+                    0,
+                    passwordBytes.Length);
+                try
+                {
+                    return StrictUtf8.GetString(passwordBytes);
+                }
+                catch (DecoderFallbackException exception)
+                {
+                    throw new TripoApiException(
+                        "The macOS Keychain credential is not valid UTF-8.",
+                        innerException: exception);
+                }
+            }
+            finally
+            {
+                CryptographicOperations.ZeroMemory(passwordBytes);
+            }
+        }
+        finally
+        {
+            if (passwordData != IntPtr.Zero)
+            {
+                _ = SecKeychainItemFreeContent(
+                    IntPtr.Zero,
+                    passwordData);
+            }
+
+            Release(item);
         }
     }
 
-    private sealed record SecurityResult(int ExitCode, string StandardOutput);
+    public static void WriteGenericPassword(
+        string serviceName,
+        string accountName,
+        string password)
+    {
+        DisableUserInteraction();
+        byte[] serviceBytes = Encoding.UTF8.GetBytes(serviceName);
+        byte[] accountBytes = Encoding.UTF8.GetBytes(accountName);
+        byte[] passwordBytes = StrictUtf8.GetBytes(password);
+        if (passwordBytes.Length > MaximumCredentialBytes)
+        {
+            CryptographicOperations.ZeroMemory(passwordBytes);
+            throw new TripoApiException(
+                "The API key is too large for the macOS Keychain.");
+        }
+
+        IntPtr item = IntPtr.Zero;
+        try
+        {
+            int status = SecKeychainFindGenericPasswordWithoutData(
+                IntPtr.Zero,
+                checked((uint)serviceBytes.Length),
+                serviceBytes,
+                checked((uint)accountBytes.Length),
+                accountBytes,
+                IntPtr.Zero,
+                IntPtr.Zero,
+                out item);
+            if (status == Success)
+            {
+                EnsureSuccess(
+                    SecKeychainItemModifyAttributesAndData(
+                        item,
+                        IntPtr.Zero,
+                        checked((uint)passwordBytes.Length),
+                        passwordBytes));
+                return;
+            }
+
+            if (status != ItemNotFound)
+            {
+                throw NativeFailure(status);
+            }
+
+            status = SecKeychainAddGenericPassword(
+                IntPtr.Zero,
+                checked((uint)serviceBytes.Length),
+                serviceBytes,
+                checked((uint)accountBytes.Length),
+                accountBytes,
+                checked((uint)passwordBytes.Length),
+                passwordBytes,
+                out item);
+            if (status == DuplicateItem)
+            {
+                Release(item);
+                item = IntPtr.Zero;
+                EnsureSuccess(
+                    SecKeychainFindGenericPasswordWithoutData(
+                        IntPtr.Zero,
+                        checked((uint)serviceBytes.Length),
+                        serviceBytes,
+                        checked((uint)accountBytes.Length),
+                        accountBytes,
+                        IntPtr.Zero,
+                        IntPtr.Zero,
+                        out item));
+                status = SecKeychainItemModifyAttributesAndData(
+                    item,
+                    IntPtr.Zero,
+                    checked((uint)passwordBytes.Length),
+                    passwordBytes);
+            }
+
+            EnsureSuccess(status);
+        }
+        finally
+        {
+            CryptographicOperations.ZeroMemory(passwordBytes);
+            Release(item);
+        }
+    }
+
+    public static void DeleteGenericPassword(
+        string serviceName,
+        string accountName)
+    {
+        DisableUserInteraction();
+        byte[] serviceBytes = Encoding.UTF8.GetBytes(serviceName);
+        byte[] accountBytes = Encoding.UTF8.GetBytes(accountName);
+        IntPtr item = IntPtr.Zero;
+        try
+        {
+            int status = SecKeychainFindGenericPasswordWithoutData(
+                IntPtr.Zero,
+                checked((uint)serviceBytes.Length),
+                serviceBytes,
+                checked((uint)accountBytes.Length),
+                accountBytes,
+                IntPtr.Zero,
+                IntPtr.Zero,
+                out item);
+            if (status == ItemNotFound)
+            {
+                return;
+            }
+
+            EnsureSuccess(status);
+            EnsureSuccess(SecKeychainItemDelete(item));
+        }
+        finally
+        {
+            Release(item);
+        }
+    }
+
+    private static void EnsureSuccess(int status)
+    {
+        if (status != Success)
+        {
+            throw NativeFailure(status);
+        }
+    }
+
+    private static void DisableUserInteraction() =>
+        EnsureSuccess(SecKeychainSetUserInteractionAllowed(false));
+
+    private static void Release(IntPtr item)
+    {
+        if (item != IntPtr.Zero)
+        {
+            CFRelease(item);
+        }
+    }
+
+    private static MacOsKeychainStatusException NativeFailure(int status) =>
+        new MacOsKeychainStatusException(status);
+
+    [DllImport(
+        SecurityFramework,
+        EntryPoint = "SecKeychainFindGenericPassword",
+        SetLastError = false)]
+    private static extern int SecKeychainFindGenericPasswordWithData(
+        IntPtr keychainOrArray,
+        uint serviceNameLength,
+        byte[] serviceName,
+        uint accountNameLength,
+        byte[] accountName,
+        out uint passwordLength,
+        out IntPtr passwordData,
+        out IntPtr item);
+
+    [DllImport(
+        SecurityFramework,
+        EntryPoint = "SecKeychainFindGenericPassword",
+        SetLastError = false)]
+    private static extern int SecKeychainFindGenericPasswordWithoutData(
+        IntPtr keychainOrArray,
+        uint serviceNameLength,
+        byte[] serviceName,
+        uint accountNameLength,
+        byte[] accountName,
+        IntPtr passwordLength,
+        IntPtr passwordData,
+        out IntPtr item);
+
+    [DllImport(SecurityFramework, SetLastError = false)]
+    private static extern int SecKeychainAddGenericPassword(
+        IntPtr keychain,
+        uint serviceNameLength,
+        byte[] serviceName,
+        uint accountNameLength,
+        byte[] accountName,
+        uint passwordLength,
+        byte[] passwordData,
+        out IntPtr item);
+
+    [DllImport(SecurityFramework, SetLastError = false)]
+    private static extern int SecKeychainItemModifyAttributesAndData(
+        IntPtr item,
+        IntPtr attributes,
+        uint dataLength,
+        byte[] data);
+
+    [DllImport(SecurityFramework, SetLastError = false)]
+    private static extern int SecKeychainItemDelete(IntPtr item);
+
+    [DllImport(SecurityFramework, SetLastError = false)]
+    private static extern int SecKeychainItemFreeContent(
+        IntPtr attributes,
+        IntPtr data);
+
+    [DllImport(SecurityFramework, SetLastError = false)]
+    private static extern int SecKeychainSetUserInteractionAllowed(
+        [MarshalAs(UnmanagedType.I1)] bool state);
+
+    [DllImport(CoreFoundationFramework, SetLastError = false)]
+    private static extern void CFRelease(IntPtr value);
 }
 
 internal sealed class WindowsCredentialManagerApiKeyStore :

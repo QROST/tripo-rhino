@@ -29,14 +29,16 @@ public sealed class ApiCredentialServiceTests
     public void EnvironmentCredentialWinsOverSessionAndStore()
     {
         const string environmentKey = "environment-key";
+        string? currentEnvironmentKey = null;
         FakeStore store = new()
         {
             StoredValue = "stored-key",
         };
         Tripo.Mcp.ApiCredentialService service = new(
-            () => environmentKey,
+            () => currentEnvironmentKey,
             store);
         service.SetApiKey("session-key", persist: false);
+        currentEnvironmentKey = environmentKey;
 
         string? effective = service.GetApiKey();
         Tripo.Bridge.HostControlCredentialStatusReceipt status =
@@ -46,6 +48,25 @@ public sealed class ApiCredentialServiceTests
         Assert.True(status.HasApiKey);
         Assert.Equal("environment", status.Source);
         Assert.False(status.StoredKeyPresenceKnown);
+    }
+
+    [Fact]
+    public void EnvironmentOverrideRejectsAPanelSaveBeforeStoreMutation()
+    {
+        FakeStore store = new();
+        Tripo.Mcp.ApiCredentialService service = new(
+            () => "environment-key",
+            store);
+
+        Tripo.Mcp.TripoApiException exception =
+            Assert.Throws<Tripo.Mcp.TripoApiException>(
+                () => service.SetApiKey("panel-key", persist: true));
+
+        Assert.Contains(
+            Tripo.Mcp.TripoV3Client.ApiKeyEnvironmentVariable,
+            exception.Message);
+        Assert.Equal(0, store.WriteCalls);
+        Assert.Null(store.StoredValue);
     }
 
     [Fact]
@@ -154,8 +175,8 @@ public sealed class ApiCredentialServiceTests
             () => null,
             new FakeStore());
 
-        Tripo.Mcp.TripoApiException exception = Assert.Throws<
-            Tripo.Mcp.TripoApiException>(
+        Tripo.Mcp.TripoCredentialException exception = Assert.Throws<
+            Tripo.Mcp.TripoCredentialException>(
             () => service.SetApiKey(invalidKey, persist: false));
 
         if (invalidKey.Length > 0)
@@ -238,21 +259,42 @@ public sealed class ApiCredentialServiceTests
     }
 
     [Fact]
-    public async Task MacOsKeychainHelperOutputIsBoundedWithoutEchoingIt()
+    public void PersistentCredentialIsNotAcceptedUntilReadBackMatches()
     {
-        string oversized = new(
-            'k',
-            Tripo.Mcp.MacOsKeychainApiKeyStore
-                .MaximumHelperOutputCharacters + 1);
+        FakeStore store = new()
+        {
+            CorruptWrites = true,
+        };
+        Tripo.Mcp.ApiCredentialService service = new(() => null, store);
+        service.SetApiKey("old-session-key", persist: false);
 
         Tripo.Mcp.TripoApiException exception =
-            await Assert.ThrowsAsync<Tripo.Mcp.TripoApiException>(
-                () => Tripo.Mcp.MacOsKeychainApiKeyStore.ReadBoundedAsync(
-                    new StringReader(oversized),
-                    CancellationToken.None));
+            Assert.Throws<Tripo.Mcp.TripoApiException>(
+                () => service.SetApiKey("persistent-key", persist: true));
 
-        Assert.Contains("oversized", exception.Message);
-        Assert.DoesNotContain(oversized, exception.Message, StringComparison.Ordinal);
+        Assert.Contains("mutation completed", exception.Message);
+        Assert.Null(service.GetApiKey());
+        Assert.False(service.GetStatus().HasApiKey);
+        Assert.False(service.GetStatus().StoredKeyPresenceKnown);
+        Assert.Equal(1, store.WriteCalls);
+    }
+
+    [Fact]
+    public void PersistentMutationFailureSuppressesThePriorSessionCredential()
+    {
+        FakeStore store = new()
+        {
+            ThrowAfterWrite = true,
+        };
+        Tripo.Mcp.ApiCredentialService service = new(() => null, store);
+        service.SetApiKey("old-session-key", persist: false);
+
+        Assert.Throws<Tripo.Mcp.TripoApiException>(
+            () => service.SetApiKey("replacement-key", persist: true));
+
+        Assert.Null(service.GetApiKey());
+        Assert.False(service.GetStatus().HasApiKey);
+        Assert.False(service.GetStatus().StoredKeyPresenceKnown);
     }
 
     [Fact]
@@ -284,6 +326,10 @@ public sealed class ApiCredentialServiceTests
 
         public bool ThrowOnRead { get; set; }
 
+        public bool CorruptWrites { get; set; }
+
+        public bool ThrowAfterWrite { get; set; }
+
         public Action? OnWrite { get; init; }
 
         public Action? OnDelete { get; init; }
@@ -303,7 +349,14 @@ public sealed class ApiCredentialServiceTests
         {
             OnWrite?.Invoke();
             WriteCalls++;
-            StoredValue = apiKey;
+            StoredValue = CorruptWrites
+                ? "different-valid-key"
+                : apiKey;
+            if (ThrowAfterWrite)
+            {
+                throw new Tripo.Mcp.TripoApiException(
+                    "The fake store failed after mutation.");
+            }
         }
 
         public void Delete()

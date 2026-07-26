@@ -12,6 +12,8 @@ public interface ITaskCreationCheckpoint
 
     Task TaskIdReceivedAsync(string taskId);
 
+    Task RequestRejectedAsync(string code, string message);
+
     Task OutcomeUnknownAsync(string code, string message);
 }
 
@@ -68,6 +70,7 @@ internal static class PaidOperationStates
     public const string ImageGenerationDispatching =
         "image_generation_dispatching";
     public const string TaskIdPersisted = "task_id_persisted";
+    public const string RequestRejected = "request_rejected";
     public const string OutcomeUnknown = "outcome_unknown";
 }
 
@@ -203,6 +206,8 @@ internal abstract class PaidOperationLease :
     public abstract Task BeforeSendAsync(CancellationToken cancellationToken);
 
     public abstract Task TaskIdReceivedAsync(string taskId);
+
+    public abstract Task RequestRejectedAsync(string code, string message);
 
     public abstract Task OutcomeUnknownAsync(string code, string message);
 
@@ -743,7 +748,11 @@ internal sealed class PaidOperationJournal : IPaidOperationJournal
         (from, to) switch
         {
             (PaidOperationStates.Prepared, PaidOperationStates.Dispatching) => true,
+            (PaidOperationStates.Prepared, PaidOperationStates.RequestRejected) =>
+                true,
             (PaidOperationStates.Dispatching, PaidOperationStates.TaskIdPersisted) => true,
+            (PaidOperationStates.Dispatching, PaidOperationStates.RequestRejected) =>
+                true,
             (PaidOperationStates.Dispatching, PaidOperationStates.OutcomeUnknown) => true,
             (
                 PaidOperationStates.Prepared,
@@ -807,6 +816,13 @@ internal sealed class PaidOperationJournal : IPaidOperationJournal
                 TripoV3Client.IsValidTaskId(entry.CreatedTaskId) &&
                 noFailure &&
                 (isImage ? imageProgress : noImageProgress),
+            PaidOperationStates.RequestRejected =>
+                !isImage &&
+                entry.CreatedTaskId is null &&
+                !string.IsNullOrWhiteSpace(entry.FailureCode) &&
+                !string.IsNullOrWhiteSpace(entry.FailureMessage) &&
+                entry.FailureStage is null &&
+                noImageProgress,
             PaidOperationStates.OutcomeUnknown =>
                 entry.CreatedTaskId is null &&
                 !string.IsNullOrWhiteSpace(entry.FailureCode) &&
@@ -1027,6 +1043,9 @@ internal sealed class PaidOperationJournal : IPaidOperationJournal
                 "and identical parameters. The durable file token will be reused.",
             PaidOperationStates.TaskIdPersisted =>
                 $"Query {entry.CreatedTaskId} with tripo_task_status.",
+            PaidOperationStates.RequestRejected =>
+                "Correct the API credential and start a new operation with a " +
+                "new operationId.",
             _ =>
                 "Do not resend the paid request. Preserve this journal and inspect " +
                 "the provider task or billing history manually.",
@@ -1190,6 +1209,48 @@ internal sealed class PaidOperationJournal : IPaidOperationJournal
                 failureStage: null,
                 RemoteText.Bound(code, 64, "post_failed"),
                 RemoteText.Bound(message, 512, "The paid request outcome is unknown."));
+            await AppendAsync(
+                    _journalPath,
+                    next,
+                    prefixNewline: _needsNewlineBeforeAppend,
+                    CancellationToken.None)
+                .ConfigureAwait(false);
+            _entry = next;
+            _needsNewlineBeforeAppend = false;
+        }
+
+        public override async Task RequestRejectedAsync(
+            string code,
+            string message)
+        {
+            ThrowIfDisposed();
+            if (_descriptor.Kind == PaidOperationKinds.ImageTaskCreation)
+            {
+                throw new TripoWorkflowException(
+                    "Image operations must record the rejected stage explicitly.");
+            }
+
+            if (_entry.State is not PaidOperationStates.Prepared and
+                not PaidOperationStates.Dispatching)
+            {
+                return;
+            }
+
+            PaidOperationJournalEntry next = CreateEntry(
+                _entry.Revision + 1,
+                _descriptor,
+                PaidOperationStates.RequestRejected,
+                createdTaskId: null,
+                _entry.CreatedAtUtc,
+                _timeProvider.GetUtcNow(),
+                fileToken: null,
+                generationRequestFingerprint: null,
+                failureStage: null,
+                RemoteText.Bound(code, 64, "request_rejected"),
+                RemoteText.Bound(
+                    message,
+                    512,
+                    "The paid request was definitively rejected."));
             await AppendAsync(
                     _journalPath,
                     next,

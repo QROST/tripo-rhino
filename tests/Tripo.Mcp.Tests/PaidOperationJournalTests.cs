@@ -110,6 +110,44 @@ public sealed class PaidOperationJournalTests
         Assert.Null(recovered.Status.CreatedTaskId);
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task CredentialRejectionIsADurableNoTaskTerminalState(
+        bool afterDispatchCheckpoint)
+    {
+        using TemporaryJournalRoot root = new();
+        string operationId = Guid.NewGuid().ToString("D");
+        Tripo.Mcp.PaidOperationDescriptor descriptor = TextDescriptor(operationId);
+        Tripo.Mcp.PaidOperationJournal journal = new(root.Path);
+        await using (Tripo.Mcp.PaidOperationLease lease =
+                     await journal.AcquireAsync(
+                         descriptor,
+                         CancellationToken.None))
+        {
+            if (afterDispatchCheckpoint)
+            {
+                await lease.BeforeSendAsync(CancellationToken.None);
+            }
+
+            await lease.RequestRejectedAsync(
+                "credential_rejected",
+                "The credential was rejected.");
+        }
+
+        Tripo.Mcp.PaidOperationStatusReceipt status =
+            await new Tripo.Mcp.PaidOperationJournal(root.Path)
+                .GetStatusAsync(operationId, CancellationToken.None);
+
+        Assert.Equal("request_rejected", status.State);
+        Assert.False(status.TaskIdDurable);
+        Assert.False(status.MayHaveCreatedRemoteTask);
+        Assert.False(status.CanResumeCreation);
+        Assert.Null(status.CreatedTaskId);
+        Assert.Equal("credential_rejected", status.FailureCode);
+        Assert.Contains("new operationId", status.NextAction);
+    }
+
     [Fact]
     public async Task PersistedImageFileTokenResumesAcrossJournalInstances()
     {

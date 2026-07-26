@@ -49,13 +49,19 @@
   existence and identity are checked atomically. A copied/tampered `.gh` or
   deleted journal cannot silently create a fresh paid operation under its saved
   UUID.
-- Per-operation lock files are retained and held through POST completion and the final durable checkpoint.
+- Per-operation lock files are retained and held through POST completion and the
+  final durable task, definitive rejection, or ambiguous-outcome checkpoint.
 - A separate private root-global execution lock admits only one credential
   mutation or paid create/convert workflow across cooperating sidecars at a
-  time. Contention fails with `credential_workflow_unavailable`; callers retry
-  the same UUID only after the active operation is reconciled.
+  time. Contention fails with `credential_workflow_unavailable`; callers reuse
+  the same UUID only when the reconciled journal explicitly authorizes resume.
+  A definitive `request_rejected` state requires a corrected credential and new
+  UUID.
 - On Unix, the operations directory is mode `0700` and journal/lock files are `0600`. On Windows, the default path relies on the current user's inherited LocalApplicationData ACL. A custom `TRIPO_LOCAL_DATA_DIR` must itself be private.
-- `tripo_operation_status` is local and read-only. A live lock yields `operation_in_progress`; it never authorizes a replacement POST.
+- `tripo_operation_status` is local and read-only. A live lock sets
+  `OperationInProgress=true`; a pre-send record may surface as
+  `operation_in_progress`, while a post-checkpoint record can remain
+  `dispatching`. Neither form authorizes a replacement POST.
 - Use a stable local filesystem path shared by all MCP processes for the same user/account. Do not place the journal on NFS/SMB, delete incomplete operations, or change the root during recovery.
 
 The lock and journal protect cooperating processes under one login. They do not isolate a malicious same-user process. `Flush(true)` supports a process-crash recovery boundary but is not a remote transaction or a complete power-loss proof.
@@ -120,14 +126,17 @@ The lock and journal protect cooperating processes under one login. They do not 
   exited; inability to query process metadata remains blocking. Reconcile it in
   the owner process instead.
   Credential mutation additionally scans both Rhino and Revit recovery roots,
-  including active hints, and refuses while any recorded UI paid dispatch lacks
-  a durable task ID, a foreign owner cannot be verified as exited, or recovery
-  storage is invalid. The UI holds its intent lease from credential-recovery
+  including active hints, and refuses while any recorded UI paid dispatch is
+  unresolved without a durable task ID, a foreign owner cannot be verified as
+  exited, or recovery storage is invalid. A definitive `request_rejected` stage
+  is cleared instead of remaining a mutation block. The UI holds its intent
+  lease from credential-recovery
   scan through completion or cancellation of the key-mutation or paid
   host-control call. Independently, the sidecar holds a private execution lease
   for the actual credential mutation and for each paid workflow from before
-  credential-derived fingerprinting until the task ID or ambiguous outcome is
-  durably journaled. The execution lease remains held if the UI pipe client
+  credential-derived fingerprinting until the task ID, definitive
+  `request_rejected`, or ambiguous outcome is durably journaled. The execution
+  lease remains held if the UI pipe client
   disconnects. A standalone MCP process does not take the UI intent lease, but
   it does take this sidecar execution lease; its journal credential fingerprint
   also fails closed, so the key-rotation warning remains mandatory. Paid checks

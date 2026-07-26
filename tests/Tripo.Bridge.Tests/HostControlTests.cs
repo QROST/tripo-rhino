@@ -131,7 +131,7 @@ public sealed class HostControlTests
     }
 
     [Fact]
-    public async Task LegacyV1PaidRequestIsRejectedBeforeDispatch()
+    public async Task LegacyV2PaidRequestIsRejectedBeforeDispatch()
     {
         using TemporaryDataRoot dataRoot = new();
         RecordingDispatcher dispatcher = new();
@@ -140,7 +140,7 @@ public sealed class HostControlTests
         await server.StartAsync();
         Tripo.Bridge.HostControlSessionDescriptor descriptor = server.Descriptor;
         Tripo.Bridge.HostControlRequest request = new(
-            "1",
+            "2",
             Tripo.Bridge.HostControlConstants.Channel,
             Guid.NewGuid().ToString("D"),
             descriptor.SessionToken,
@@ -158,7 +158,7 @@ public sealed class HostControlTests
         Tripo.Bridge.HostControlResponse response =
             await SendRawAsync(descriptor, request);
 
-        Assert.Equal("2", Tripo.Bridge.HostControlConstants.ProtocolVersion);
+        Assert.Equal("3", Tripo.Bridge.HostControlConstants.ProtocolVersion);
         Assert.False(response.Ok);
         Assert.Equal("unsupported_protocol", response.Error?.Code);
         Assert.Equal(0, dispatcher.CallCount);
@@ -248,7 +248,7 @@ public sealed class HostControlTests
     }
 
     [Fact]
-    public async Task DiscoveryRejectsLegacyV1Descriptor()
+    public async Task DiscoveryRejectsLegacyV2Descriptor()
     {
         using TemporaryDataRoot dataRoot = new();
         await using Tripo.Bridge.NamedPipeHostControlServer server =
@@ -260,7 +260,7 @@ public sealed class HostControlTests
         Tripo.Bridge.HostControlSessionDescriptor legacy =
             server.Descriptor with
             {
-                ProtocolVersion = "1",
+                ProtocolVersion = "2",
             };
         File.WriteAllText(
             path,
@@ -274,7 +274,7 @@ public sealed class HostControlTests
                 "rhino",
                 Environment.ProcessId));
 
-        Assert.Equal("2", Tripo.Bridge.HostControlConstants.ProtocolVersion);
+        Assert.Equal("3", Tripo.Bridge.HostControlConstants.ProtocolVersion);
         Assert.Equal("sidecar_unavailable", exception.Code);
     }
 

@@ -38,8 +38,9 @@ API key 不写入 GHA 自有 recovery fields；这些 fields 只保存有限的 
 identity、恢复 ID 与 bounded status/progress/credits。普通 GH input（包括 prompt）
 仍可能由 Grasshopper 写入 `.gh`，因此 definition 应视为可能敏感。从 `.gh` 恢复出的
 operation identity 只能要求原 journal 继续恢复，不能授权新的付费请求；该
-fail-closed 字段要求端到端 host-control protocol v2。Task-to-Mesh 不 bake、不创建
-Rhino object，也不建立 Undo record。
+fail-closed 字段最初由端到端 host-control protocol v2 引入，当前 runtime 因新增
+credential-rejection recovery 语义而要求 protocol v3。Task-to-Mesh 不 bake、不
+创建 Rhino object，也不建立 Undo record。
 
 规范条款以英文正文为准。
 
@@ -124,8 +125,9 @@ Any operation identity deserialized from a `.gh` definition is recovery-only.
 It must set `RequireExistingOperation` and atomically prove that the original
 local journal exists with the same identity. A serialized dispatch flag is not
 authority for a fresh request. Because an older sidecar would ignore that new
-request field, host-control protocol v1 is rejected and this contract requires
-protocol v2 end to end.
+request field, host-control protocol v1 was rejected when this contract first
+required protocol v2 end to end. The current runtime requires protocol v3 so an
+older sidecar cannot omit credential-rejection recovery semantics.
 
 ### 2.4 Unsupported execution contexts fail closed
 

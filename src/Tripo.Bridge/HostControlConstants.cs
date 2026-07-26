@@ -2,7 +2,7 @@ namespace Tripo.Bridge;
 
 public static class HostControlConstants
 {
-    public const string ProtocolVersion = "2";
+    public const string ProtocolVersion = "3";
     public const string Channel = "host-control";
     public const int MaximumMessageBytes = 64 * 1024;
     public const int MaximumConcurrentClients = 4;
@@ -22,6 +22,9 @@ public static class HostControlConstants
         "workflow.create_obj_conversion";
     public const string ImportObjTaskMethod = "workflow.import_obj_task";
     public const string StageObjTaskMethod = "workflow.stage_obj_task";
+    public const string CredentialInvalidError = "credential_invalid";
+    public const string CredentialRejectedError = "credential_rejected";
+    public const string RequestRejectedState = "request_rejected";
 
     public static IReadOnlyList<string> WorkflowCapabilities { get; } =
     [

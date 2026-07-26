@@ -149,6 +149,69 @@ public sealed class HostControlDispatcherTests
     }
 
     [Fact]
+    public async Task LocalCredentialFailureHasADispatchSafeErrorCode()
+    {
+        FakeWorkflow workflow = new()
+        {
+            ThrowCredentialOnText = true,
+        };
+        Tripo.Mcp.HostControlDispatcher dispatcher = CreateDispatcher(
+            new FakeCredentialService(),
+            workflow);
+        Tripo.Bridge.HostControlCreateTextTaskRequest request = new(
+            "a chair",
+            10_000,
+            WithMaterials: false,
+            Guid.NewGuid().ToString("D"),
+            Guid.NewGuid().ToString("D"),
+            ConfirmExternalCost: true,
+            RequireExistingOperation: false);
+
+        Tripo.Bridge.HostControlCallException exception =
+            await Assert.ThrowsAsync<Tripo.Bridge.HostControlCallException>(
+                () => dispatcher.DispatchAsync(
+                    Tripo.Bridge.HostControlConstants.CreateTextTaskMethod,
+                    Tripo.Bridge.BridgeJson.ToElement(request),
+                    CancellationToken.None));
+
+        Assert.Equal(
+            Tripo.Bridge.HostControlConstants.CredentialInvalidError,
+            exception.Code);
+        Assert.Equal(1, workflow.CreateTextCalls);
+    }
+
+    [Fact]
+    public async Task DurablePaidRejectionHasARecoverableErrorCode()
+    {
+        FakeWorkflow workflow = new()
+        {
+            ThrowPaidCredentialRejectionOnText = true,
+        };
+        Tripo.Mcp.HostControlDispatcher dispatcher = CreateDispatcher(
+            new FakeCredentialService(),
+            workflow);
+        Tripo.Bridge.HostControlCreateTextTaskRequest request = new(
+            "a chair",
+            10_000,
+            WithMaterials: false,
+            Guid.NewGuid().ToString("D"),
+            Guid.NewGuid().ToString("D"),
+            ConfirmExternalCost: true,
+            RequireExistingOperation: false);
+
+        Tripo.Bridge.HostControlCallException exception =
+            await Assert.ThrowsAsync<Tripo.Bridge.HostControlCallException>(
+                () => dispatcher.DispatchAsync(
+                    Tripo.Bridge.HostControlConstants.CreateTextTaskMethod,
+                    Tripo.Bridge.BridgeJson.ToElement(request),
+                    CancellationToken.None));
+
+        Assert.Equal(
+            Tripo.Bridge.HostControlConstants.CredentialRejectedError,
+            exception.Code);
+    }
+
+    [Fact]
     public void HostControlCommandLineRequiresAnExactPositivePid()
     {
         Assert.False(
@@ -225,6 +288,10 @@ public sealed class HostControlDispatcherTests
     {
         public int CreateTextCalls { get; private set; }
 
+        public bool ThrowCredentialOnText { get; init; }
+
+        public bool ThrowPaidCredentialRejectionOnText { get; init; }
+
         public Tripo.Bridge.HostControlCreateTextTaskRequest? LastTextRequest
         {
             get;
@@ -300,6 +367,22 @@ public sealed class HostControlDispatcherTests
             bool requireExistingOperation = false)
         {
             CreateTextCalls++;
+            if (ThrowCredentialOnText)
+            {
+                throw new Tripo.Mcp.TripoCredentialPreflightException(
+                    "The credential was rejected before dispatch.",
+                    new Tripo.Mcp.TripoCredentialException(
+                        "The local credential was invalid."));
+            }
+
+            if (ThrowPaidCredentialRejectionOnText)
+            {
+                throw new Tripo.Mcp.TripoPaidRequestRejectedException(
+                    new Tripo.Mcp.TripoApiException(
+                        "The provider rejected the credential.",
+                        System.Net.HttpStatusCode.Unauthorized));
+            }
+
             LastTextRequest = new Tripo.Bridge.HostControlCreateTextTaskRequest(
                 prompt,
                 faceLimit,

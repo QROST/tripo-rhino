@@ -17,6 +17,10 @@ The copied runtime retains these compatibility identities:
 - panel recovery schema v2;
 - the existing `TripoMCP` local-data root and OS credential identities.
 
+The current runtime has since advanced only the host-control protocol to v3 so
+older sidecars cannot be reused without the credential-rejection recovery
+semantics. The host bridge remains protocol v2.
+
 The same runtime snapshot also exists in the initial `tripo-revit` repository.
 Until both products consume a single versioned runtime or an explicit sync
 process exists, changes to credentials, journal, recovery, bridge contracts,

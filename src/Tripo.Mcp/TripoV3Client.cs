@@ -724,25 +724,48 @@ public sealed partial class TripoV3Client : ITripoApiClient
         }
         catch (Exception operationException)
         {
+            bool requestRejected = false;
             if (dispatching && !validTaskIdReceived)
             {
+                requestRejected =
+                    IsDefinitiveCredentialRejection(operationException);
                 try
                 {
-                    await checkpoint.OutcomeUnknownAsync(
-                            OperationFailureCode(operationException),
-                            operationException.Message)
-                        .ConfigureAwait(false);
+                    if (requestRejected)
+                    {
+                        await checkpoint.RequestRejectedAsync(
+                                "credential_rejected",
+                                operationException.Message)
+                            .ConfigureAwait(false);
+                    }
+                    else
+                    {
+                        await checkpoint.OutcomeUnknownAsync(
+                                OperationFailureCode(operationException),
+                                operationException.Message)
+                            .ConfigureAwait(false);
+                    }
                 }
                 catch (Exception checkpointException)
                 {
                     throw new TripoApiException(
-                        "The paid Tripo request failed and its local outcome-unknown " +
-                        "checkpoint could not be persisted. Do not retry with a new " +
-                        "operationId.",
+                        requestRejected
+                            ? "Tripo rejected the credential, but the local " +
+                              "request-rejected checkpoint could not be persisted. " +
+                              "Do not retry with a new operationId."
+                            : "The paid Tripo request failed and its local " +
+                              "outcome-unknown checkpoint could not be persisted. " +
+                              "Do not retry with a new operationId.",
                         innerException: new AggregateException(
                             operationException,
                             checkpointException));
                 }
+            }
+
+            if (requestRejected &&
+                operationException is TripoApiException rejection)
+            {
+                throw new TripoPaidRequestRejectedException(rejection);
             }
 
             throw;
@@ -758,6 +781,15 @@ public sealed partial class TripoV3Client : ITripoApiClient
             IOException => "transport_failure",
             _ => "post_failure",
         };
+
+    private static bool IsDefinitiveCredentialRejection(
+        Exception exception) =>
+        exception is TripoApiException apiException &&
+        IsDefinitiveCredentialRejection(apiException.StatusCode);
+
+    private static bool IsDefinitiveCredentialRejection(
+        HttpStatusCode? statusCode) =>
+        statusCode is HttpStatusCode.Unauthorized or HttpStatusCode.Forbidden;
 
     private HttpRequestMessage CreateApiRequest(
         HttpMethod method,
@@ -816,7 +848,8 @@ public sealed partial class TripoV3Client : ITripoApiClient
                     envelope?.Message,
                     512,
                     $"Tripo API returned HTTP {(int)response.StatusCode}.");
-                if (request.Method == HttpMethod.Post)
+                if (request.Method == HttpMethod.Post &&
+                    !IsDefinitiveCredentialRejection(response.StatusCode))
                 {
                     message += unknownMutationWarning;
                 }

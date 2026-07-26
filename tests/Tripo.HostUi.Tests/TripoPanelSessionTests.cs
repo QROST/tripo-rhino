@@ -158,6 +158,415 @@ public sealed class TripoPanelSessionTests
     }
 
     [Fact]
+    public async Task LocalCredentialFailureClearsFalsePaidDispatchRecovery()
+    {
+        string root = CreateTemporaryRoot();
+        try
+        {
+            FakeHostControlClient client = new()
+            {
+                FailFirstTextResponse = true,
+                FirstTextFailureCode =
+                    Tripo.Bridge.HostControlConstants.CredentialInvalidError,
+            };
+            await using Tripo.HostUi.TripoPanelSession session =
+                new(
+                    new FakeConnector(client),
+                    new Tripo.HostUi.TripoPanelRecoveryStore("rhino", root));
+            await session.ConnectAsync();
+            Tripo.HostUi.PreparedTextGeneration prepared =
+                session.PrepareGeneration(
+                    "a chair",
+                    10_000,
+                    withMaterials: false);
+
+            await Assert.ThrowsAsync<Tripo.Bridge.HostControlCallException>(
+                () => session.DispatchPreparedGenerationAsync(
+                    userConfirmedExternalCost: true));
+
+            Assert.False(session.State.GenerationDispatchAttempted);
+            Assert.False(session.State.HasUnresolvedPaidDispatch);
+            Assert.Equal(
+                prepared.OperationId,
+                session.State.PreparedGeneration?.OperationId);
+            Assert.Empty(
+                Directory.GetFiles(
+                    Path.Combine(root, "ui-recovery", "rhino"),
+                    "*.json"));
+
+            await session.SetApiKeyAsync("replacement-key", persist: false);
+            await session.DispatchPreparedGenerationAsync(
+                userConfirmedExternalCost: true);
+
+            Assert.Equal("replacement-key", client.LastApiKey);
+            Assert.Equal(2, client.CreateTextCalls);
+            Assert.Equal(
+                "task_source123",
+                session.State.GenerationReceipt?.TaskId);
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task CredentialFailureDuringRetryPreservesExistingRecovery()
+    {
+        string root = CreateTemporaryRoot();
+        try
+        {
+            FakeHostControlClient client = new()
+            {
+                FailFirstTextResponse = true,
+            };
+            Tripo.HostUi.TripoPanelRecoveryStore store =
+                new("rhino", root);
+            await using Tripo.HostUi.TripoPanelSession session =
+                new(new FakeConnector(client), store);
+            await session.ConnectAsync();
+            Tripo.HostUi.PreparedTextGeneration prepared =
+                session.PrepareGeneration(
+                    "a chair",
+                    10_000,
+                    withMaterials: false);
+            client.OperationStatus =
+                ResumableOperationStatus(prepared.OperationId);
+
+            await Assert.ThrowsAsync<Tripo.Bridge.HostControlCallException>(
+                () => session.DispatchPreparedGenerationAsync(
+                    userConfirmedExternalCost: true));
+            await Assert.ThrowsAsync<InvalidOperationException>(
+                () => session.RefreshGenerationStatusAsync());
+            client.TextFailureCode =
+                Tripo.Bridge.HostControlConstants.CredentialInvalidError;
+
+            await Assert.ThrowsAsync<Tripo.Bridge.HostControlCallException>(
+                () => session.DispatchPreparedGenerationAsync(
+                    userConfirmedExternalCost: true));
+            InvalidOperationException blocked =
+                await Assert.ThrowsAsync<InvalidOperationException>(
+                    () => session.SetApiKeyAsync(
+                        "replacement-key",
+                        persist: false));
+
+            Assert.True(session.State.GenerationDispatchAttempted);
+            Assert.True(session.State.HasUnresolvedPaidDispatch);
+            Assert.True(session.State.GenerationRetryAllowed);
+            Assert.Equal(
+                prepared.OperationId,
+                session.State.PreparedGeneration?.OperationId);
+            Assert.Contains("cannot change", blocked.Message);
+            Assert.True(store.LoadCredentialMutationBlocks().HasBlock);
+            Assert.Single(
+                Directory.GetFiles(
+                    Path.Combine(root, "ui-recovery", "rhino"),
+                    "*.json"));
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task ProviderCredentialRejectionStartsANewGenerationIdentity()
+    {
+        string root = CreateTemporaryRoot();
+        try
+        {
+            FakeHostControlClient client = new()
+            {
+                FailFirstTextResponse = true,
+                FirstTextFailureCode =
+                    Tripo.Bridge.HostControlConstants.CredentialRejectedError,
+            };
+            await using Tripo.HostUi.TripoPanelSession session =
+                new(
+                    new FakeConnector(client),
+                    new Tripo.HostUi.TripoPanelRecoveryStore("rhino", root));
+            await session.ConnectAsync();
+            Tripo.HostUi.PreparedTextGeneration rejected =
+                session.PrepareGeneration(
+                    "a chair",
+                    10_000,
+                    withMaterials: false);
+            client.OperationStatus =
+                RejectedOperationStatus(
+                    rejected.OperationId,
+                    "text_task_creation");
+
+            await Assert.ThrowsAsync<Tripo.Bridge.HostControlCallException>(
+                () => session.DispatchPreparedGenerationAsync(
+                    userConfirmedExternalCost: true));
+
+            Assert.Null(session.State.PreparedGeneration);
+            Assert.False(session.State.HasUnresolvedPaidDispatch);
+            Assert.Empty(
+                Directory.GetFiles(
+                    Path.Combine(root, "ui-recovery", "rhino"),
+                    "*.json"));
+            await session.SetApiKeyAsync("replacement-key", persist: false);
+            Tripo.HostUi.PreparedTextGeneration replacement =
+                session.PrepareGeneration(
+                    "a chair",
+                    10_000,
+                    withMaterials: false);
+            await session.DispatchPreparedGenerationAsync(
+                userConfirmedExternalCost: true);
+
+            Assert.NotEqual(rejected.OperationId, replacement.OperationId);
+            Assert.Equal(2, client.CreateTextCalls);
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task LostResponseRefreshClearsDurableGenerationRejection()
+    {
+        string root = CreateTemporaryRoot();
+        try
+        {
+            FakeHostControlClient client = new()
+            {
+                FailFirstTextResponse = true,
+            };
+            Tripo.HostUi.TripoPanelRecoveryStore store =
+                new("rhino", root);
+            await using Tripo.HostUi.TripoPanelSession session =
+                new(new FakeConnector(client), store);
+            await session.ConnectAsync();
+            Tripo.HostUi.PreparedTextGeneration rejected =
+                session.PrepareGeneration(
+                    "a chair",
+                    10_000,
+                    withMaterials: false);
+            client.OperationStatus =
+                RejectedOperationStatus(
+                    rejected.OperationId,
+                    "text_task_creation");
+
+            await Assert.ThrowsAsync<Tripo.Bridge.HostControlCallException>(
+                () => session.DispatchPreparedGenerationAsync(
+                    userConfirmedExternalCost: true));
+            Assert.True(store.LoadCredentialMutationBlocks().HasBlock);
+            await Assert.ThrowsAsync<InvalidOperationException>(
+                () => session.RefreshGenerationStatusAsync());
+
+            Assert.Null(session.State.PreparedGeneration);
+            Assert.False(session.State.HasUnresolvedPaidDispatch);
+            Assert.False(store.LoadCredentialMutationBlocks().HasBlock);
+            Assert.Empty(
+                Directory.GetFiles(
+                    Path.Combine(root, "ui-recovery", "rhino"),
+                    "*.json"));
+            await session.SetApiKeyAsync("replacement-key", persist: false);
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task MismatchedRejectedStatusCannotUnlockGeneration()
+    {
+        FakeHostControlClient client = new()
+        {
+            FailFirstTextResponse = true,
+        };
+        await using Tripo.HostUi.TripoPanelSession session = CreateSession(client);
+        await session.ConnectAsync();
+        Tripo.HostUi.PreparedTextGeneration prepared =
+            session.PrepareGeneration("a chair", 10_000, withMaterials: false);
+        client.OperationStatus =
+            RejectedOperationStatus(
+                prepared.OperationId,
+                "obj_conversion_creation");
+
+        await Assert.ThrowsAsync<Tripo.Bridge.HostControlCallException>(
+            () => session.DispatchPreparedGenerationAsync(
+                userConfirmedExternalCost: true));
+        await Assert.ThrowsAsync<InvalidDataException>(
+            () => session.RefreshGenerationStatusAsync());
+        await Assert.ThrowsAsync<InvalidOperationException>(
+            () => session.SetApiKeyAsync("replacement-key", persist: false));
+
+        Assert.Equal(
+            prepared.OperationId,
+            session.State.PreparedGeneration?.OperationId);
+        Assert.True(session.State.HasUnresolvedPaidDispatch);
+    }
+
+    [Fact]
+    public async Task LostConversionResponseRefreshPreservesGeneration()
+    {
+        string root = CreateTemporaryRoot();
+        try
+        {
+            FakeHostControlClient client = new();
+            Tripo.HostUi.TripoPanelRecoveryStore store =
+                new("rhino", root);
+            await using Tripo.HostUi.TripoPanelSession session =
+                new(new FakeConnector(client), store);
+            await session.ConnectAsync();
+            session.PrepareGeneration("a chair", 10_000, withMaterials: false);
+            await session.DispatchPreparedGenerationAsync(
+                userConfirmedExternalCost: true);
+            await session.RefreshGenerationStatusAsync();
+            Tripo.HostUi.PreparedObjConversion rejected =
+                session.PrepareConversion(10_000, withMaterials: false);
+            client.FailFirstConversionResponse = true;
+            client.OperationStatus =
+                RejectedOperationStatus(
+                    rejected.OperationId,
+                    "obj_conversion_creation");
+
+            await Assert.ThrowsAsync<Tripo.Bridge.HostControlCallException>(
+                () => session.DispatchPreparedConversionAsync(
+                    userConfirmedExternalCost: true));
+            Assert.True(store.LoadCredentialMutationBlocks().HasBlock);
+            await Assert.ThrowsAsync<InvalidOperationException>(
+                () => session.RefreshConversionStatusAsync());
+
+            Assert.NotNull(session.State.GenerationReceipt);
+            Assert.NotNull(session.State.GenerationStatus);
+            Assert.Null(session.State.PreparedConversion);
+            Assert.False(session.State.HasUnresolvedPaidDispatch);
+            Assert.False(store.LoadCredentialMutationBlocks().HasBlock);
+            await session.SetApiKeyAsync("replacement-key", persist: false);
+            Tripo.HostUi.PreparedObjConversion replacement =
+                session.PrepareConversion(10_000, withMaterials: false);
+            await session.DispatchPreparedConversionAsync(
+                userConfirmedExternalCost: true);
+
+            Assert.NotEqual(rejected.OperationId, replacement.OperationId);
+            Assert.Equal(2, client.CreateConversionCalls);
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task ProviderCredentialRejectionClearsOnlyConversionStage()
+    {
+        string root = CreateTemporaryRoot();
+        try
+        {
+            FakeHostControlClient client = new();
+            Tripo.HostUi.TripoPanelRecoveryStore store =
+                new("rhino", root);
+            await using Tripo.HostUi.TripoPanelSession session =
+                new(new FakeConnector(client), store);
+            await session.ConnectAsync();
+            session.PrepareGeneration("a chair", 10_000, withMaterials: false);
+            await session.DispatchPreparedGenerationAsync(
+                userConfirmedExternalCost: true);
+            await session.RefreshGenerationStatusAsync();
+            Tripo.HostUi.PreparedObjConversion rejected =
+                session.PrepareConversion(10_000, withMaterials: false);
+            client.FailFirstConversionResponse = true;
+            client.FirstConversionFailureCode =
+                Tripo.Bridge.HostControlConstants.CredentialRejectedError;
+            client.OperationStatus =
+                RejectedOperationStatus(
+                    rejected.OperationId,
+                    "obj_conversion_creation");
+
+            await Assert.ThrowsAsync<Tripo.Bridge.HostControlCallException>(
+                () => session.DispatchPreparedConversionAsync(
+                    userConfirmedExternalCost: true));
+
+            Assert.NotNull(session.State.GenerationReceipt);
+            Assert.NotNull(session.State.GenerationStatus);
+            Assert.Null(session.State.PreparedConversion);
+            Assert.False(session.State.HasUnresolvedPaidDispatch);
+            Assert.False(store.LoadCredentialMutationBlocks().HasBlock);
+            string recoveryFile = Assert.Single(
+                Directory.GetFiles(
+                    Path.Combine(root, "ui-recovery", "rhino"),
+                    "*.json"));
+            Assert.DoesNotContain(
+                rejected.OperationId,
+                File.ReadAllText(recoveryFile),
+                StringComparison.Ordinal);
+            await session.SetApiKeyAsync("replacement-key", persist: false);
+            Tripo.HostUi.PreparedObjConversion replacement =
+                session.PrepareConversion(10_000, withMaterials: false);
+            await session.DispatchPreparedConversionAsync(
+                userConfirmedExternalCost: true);
+
+            Assert.NotEqual(rejected.OperationId, replacement.OperationId);
+            Assert.Equal(2, client.CreateConversionCalls);
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task CancellationWhileVerifyingCredentialRejectionKeepsRecovery()
+    {
+        string root = CreateTemporaryRoot();
+        try
+        {
+            FakeHostControlClient client = new()
+            {
+                FailFirstTextResponse = true,
+                FirstTextFailureCode =
+                    Tripo.Bridge.HostControlConstants.CredentialRejectedError,
+                OperationStatusEntered =
+                    new TaskCompletionSource<bool>(
+                        TaskCreationOptions.RunContinuationsAsynchronously),
+                ContinueOperationStatus =
+                    new TaskCompletionSource<bool>(
+                        TaskCreationOptions.RunContinuationsAsynchronously),
+            };
+            Tripo.HostUi.TripoPanelRecoveryStore store =
+                new("rhino", root);
+            await using Tripo.HostUi.TripoPanelSession session =
+                new(new FakeConnector(client), store);
+            await session.ConnectAsync();
+            Tripo.HostUi.PreparedTextGeneration prepared =
+                session.PrepareGeneration(
+                    "a chair",
+                    10_000,
+                    withMaterials: false);
+            client.OperationStatus =
+                RejectedOperationStatus(
+                    prepared.OperationId,
+                    "text_task_creation");
+            using CancellationTokenSource cancellation = new();
+
+            Task dispatch = session.DispatchPreparedGenerationAsync(
+                userConfirmedExternalCost: true,
+                cancellation.Token);
+            await client.OperationStatusEntered.Task.WaitAsync(
+                TimeSpan.FromSeconds(5));
+            cancellation.Cancel();
+
+            await Assert.ThrowsAnyAsync<OperationCanceledException>(
+                () => dispatch);
+            Assert.True(session.State.HasUnresolvedPaidDispatch);
+            Assert.True(store.LoadCredentialMutationBlocks().HasBlock);
+            Assert.Single(
+                Directory.GetFiles(
+                    Path.Combine(root, "ui-recovery", "rhino"),
+                    "*.json"));
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
     public async Task RefreshReconcilesDurableTaskIdAfterLostResponse()
     {
         FakeHostControlClient client = new()
@@ -2184,6 +2593,22 @@ public sealed class TripoPanelSessionTests
             NextAction: "Retry the same operation ID.",
             UpdatedAtUtc: DateTimeOffset.UtcNow);
 
+    private static Tripo.Bridge.HostControlOperationStatusReceipt
+        RejectedOperationStatus(string operationId, string kind) =>
+        new(
+            operationId,
+            kind,
+            Tripo.Bridge.HostControlConstants.RequestRejectedState,
+            null,
+            null,
+            "credential_rejected",
+            "The provider rejected the credential.",
+            TaskIdDurable: false,
+            MayHaveCreatedRemoteTask: false,
+            CanResumeCreation: false,
+            NextAction: "Correct the credential and use a new operation ID.",
+            UpdatedAtUtc: DateTimeOffset.UtcNow);
+
     private static async Task<(string OperationId, string DocumentSessionId)>
         CreateLostResponseRecoveryAsync(string root)
     {
@@ -2293,6 +2718,16 @@ public sealed class TripoPanelSessionTests
         public string Host { get; set; } = "rhino";
 
         public bool FailFirstTextResponse { get; set; }
+
+        public string FirstTextFailureCode { get; set; } =
+            "sidecar_unavailable";
+
+        public string? TextFailureCode { get; set; }
+
+        public bool FailFirstConversionResponse { get; set; }
+
+        public string FirstConversionFailureCode { get; set; } =
+            "sidecar_unavailable";
 
         public Action<Tripo.Bridge.HostControlCreateTextTaskRequest>?
             BeforeCreateTextCall { get; set; }
@@ -2430,10 +2865,11 @@ public sealed class TripoPanelSessionTests
             BeforeCreateTextCall?.Invoke(request);
             CreateTextCalls++;
             TextRequests.Add(request);
-            if (FailFirstTextResponse && CreateTextCalls == 1)
+            if (TextFailureCode is not null ||
+                FailFirstTextResponse && CreateTextCalls == 1)
             {
                 throw new Tripo.Bridge.HostControlCallException(
-                    "sidecar_unavailable",
+                    TextFailureCode ?? FirstTextFailureCode,
                     "The response was lost.");
             }
 
@@ -2506,6 +2942,14 @@ public sealed class TripoPanelSessionTests
         {
             CreateConversionCalls++;
             LastConversionRequest = request;
+            if (FailFirstConversionResponse &&
+                CreateConversionCalls == 1)
+            {
+                throw new Tripo.Bridge.HostControlCallException(
+                    FirstConversionFailureCode,
+                    "The conversion request was rejected.");
+            }
+
             return Task.FromResult(
                 new Tripo.Bridge.HostControlObjConversionCreationReceipt(
                     request.OperationId,

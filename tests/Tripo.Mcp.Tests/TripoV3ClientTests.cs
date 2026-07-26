@@ -70,6 +70,74 @@ public sealed class TripoV3ClientTests
 
         Assert.Equal(1, handler.CallCount);
         Assert.Equal(1, checkpoint.OutcomeUnknownCalls);
+        Assert.Equal(0, checkpoint.RequestRejectedCalls);
+    }
+
+    [Theory]
+    [InlineData(HttpStatusCode.Unauthorized)]
+    [InlineData(HttpStatusCode.Forbidden)]
+    public async Task CredentialRejectionIsNotMarkedOutcomeUnknown(
+        HttpStatusCode statusCode)
+    {
+        DelegateHttpMessageHandler handler = new((_, _) =>
+            Task.FromResult(
+                DelegateHttpMessageHandler.Json(
+                    """{"code":1001,"message":"credential rejected"}""",
+                    statusCode)));
+        Tripo.Mcp.TripoV3Client client = CreateClient(handler);
+        Tripo.Mcp.TextGenerationOptions options =
+            new("a test chair", 10_000);
+        RecordingCheckpoint checkpoint = CreateCheckpoint(client, options);
+
+        Tripo.Mcp.TripoPaidRequestRejectedException exception =
+            await Assert.ThrowsAsync<
+                Tripo.Mcp.TripoPaidRequestRejectedException>(
+                () => client.CreateTextModelAsync(
+                    options,
+                    DocumentSessionId,
+                    checkpoint,
+                    CancellationToken.None));
+
+        Assert.Equal(statusCode, exception.StatusCode);
+        Assert.DoesNotContain(
+            "may have succeeded remotely",
+            exception.Message,
+            StringComparison.Ordinal);
+        Assert.Equal(1, handler.CallCount);
+        Assert.Equal(1, checkpoint.RequestRejectedCalls);
+        Assert.Equal(0, checkpoint.OutcomeUnknownCalls);
+    }
+
+    [Fact]
+    public async Task RejectionCheckpointFailureStaysFailClosed()
+    {
+        DelegateHttpMessageHandler handler = new((_, _) =>
+            Task.FromResult(
+                DelegateHttpMessageHandler.Json(
+                    """{"code":1001,"message":"credential rejected"}""",
+                    HttpStatusCode.Unauthorized)));
+        Tripo.Mcp.TripoV3Client client = CreateClient(handler);
+        Tripo.Mcp.TextGenerationOptions options =
+            new("a test chair", 10_000);
+        RecordingCheckpoint checkpoint = CreateCheckpoint(client, options);
+        checkpoint.RequestRejectedException =
+            new IOException("checkpoint unavailable");
+
+        Tripo.Mcp.TripoApiException exception =
+            await Assert.ThrowsAsync<Tripo.Mcp.TripoApiException>(
+                () => client.CreateTextModelAsync(
+                    options,
+                    DocumentSessionId,
+                    checkpoint,
+                    CancellationToken.None));
+
+        Assert.IsNotType<
+            Tripo.Mcp.TripoPaidRequestRejectedException>(exception);
+        Assert.Contains(
+            "checkpoint could not be persisted",
+            exception.Message);
+        Assert.Equal(1, checkpoint.RequestRejectedCalls);
+        Assert.Equal(0, checkpoint.OutcomeUnknownCalls);
     }
 
     [Fact]
@@ -769,7 +837,7 @@ public sealed class TripoV3ClientTests
             handler,
             () => "opaque key");
 
-        await Assert.ThrowsAsync<Tripo.Mcp.TripoApiException>(
+        await Assert.ThrowsAsync<Tripo.Mcp.TripoCredentialException>(
             () => client.GetTaskAsync(
                 "task_expected123",
                 CancellationToken.None));
@@ -976,11 +1044,15 @@ public sealed class TripoV3ClientTests
 
         public int OutcomeUnknownCalls { get; private set; }
 
+        public int RequestRejectedCalls { get; private set; }
+
         public string? TaskId { get; private set; }
 
         public Exception? BeforeSendException { get; set; }
 
         public Exception? TaskIdException { get; set; }
+
+        public Exception? RequestRejectedException { get; set; }
 
         public Action? AfterBeforeSend { get; set; }
 
@@ -1011,6 +1083,17 @@ public sealed class TripoV3ClientTests
         public Task OutcomeUnknownAsync(string code, string message)
         {
             OutcomeUnknownCalls++;
+            return Task.CompletedTask;
+        }
+
+        public Task RequestRejectedAsync(string code, string message)
+        {
+            RequestRejectedCalls++;
+            if (RequestRejectedException is not null)
+            {
+                throw RequestRejectedException;
+            }
+
             return Task.CompletedTask;
         }
     }
@@ -1058,6 +1141,10 @@ public sealed class TripoV3ClientTests
         public Task OutcomeUnknownAsync(string code, string message) =>
             throw new InvalidOperationException(
                 "Image operations must record the failed stage.");
+
+        public Task RequestRejectedAsync(string code, string message) =>
+            throw new InvalidOperationException(
+                "Image operations must record the rejected stage.");
 
         public Task BeforeImageUploadAsync(
             CancellationToken cancellationToken)

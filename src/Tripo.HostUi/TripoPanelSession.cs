@@ -164,10 +164,12 @@ public sealed record TripoPanelState(
     public bool HasUnresolvedPaidDispatch =>
         (GenerationDispatchAttempted &&
          GenerationReceipt is null &&
-         GenerationOperationStatus?.TaskIdDurable != true) ||
+         GenerationOperationStatus?.TaskIdDurable != true &&
+         !IsDefinitiveRequestRejection(GenerationOperationStatus)) ||
         (ConversionDispatchAttempted &&
          ConversionReceipt is null &&
-         ConversionOperationStatus?.TaskIdDurable != true);
+         ConversionOperationStatus?.TaskIdDurable != true &&
+         !IsDefinitiveRequestRejection(ConversionOperationStatus));
 
     public bool HasUnresolvedDispatch =>
         HasUnresolvedPaidDispatch ||
@@ -179,7 +181,8 @@ public sealed record TripoPanelState(
 
     public bool CanDispatchPreparedGeneration =>
         PreparedGeneration is not null &&
-        !HasDurableGenerationTask;
+        !HasDurableGenerationTask &&
+        !IsDefinitiveRequestRejection(GenerationOperationStatus);
 
     public bool GenerationRetryRequired =>
         CanDispatchPreparedGeneration &&
@@ -195,7 +198,8 @@ public sealed record TripoPanelState(
 
     public bool CanDispatchPreparedConversion =>
         PreparedConversion is not null &&
-        !HasDurableConversionTask;
+        !HasDurableConversionTask &&
+        !IsDefinitiveRequestRejection(ConversionOperationStatus);
 
     public bool ConversionRetryRequired =>
         CanDispatchPreparedConversion &&
@@ -204,6 +208,19 @@ public sealed record TripoPanelState(
     public bool ConversionRetryAllowed =>
         ConversionRetryRequired &&
         ConversionOperationStatus?.CanResumeCreation == true;
+
+    internal static bool IsDefinitiveRequestRejection(
+        Tripo.Bridge.HostControlOperationStatusReceipt? status) =>
+        status is
+        {
+            State: Tripo.Bridge.HostControlConstants.RequestRejectedState,
+            CreatedTaskId: null,
+            TaskIdDurable: false,
+            MayHaveCreatedRemoteTask: false,
+            CanResumeCreation: false,
+            OperationInProgress: false,
+            FailureStage: null,
+        };
 
     public bool CanDispatchPreparedImport =>
         PreparedImport is not null &&
@@ -440,19 +457,57 @@ public sealed class TripoPanelSession : IAsyncDisposable
                 {
                     GenerationDispatchAttempted = true,
                 });
-                Tripo.Bridge.HostControlTextTaskCreationReceipt receipt =
-                    await client.CreateTextTaskAsync(
-                            new Tripo.Bridge.HostControlCreateTextTaskRequest(
-                                prepared.Prompt,
-                                prepared.FaceLimit,
-                                prepared.WithMaterials,
-                                prepared.DocumentSessionId,
+                Tripo.Bridge.HostControlTextTaskCreationReceipt receipt;
+                try
+                {
+                    receipt = await client.CreateTextTaskAsync(
+                                new Tripo.Bridge.HostControlCreateTextTaskRequest(
+                                    prepared.Prompt,
+                                    prepared.FaceLimit,
+                                    prepared.WithMaterials,
+                                    prepared.DocumentSessionId,
+                                    prepared.OperationId,
+                                    ConfirmExternalCost: true,
+                                    RequireExistingOperation:
+                                        current.GenerationRetryRequired),
+                                token)
+                            .ConfigureAwait(false);
+                }
+                catch (Tripo.Bridge.HostControlCallException exception)
+                    when (string.Equals(
+                        exception.Code,
+                        Tripo.Bridge.HostControlConstants.CredentialInvalidError,
+                        StringComparison.Ordinal) &&
+                        !current.GenerationRetryRequired)
+                {
+                    UpdateState(state => state with
+                    {
+                        GenerationDispatchAttempted = false,
+                        GenerationOperationStatus = null,
+                    });
+                    throw;
+                }
+                catch (Tripo.Bridge.HostControlCallException exception)
+                    when (string.Equals(
+                        exception.Code,
+                        Tripo.Bridge.HostControlConstants.CredentialRejectedError,
+                        StringComparison.Ordinal))
+                {
+                    Tripo.Bridge.HostControlOperationStatusReceipt? status =
+                        await TryGetDefinitiveRequestRejectionAsync(
+                                client,
                                 prepared.OperationId,
-                                ConfirmExternalCost: true,
-                                RequireExistingOperation:
-                                    current.GenerationRetryRequired),
-                            token)
-                        .ConfigureAwait(false);
+                                "text_task_creation",
+                                token)
+                            .ConfigureAwait(false);
+                    if (status is not null)
+                    {
+                        ClearRejectedGenerationStage();
+                    }
+
+                    throw;
+                }
+
                 UpdateState(state => state with
                 {
                     GenerationReceipt = receipt,
@@ -567,19 +622,58 @@ public sealed class TripoPanelSession : IAsyncDisposable
                 {
                     ConversionDispatchAttempted = true,
                 });
-                Tripo.Bridge.HostControlObjConversionCreationReceipt receipt =
-                    await client.CreateObjConversionAsync(
-                            new Tripo.Bridge.HostControlCreateObjConversionRequest(
-                                prepared.SourceTaskId,
-                                prepared.FaceLimit,
-                                prepared.WithMaterials,
-                                prepared.DocumentSessionId,
+                Tripo.Bridge.HostControlObjConversionCreationReceipt receipt;
+                try
+                {
+                    receipt = await client.CreateObjConversionAsync(
+                                new Tripo.Bridge
+                                    .HostControlCreateObjConversionRequest(
+                                        prepared.SourceTaskId,
+                                        prepared.FaceLimit,
+                                        prepared.WithMaterials,
+                                        prepared.DocumentSessionId,
+                                        prepared.OperationId,
+                                        ConfirmExternalCost: true,
+                                        RequireExistingOperation:
+                                            current.ConversionRetryRequired),
+                                token)
+                            .ConfigureAwait(false);
+                }
+                catch (Tripo.Bridge.HostControlCallException exception)
+                    when (string.Equals(
+                        exception.Code,
+                        Tripo.Bridge.HostControlConstants.CredentialInvalidError,
+                        StringComparison.Ordinal) &&
+                        !current.ConversionRetryRequired)
+                {
+                    UpdateState(state => state with
+                    {
+                        ConversionDispatchAttempted = false,
+                        ConversionOperationStatus = null,
+                    });
+                    throw;
+                }
+                catch (Tripo.Bridge.HostControlCallException exception)
+                    when (string.Equals(
+                        exception.Code,
+                        Tripo.Bridge.HostControlConstants.CredentialRejectedError,
+                        StringComparison.Ordinal))
+                {
+                    Tripo.Bridge.HostControlOperationStatusReceipt? status =
+                        await TryGetDefinitiveRequestRejectionAsync(
+                                client,
                                 prepared.OperationId,
-                                ConfirmExternalCost: true,
-                                RequireExistingOperation:
-                                    current.ConversionRetryRequired),
-                            token)
-                        .ConfigureAwait(false);
+                                "obj_conversion_creation",
+                                token)
+                            .ConfigureAwait(false);
+                    if (status is not null)
+                    {
+                        ClearRejectedConversionStage();
+                    }
+
+                    throw;
+                }
+
                 UpdateState(state => state with
                 {
                     ConversionReceipt = receipt,
@@ -1283,11 +1377,61 @@ public sealed class TripoPanelSession : IAsyncDisposable
                     prepared.OperationId,
                     cancellationToken)
                 .ConfigureAwait(false);
+        EnsurePaidOperationStatusIdentity(
+            operationStatus,
+            prepared.OperationId,
+            "text_task_creation");
+        if (TripoPanelState.IsDefinitiveRequestRejection(operationStatus))
+        {
+            ClearRejectedGenerationStage();
+            throw new InvalidOperationException(
+                "The generation request was definitively rejected. Correct the " +
+                "API credential and prepare a new generation operation.");
+        }
+
         UpdateState(current => current with
         {
             GenerationOperationStatus = operationStatus,
         });
         return RequireDurableTaskId(operationStatus, "generation");
+    }
+
+    private static async Task<
+        Tripo.Bridge.HostControlOperationStatusReceipt?>
+        TryGetDefinitiveRequestRejectionAsync(
+            Tripo.Bridge.IHostControlClient client,
+            string operationId,
+            string expectedKind,
+            CancellationToken cancellationToken)
+    {
+        try
+        {
+            Tripo.Bridge.HostControlOperationStatusReceipt status =
+                await client.GetOperationStatusAsync(
+                        operationId,
+                        cancellationToken)
+                    .ConfigureAwait(false);
+            return IsMatchingPaidOperationStatus(
+                       status,
+                       operationId,
+                       expectedKind) &&
+                   TripoPanelState.IsDefinitiveRequestRejection(status)
+                ? status
+                : null;
+        }
+        catch (Tripo.Bridge.HostControlCallException)
+        {
+            return null;
+        }
+        catch (OperationCanceledException)
+            when (!cancellationToken.IsCancellationRequested)
+        {
+            return null;
+        }
+        catch (ObjectDisposedException)
+        {
+            return null;
+        }
     }
 
     private async Task<string> ResolveConversionTaskIdAsync(
@@ -1315,12 +1459,88 @@ public sealed class TripoPanelSession : IAsyncDisposable
                     prepared.OperationId,
                     cancellationToken)
                 .ConfigureAwait(false);
+        EnsurePaidOperationStatusIdentity(
+            operationStatus,
+            prepared.OperationId,
+            "obj_conversion_creation");
+        if (TripoPanelState.IsDefinitiveRequestRejection(operationStatus))
+        {
+            ClearRejectedConversionStage();
+            throw new InvalidOperationException(
+                "The conversion request was definitively rejected. Correct the " +
+                "API credential and prepare a new conversion operation.");
+        }
+
         UpdateState(current => current with
         {
             ConversionOperationStatus = operationStatus,
         });
         return RequireDurableTaskId(operationStatus, "conversion");
     }
+
+    private void ClearRejectedGenerationStage()
+    {
+        UpdateState(state => state with
+        {
+            PreparedGeneration = null,
+            GenerationDispatchAttempted = false,
+            GenerationReceipt = null,
+            GenerationOperationStatus = null,
+            GenerationStatus = null,
+            PreparedConversion = null,
+            ConversionDispatchAttempted = false,
+            ConversionReceipt = null,
+            ConversionOperationStatus = null,
+            ConversionStatus = null,
+            PreparedImport = null,
+            ImportDispatchAttempted = false,
+            ImportReceipt = null,
+        });
+    }
+
+    private void ClearRejectedConversionStage()
+    {
+        UpdateState(state => state with
+        {
+            PreparedConversion = null,
+            ConversionDispatchAttempted = false,
+            ConversionReceipt = null,
+            ConversionOperationStatus = null,
+            ConversionStatus = null,
+            PreparedImport = null,
+            ImportDispatchAttempted = false,
+            ImportReceipt = null,
+        });
+    }
+
+    private static void EnsurePaidOperationStatusIdentity(
+        Tripo.Bridge.HostControlOperationStatusReceipt status,
+        string operationId,
+        string expectedKind)
+    {
+        if (!IsMatchingPaidOperationStatus(
+                status,
+                operationId,
+                expectedKind))
+        {
+            throw new InvalidDataException(
+                "The local operation-status receipt did not match the requested " +
+                "operation identity and kind.");
+        }
+    }
+
+    private static bool IsMatchingPaidOperationStatus(
+        Tripo.Bridge.HostControlOperationStatusReceipt status,
+        string operationId,
+        string expectedKind) =>
+        string.Equals(
+            status.OperationId,
+            operationId,
+            StringComparison.Ordinal) &&
+        string.Equals(
+            status.Kind,
+            expectedKind,
+            StringComparison.Ordinal);
 
     private static string RequireDurableTaskId(
         Tripo.Bridge.HostControlOperationStatusReceipt status,

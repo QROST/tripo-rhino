@@ -24,7 +24,7 @@ public sealed record TripoWorkflowOptions(
     }
 }
 
-public sealed class TripoWorkflowException : Exception
+public class TripoWorkflowException : Exception
 {
     public TripoWorkflowException(string message)
         : base(message)
@@ -32,6 +32,17 @@ public sealed class TripoWorkflowException : Exception
     }
 
     public TripoWorkflowException(string message, Exception innerException)
+        : base(message, innerException)
+    {
+    }
+}
+
+internal sealed class TripoCredentialPreflightException :
+    TripoWorkflowException
+{
+    public TripoCredentialPreflightException(
+        string message,
+        TripoApiException innerException)
         : base(message, innerException)
     {
     }
@@ -151,10 +162,19 @@ public sealed class TripoWorkflow : ITripoWorkflow
         string effectiveModel = _apiClient.ResolveEffectiveModel();
         TextGenerationOptions generationOptions =
             new(prompt, faceLimit, effectiveModel, withMaterials);
-        string requestFingerprint =
-            _apiClient.GetTextTaskOperationFingerprint(
-                generationOptions,
-                documentSessionId);
+        string requestFingerprint;
+        try
+        {
+            requestFingerprint =
+                _apiClient.GetTextTaskOperationFingerprint(
+                    generationOptions,
+                    documentSessionId);
+        }
+        catch (TripoApiException exception)
+        {
+            throw CredentialPreflightFailure(exception);
+        }
+
         PaidOperationDescriptor descriptor = PaidOperationDescriptor.ForTextTask(
             canonicalOperationId,
             documentSessionId,
@@ -177,12 +197,26 @@ public sealed class TripoWorkflow : ITripoWorkflow
         await EnsureDocumentSessionAsync(documentSessionId, cancellationToken)
             .ConfigureAwait(false);
 
-        string taskId = await _apiClient.CreateTextModelAsync(
-                generationOptions,
-                documentSessionId,
-                operation,
-                cancellationToken)
-            .ConfigureAwait(false);
+        string taskId;
+        try
+        {
+            taskId = await _apiClient.CreateTextModelAsync(
+                    generationOptions,
+                    documentSessionId,
+                    operation,
+                    cancellationToken)
+                .ConfigureAwait(false);
+        }
+        catch (TripoApiException exception)
+            when (IsCredentialFailureBeforePaidDispatch(operation, exception))
+        {
+            await RecordCredentialFailureBeforePaidDispatchAsync(
+                    operation,
+                    exception)
+                .ConfigureAwait(false);
+            throw new TripoPaidRequestRejectedException(exception);
+        }
+
         return new TextTaskCreationReceipt(
             descriptor.OperationId,
             taskId,
@@ -209,10 +243,19 @@ public sealed class TripoWorkflow : ITripoWorkflow
         string effectiveModel = _apiClient.ResolveEffectiveModel();
         ImageGenerationOptions generationOptions =
             new(image, faceLimit, effectiveModel, withMaterials);
-        string requestFingerprint =
-            _apiClient.GetImageTaskOperationFingerprint(
-                generationOptions,
-                documentSessionId);
+        string requestFingerprint;
+        try
+        {
+            requestFingerprint =
+                _apiClient.GetImageTaskOperationFingerprint(
+                    generationOptions,
+                    documentSessionId);
+        }
+        catch (TripoApiException exception)
+        {
+            throw CredentialPreflightFailure(exception);
+        }
+
         PaidOperationDescriptor descriptor =
             PaidOperationDescriptor.ForImageTask(
                 canonicalOperationId,
@@ -271,12 +314,21 @@ public sealed class TripoWorkflow : ITripoWorkflow
         string canonicalOperationId =
             PaidOperationDescriptor.CanonicalizeOperationId(operationId);
         using IDisposable executionLease = _executionGate.Acquire();
-        string requestFingerprint =
-            _apiClient.GetObjConversionOperationFingerprint(
-                sourceTaskId,
-                faceLimit,
-                withMaterials,
-                documentSessionId);
+        string requestFingerprint;
+        try
+        {
+            requestFingerprint =
+                _apiClient.GetObjConversionOperationFingerprint(
+                    sourceTaskId,
+                    faceLimit,
+                    withMaterials,
+                    documentSessionId);
+        }
+        catch (TripoApiException exception)
+        {
+            throw CredentialPreflightFailure(exception);
+        }
+
         PaidOperationDescriptor descriptor = PaidOperationDescriptor.ForObjConversion(
             canonicalOperationId,
             sourceTaskId,
@@ -301,23 +353,37 @@ public sealed class TripoWorkflow : ITripoWorkflow
         await EnsureDocumentSessionAsync(documentSessionId, cancellationToken)
             .ConfigureAwait(false);
 
-        TripoTaskSnapshot sourceTask = await GetTaskWithReadRetryAsync(
-                sourceTaskId,
-                cancellationToken)
-            .ConfigureAwait(false);
-        EnsureSuccessfulTask(sourceTask);
-        EnsureGenerationTask(sourceTask);
+        string conversionTaskId;
+        try
+        {
+            TripoTaskSnapshot sourceTask = await GetTaskWithReadRetryAsync(
+                    sourceTaskId,
+                    cancellationToken)
+                .ConfigureAwait(false);
+            EnsureSuccessfulTask(sourceTask);
+            EnsureGenerationTask(sourceTask);
 
-        await EnsureDocumentSessionAsync(documentSessionId, cancellationToken)
-            .ConfigureAwait(false);
-        string conversionTaskId = await _apiClient.CreateObjConversionAsync(
-                sourceTaskId,
-                faceLimit,
-                withMaterials,
-                documentSessionId,
-                operation,
-                cancellationToken)
-            .ConfigureAwait(false);
+            await EnsureDocumentSessionAsync(documentSessionId, cancellationToken)
+                .ConfigureAwait(false);
+            conversionTaskId = await _apiClient.CreateObjConversionAsync(
+                    sourceTaskId,
+                    faceLimit,
+                    withMaterials,
+                    documentSessionId,
+                    operation,
+                    cancellationToken)
+                .ConfigureAwait(false);
+        }
+        catch (TripoApiException exception)
+            when (IsCredentialFailureBeforePaidDispatch(operation, exception))
+        {
+            await RecordCredentialFailureBeforePaidDispatchAsync(
+                    operation,
+                    exception)
+                .ConfigureAwait(false);
+            throw new TripoPaidRequestRejectedException(exception);
+        }
+
         return new ObjConversionCreationReceipt(
             descriptor.OperationId,
             sourceTaskId,
@@ -624,6 +690,50 @@ public sealed class TripoWorkflow : ITripoWorkflow
         }
     }
 
+    private static TripoCredentialPreflightException CredentialPreflightFailure(
+        TripoApiException exception) =>
+        new(
+            "The Tripo API credential was unavailable before the paid operation " +
+            "journal was opened. No provider request was sent.",
+            exception);
+
+    private static bool IsCredentialFailureBeforePaidDispatch(
+        PaidOperationLease operation,
+        TripoApiException exception) =>
+        string.Equals(
+            operation.Status.State,
+            PaidOperationStates.Prepared,
+            StringComparison.Ordinal) &&
+        (exception is TripoCredentialException ||
+         exception.StatusCode is
+             System.Net.HttpStatusCode.Unauthorized or
+             System.Net.HttpStatusCode.Forbidden);
+
+    private static async Task RecordCredentialFailureBeforePaidDispatchAsync(
+        PaidOperationLease operation,
+        TripoApiException rejection)
+    {
+        try
+        {
+            await operation.RequestRejectedAsync(
+                    rejection is TripoCredentialException
+                        ? "credential_unavailable_before_dispatch"
+                        : "credential_rejected_before_dispatch",
+                    rejection.Message)
+                .ConfigureAwait(false);
+        }
+        catch (Exception checkpointException)
+        {
+            throw new TripoApiException(
+                "The credential failed before the paid request was sent, but " +
+                "the local request-rejected checkpoint could not be persisted. " +
+                "Do not retry with a new operationId.",
+                innerException: new AggregateException(
+                    rejection,
+                    checkpointException));
+        }
+    }
+
     private static void EnsureCreationCanDispatch(
         PaidOperationStatusReceipt status)
     {
@@ -738,6 +848,9 @@ public sealed class TripoWorkflow : ITripoWorkflow
 
         public Task TaskIdReceivedAsync(string taskId) =>
             _inner.TaskIdReceivedAsync(taskId);
+
+        public Task RequestRejectedAsync(string code, string message) =>
+            _inner.RequestRejectedAsync(code, message);
 
         public Task OutcomeUnknownAsync(string code, string message) =>
             _inner.OutcomeUnknownAsync(code, message);

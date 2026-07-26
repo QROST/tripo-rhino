@@ -601,6 +601,11 @@ public sealed class TripoPanelRecoveryStore : IDisposable
         bool receiptKnown,
         Tripo.Bridge.HostControlOperationStatusReceipt? status)
     {
+        if (TripoPanelState.IsDefinitiveRequestRejection(status))
+        {
+            return null;
+        }
+
         if (!dispatchAttempted || operationId is null)
         {
             if (dispatchAttempted)

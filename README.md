@@ -104,7 +104,7 @@ Copy deployments to a stable directory. Do not register a plug-in directly
 from `bin/` if that directory may later be removed by `dotnet clean`.
 The host build's `sidecar/` directory is the panel runtime. The separate
 `src/Tripo.Rhino.Mcp/bin/Release/net8.0/` output is needed only when configuring an MCP
-client. Bridge protocol v2 and host-control protocol v2 have no
+client. Bridge protocol v2 and host-control protocol v3 have no
 backward-compatibility shim, so deploy all components from the same repository
 revision.
 
@@ -301,7 +301,10 @@ receipt is known, the stage action is disabled instead of looking like a new
 request. **New workflow** is disabled while any dispatch is unresolved, and
 API-key mutation is disabled while a paid dispatch is unresolved. Hiding or
 closing a tab does not cancel the workflow while Rhino retains that panel
-instance.
+instance. A durable `request_rejected` receipt is not unresolved: generation
+rejection clears generation and downstream stages, while conversion rejection
+clears conversion/import and preserves successful generation. Correct the
+credential and prepare a new UUID for the rejected stage.
 
 Before dispatch, the shared state layer atomically writes a private recovery
 hint under
@@ -322,9 +325,9 @@ foreign-owner record, or invalid recovery storage from Rhino or Revit. A
 root-global UI intent lease serializes cross-panel credential-recovery scans,
 key-mutation requests, and paid dispatch calls. A separate private sidecar
 execution lease holds the actual key mutation and each paid UI or standalone
-MCP workflow from
-credential-derived fingerprinting through its durable or ambiguous journal
-checkpoint, even if the UI pipe disconnects. Only one key mutation or paid
+MCP workflow from credential-derived fingerprinting through its durable task,
+definitive `request_rejected`, or ambiguous-outcome journal checkpoint, even if
+the UI pipe disconnects. Only one key mutation or paid
 create/convert is admitted at a time; retry a contending request with the same
 UUID after the active operation checkpoints. **Review recovery…** automatically
 queries only local `operation_status`; it does not resend a paid call or import.
@@ -455,14 +458,18 @@ caller-owned UUIDs. Do not switch or close the active document during the
 workflow; the document session is rechecked before paid operations, before the
 download/import, and inside the Rhino UI-thread mutation.
 
-If a paid-stage response is lost, retry with the original UUID, identical
-explicit arguments, API key, and document session; a text-task retry must also
-keep the same effective model. Never replace the UUID merely to retry. Use
-`tripo_operation_status` to inspect its local record.
+If a paid-stage response is lost, first use `tripo_operation_status` to inspect
+its local record. Retry with the original UUID, identical explicit arguments,
+API key, and document session only when the journal says creation can resume; a
+text-task retry must also keep the same effective model.
 
 If an operation is `outcome_unknown`, do not automatically resend it or create
 a replacement UUID. Preserve the journal and inspect Tripo task or billing
 history manually.
+
+If an operation is `request_rejected`, the provider definitively rejected the
+request before creating a task. Correct the credential and prepare a new UUID;
+do not retry the rejected UUID.
 
 Image creation separately checkpoints upload and generation. A durable
 `file_token` resumes generation without another upload. An ambiguous upload or
@@ -548,8 +555,9 @@ operation-status reads can work without a key; Tripo API tools cannot.
 Open the intended Rhino document and call `tripo_host_context` again. If the
 document was switched, closed, or reopened, paid-operation identity does not
 move to the new session. For a paid stage already sent or missing a response,
-first call `tripo_operation_status`, preserve its original UUID and identity,
-and do not create a replacement operation. An import retry may use the new
+first call `tripo_operation_status`. Preserve its original UUID and identity
+unless the journal reports definitive `request_rejected`; in that state,
+correct the credential and prepare a new UUID. An import retry may use the new
 session only after reopening the same target document and keeping the original
 import UUID, conversion task and content, name, resolved mode, and materials
 flag.

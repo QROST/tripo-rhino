@@ -1,9 +1,10 @@
 # Architecture
 
 > Repository scope: this repository ships the Rhino adapter only. Revit
-> references below document protocol-v2, journal, credential, and local-data
-> compatibility inherited from the `f6300ce` migration snapshot; they do not
-> imply that Revit source is present here.
+> references below document bridge protocol-v2, journal, credential, and
+> local-data compatibility inherited from the `f6300ce` migration snapshot;
+> they do not imply that Revit source is present here. Host-control has since
+> advanced from the snapshot's v2 to protocol-v3.
 
 Accepted product-direction lock for **dual front doors** (host UI + MCP) and
 **sidecar-only API credentials**:
@@ -60,7 +61,7 @@ The local bridge uses a random process-lifetime pipe name and session token. A r
 
 The bridge accepts a small method allowlist. It never accepts source code, scripts, remote URLs, or arbitrary local paths.
 
-The host-control channel is a separate protocol-v2 named pipe with a distinct
+The host-control channel is a separate protocol-v3 named pipe with a distinct
 random token and descriptor. It is bound to one explicit host PID, allows only
 health, graceful shutdown, credential status/set/clear, and workflow calls, and
 has independent request-size, deadline, and concurrency bounds. A bridge token
@@ -153,20 +154,24 @@ automatically resent. The sidecar verifies the staged descriptor and uploads an
 immutable in-memory snapshot, closing the check-versus-upload race on the
 owner-writable transfer file.
 
-The shared host UI generates and displays each operation UUID before dispatch,
-requires a separate Tripo-credit confirmation for generation and conversion,
-and keeps the same UUID for retries. If a paid response is lost, refresh queries
-the local operation journal and recovers a durable task ID when one exists. An
-unresolved dispatch disables reset and new-key changes so the UI cannot disguise
-an ambiguous paid result. Conversion and import remain bound to the document
-session captured by generation; switching documents fails closed.
+The shared host UI generates and displays each operation UUID before dispatch
+and requires a separate Tripo-credit confirmation for generation and
+conversion. If a paid response is lost, refresh queries the local operation
+journal and recovers a durable task ID or same-UUID retry only when locally
+proven safe. An unresolved or ambiguous dispatch disables reset and new-key
+changes so the UI cannot disguise a paid result. A definitive
+`request_rejected` receipt instead clears the rejected stage and requires a
+corrected credential plus a new UUID; generation rejection clears downstream
+work, while conversion rejection preserves successful generation. Conversion
+and import remain bound to the document session captured by generation;
+switching documents fails closed.
 
 A recovered Grasshopper definition may request same-UUID recovery only when
 the original local journal exists. `RequireExistingOperation` makes that
 admission atomic: a copied/tampered definition or deleted journal cannot turn a
 saved UUID into a fresh paid operation.
 
-`Dispatching` is durable before network send. A timeout, cancellation, or malformed response within that same process is checkpointed to `OutcomeUnknown` immediately, before the API client returns. A `Dispatching` record abandoned by a killed process is different: `tripo_operation_status` reads still report state `dispatching` untouched, and the durable rewrite to `OutcomeUnknown` happens only on the next `AcquireAsync` for that same operation ID — the next creation attempt or explicit retry with the same UUID. Neither path automatically resends the paid request. A task ID is checkpointed with caller cancellation ignored before the API client returns. `tripo_operation_status` reads local recovery truth only; it does not query the provider.
+`Dispatching` is durable before network send. A timeout, cancellation, or malformed response within that same process is checkpointed to `OutcomeUnknown` immediately, before the API client returns. A definite credential failure before POST, or provider HTTP 401/403 response, is checkpointed to `RequestRejected` instead and cannot authorize reuse of that UUID. A `Dispatching` record abandoned by a killed process is different: `tripo_operation_status` reads still report state `dispatching` untouched, and the durable rewrite to `OutcomeUnknown` happens only on the next `AcquireAsync` for that same operation ID — the next creation attempt or explicit retry with the same UUID. Neither ambiguous path automatically resends the paid request. A task ID and a definitive rejection are checkpointed with caller cancellation ignored before the API client returns. `tripo_operation_status` reads local recovery truth only; it does not query the provider.
 
 This is a local process-crash recovery and at-most-one automatic-dispatch boundary, not a remote exactly-once guarantee. The provider POST and local storage cannot form one atomic transaction. Power loss, storage failure, a non-cooperating same-user process, a network filesystem, or deletion/change of `TRIPO_LOCAL_DATA_DIR` remains an explicit manual-recovery boundary.
 
@@ -216,7 +221,8 @@ credential-recovery scan through completion or cancellation of the key-mutation
 or paid host-control call. A second current-user execution lease is owned by
 the sidecar for the actual key mutation and for every paid UI or standalone MCP
 workflow, beginning before the credential-derived request fingerprint and
-ending only after a durable task ID or ambiguous-outcome journal checkpoint. A
+ending only after a durable task ID, definitive `request_rejected`, or
+ambiguous-outcome journal checkpoint. A
 disconnected UI client therefore cannot release the
 last protection around sidecar work, closing the cross-panel and MCP
 check-then-act gaps. Paid IDs can only be queried through the read-only

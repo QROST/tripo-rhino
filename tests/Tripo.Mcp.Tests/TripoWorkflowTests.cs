@@ -1,3 +1,4 @@
+using System.Net;
 using Xunit;
 
 namespace Tripo.Mcp.Tests;
@@ -38,6 +39,81 @@ public sealed class TripoWorkflowTests : IDisposable
         Assert.Equal(0, stager.CallCount);
         Assert.Equal(0, host.ContextCalls);
         Assert.Equal(0, host.ImportCalls);
+    }
+
+    [Fact]
+    public async Task MissingCredentialPreflightCreatesNoPaidJournal()
+    {
+        string operationId = Guid.NewGuid().ToString("D");
+        FakeApiClient api = new()
+        {
+            FailTextCredentialFingerprint = true,
+        };
+        Tripo.Mcp.TripoWorkflow workflow = CreateWorkflow(
+            api,
+            new FakeArtifactStager(),
+            new FakeHostConnection());
+
+        await Assert.ThrowsAsync<
+            Tripo.Mcp.TripoCredentialPreflightException>(
+            () => workflow.CreateTextTaskAsync(
+                "a chair",
+                10_000,
+                withMaterials: false,
+                Guid.NewGuid().ToString("D"),
+                operationId,
+                confirmExternalCost: true,
+                CancellationToken.None));
+
+        Assert.False(
+            File.Exists(
+                Path.Combine(
+                    _journalRoot,
+                    operationId + ".jsonl")));
+        Assert.False(
+            File.Exists(
+                Path.Combine(
+                    _journalRoot,
+                    operationId + ".lock")));
+        Assert.Equal(0, api.CreateTextCalls);
+        Assert.Equal(0, api.GetTaskCalls);
+    }
+
+    [Fact]
+    public async Task CredentialLossAfterJournalCreationIsDurablyRejected()
+    {
+        string requestedSession = Guid.NewGuid().ToString("D");
+        string operationId = Guid.NewGuid().ToString("D");
+        FakeApiClient api = new()
+        {
+            FailTextCredentialBeforeSend = true,
+        };
+        FakeHostConnection host = new();
+        host.Contexts.Enqueue(Context(requestedSession));
+        Tripo.Mcp.TripoWorkflow workflow = CreateWorkflow(
+            api,
+            new FakeArtifactStager(),
+            host);
+
+        await Assert.ThrowsAsync<
+            Tripo.Mcp.TripoPaidRequestRejectedException>(
+            () => workflow.CreateTextTaskAsync(
+                "a chair",
+                10_000,
+                withMaterials: false,
+                requestedSession,
+                operationId,
+                confirmExternalCost: true,
+                CancellationToken.None));
+        Tripo.Mcp.PaidOperationStatusReceipt status =
+            await workflow.GetPaidOperationStatusAsync(
+                operationId,
+                CancellationToken.None);
+
+        Assert.Equal("request_rejected", status.State);
+        Assert.False(status.MayHaveCreatedRemoteTask);
+        Assert.Equal(0, api.CreateTextCalls);
+        Assert.Equal(1, host.ContextCalls);
     }
 
     [Fact]
@@ -444,6 +520,48 @@ public sealed class TripoWorkflowTests : IDisposable
                 confirmExternalCost: true,
                 CancellationToken.None));
 
+        Assert.Equal(1, api.GetTaskCalls);
+        Assert.Equal(0, api.CreateConversionCalls);
+    }
+
+    [Theory]
+    [InlineData(HttpStatusCode.Unauthorized)]
+    [InlineData(HttpStatusCode.Forbidden)]
+    public async Task ConversionSourceReadRejectionCreatesNoPaidPost(
+        HttpStatusCode statusCode)
+    {
+        string requestedSession = Guid.NewGuid().ToString("D");
+        string operationId = Guid.NewGuid().ToString("D");
+        FakeApiClient api = new()
+        {
+            TaskReadException = new Tripo.Mcp.TripoApiException(
+                "The credential was rejected.",
+                statusCode),
+        };
+        FakeHostConnection host = new();
+        host.Contexts.Enqueue(Context(requestedSession));
+        Tripo.Mcp.TripoWorkflow workflow = CreateWorkflow(
+            api,
+            new FakeArtifactStager(),
+            host);
+
+        await Assert.ThrowsAsync<
+            Tripo.Mcp.TripoPaidRequestRejectedException>(
+            () => workflow.CreateObjConversionAsync(
+                "task_source123",
+                10_000,
+                withMaterials: false,
+                requestedSession,
+                operationId,
+                confirmExternalCost: true,
+                CancellationToken.None));
+        Tripo.Mcp.PaidOperationStatusReceipt status =
+            await workflow.GetPaidOperationStatusAsync(
+                operationId,
+                CancellationToken.None);
+
+        Assert.Equal("request_rejected", status.State);
+        Assert.False(status.MayHaveCreatedRemoteTask);
         Assert.Equal(1, api.GetTaskCalls);
         Assert.Equal(0, api.CreateConversionCalls);
     }
@@ -1132,6 +1250,12 @@ public sealed class TripoWorkflowTests : IDisposable
 
         public bool FailTextAfterDispatch { get; init; }
 
+        public bool FailTextCredentialFingerprint { get; init; }
+
+        public bool FailTextCredentialBeforeSend { get; init; }
+
+        public Tripo.Mcp.TripoApiException? TaskReadException { get; init; }
+
         public string? FailImageStage { get; init; }
 
         public bool LastConversionWithMaterials { get; private set; }
@@ -1156,6 +1280,12 @@ public sealed class TripoWorkflowTests : IDisposable
             string documentSessionId)
         {
             OnTextFingerprint?.Invoke();
+            if (FailTextCredentialFingerprint)
+            {
+                throw new Tripo.Mcp.TripoCredentialException(
+                    "The local credential is missing.");
+            }
+
             return Fingerprint(
                 $"text|{OperationScopeFingerprint}|{documentSessionId}|" +
                 $"{options.Model}|{options.Prompt}|{options.FaceLimit}|" +
@@ -1189,6 +1319,12 @@ public sealed class TripoWorkflowTests : IDisposable
             Assert.Equal(
                 GetTextTaskOperationFingerprint(options, documentSessionId),
                 checkpoint.RequestFingerprint);
+            if (FailTextCredentialBeforeSend)
+            {
+                throw new Tripo.Mcp.TripoCredentialException(
+                    "The local credential disappeared before dispatch.");
+            }
+
             await checkpoint.BeforeSendAsync(cancellationToken);
             CreateTextCalls++;
             if (FailTextAfterDispatch)
@@ -1285,6 +1421,12 @@ public sealed class TripoWorkflowTests : IDisposable
             CancellationToken cancellationToken)
         {
             GetTaskCalls++;
+            if (TaskReadException is not null)
+            {
+                return Task.FromException<
+                    Tripo.Mcp.TripoTaskSnapshot>(TaskReadException);
+            }
+
             if (HangTaskReads)
             {
                 TaskCompletionSource<Tripo.Mcp.TripoTaskSnapshot> completion =

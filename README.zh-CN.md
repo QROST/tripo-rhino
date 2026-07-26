@@ -93,7 +93,7 @@ src/Tripo.Rhino.Mcp/bin/Release/net8.0/
 把部署产物复制到稳定目录。若 `bin/` 可能被 `dotnet clean` 删除，不要直接从该目录
 注册 plug-in。宿主 build 的 `sidecar/` 目录是 panel runtime；只有配置 MCP client
 时才需要单独的 `src/Tripo.Rhino.Mcp/bin/Release/net8.0/` 输出。Bridge protocol v2 与
-host-control protocol v2 都没有向后兼容 shim，因此所有组件必须来自同一个仓库
+host-control protocol v3 都没有向后兼容 shim，因此所有组件必须来自同一个仓库
 revision。
 
 ## 安装 Rhino plug-in
@@ -272,7 +272,10 @@ panel 不自动轮询，也不声称能取消远端 task。响应丢失后，该
 button 会明确标为 **Retry same UUID**。一旦取得 durable task 或 import receipt，
 对应阶段 action 就会禁用，不会伪装成新请求。任意 dispatch 未决时，
 **New workflow** 会禁用；付费 dispatch 未决时，API-key mutation 也会禁用。只要
-Rhino 保留该 panel instance，隐藏或关闭 tab 都不会取消 workflow。
+Rhino 保留该 panel instance，隐藏或关闭 tab 都不会取消 workflow。durable
+`request_rejected` 不属于未决状态：generation 被拒会清除 generation 与 downstream
+stage；conversion 被拒只清除 conversion/import，并保留成功 generation。修正
+credential 后，为被拒阶段准备新 UUID。
 
 dispatch 前，shared state layer 会在
 `<TRIPO_LOCAL_DATA_DIR>/ui-recovery/rhino/<recovery-id>.json`
@@ -289,8 +292,8 @@ API-key change 还会拒绝 Rhino 或 Revit 中任何未决且已记录的 UI pa
 确认已退出的 foreign-owner record 或无效 recovery storage。一个 root-global UI
 intent lease 会串行化跨 panel 的 credential-recovery scan、key-mutation request
 与 paid dispatch call。另一个 private sidecar execution lease 会持有实际 key
-mutation，以及每个 UI 或 standalone MCP
-paid workflow 从 credential-derived fingerprint 直到 durable 或 ambiguous journal
+mutation，以及每个 UI 或 standalone MCP paid workflow 从 credential-derived
+fingerprint 直到 durable task、明确 `request_rejected` 或 ambiguous-outcome journal
 checkpoint 的全过程；即使 UI pipe 断开也不会提前释放。同一时间只允许一个 key
 mutation 或 paid create/convert；发生竞争时，必须等当前 operation checkpoint 后，
 以同一 UUID 重试。
@@ -408,12 +411,15 @@ text creation、OBJ conversion 与 host import 必须使用三个不同的 calle
 UUID。工作流执行期间不要切换或关闭 active document；在付费操作前、下载/导入前以及
 Rhino UI-thread mutation 内部都会重新核对 document session。
 
-付费阶段响应丢失时，以原 UUID、完全相同的显式参数、API key 与 document session
-重试；text-task 重试还必须保持相同的 effective model。不能只为重试而更换 UUID。
-使用 `tripo_operation_status` 检查对应的本地记录。
+付费阶段响应丢失时，先使用 `tripo_operation_status` 检查对应的本地记录。只有
+journal 表明 creation 可以继续时，才以原 UUID、完全相同的显式参数、API key 与
+document session 重试；text-task 重试还必须保持相同的 effective model。
 
 若 operation 为 `outcome_unknown`，不要自动重发或创建替代 UUID。保留 journal，并
 人工核对 Tripo task 或 billing history。
+
+若 operation 为 `request_rejected`，provider 已明确拒绝请求且没有创建 task。修正
+credential 并准备新 UUID；不要重试被拒 UUID。
 
 Image creation 会分别 checkpoint upload 与 generation。持久化的 `file_token` 允许
 继续 generation 而不再次 upload。若 upload 或 generation 结果不明确，journal 会
@@ -490,7 +496,8 @@ control characters 或字面 quote characters。JSON 配置仍需要用双引号
 
 打开目标 Rhino document 并重新调用 `tripo_host_context`。文档被切换、关闭或重开
 后，paid-operation identity 不会迁移到新 session。已发送或响应丢失的付费阶段应先
-调用 `tripo_operation_status`，保留原 UUID 与 identity，不能创建替代 operation。
+调用 `tripo_operation_status`。除非 journal 报告明确 `request_rejected`，否则保留
+原 UUID 与 identity；若被明确拒绝，应修正 credential 并准备新 UUID。
 只有重新打开同一个目标 document，并保持原 import UUID、conversion task 与
 content、name、解析后的 mode 和 materials flag 时，import retry 才能使用新
 session。

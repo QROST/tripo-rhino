@@ -2,7 +2,7 @@ using System.Net;
 
 namespace Tripo.Mcp;
 
-public sealed class TripoApiException : Exception
+public class TripoApiException : Exception
 {
     public TripoApiException(
         string message,
@@ -38,4 +38,26 @@ public sealed class TripoApiException : Exception
         StatusCode == HttpStatusCode.RequestTimeout ||
         StatusCode == HttpStatusCode.TooManyRequests ||
         (StatusCode is not null && (int)StatusCode.Value >= 500);
+}
+
+public sealed class TripoCredentialException : TripoApiException
+{
+    public TripoCredentialException(string message)
+        : base(message)
+    {
+    }
+}
+
+public sealed class TripoPaidRequestRejectedException : TripoApiException
+{
+    internal TripoPaidRequestRejectedException(TripoApiException rejection)
+        : base(
+            rejection.Message,
+            rejection.StatusCode,
+            rejection.ApiCode,
+            rejection.RequestId,
+            rejection.RetryAfter,
+            rejection)
+    {
+    }
 }
