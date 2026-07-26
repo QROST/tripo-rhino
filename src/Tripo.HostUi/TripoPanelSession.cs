@@ -1047,7 +1047,7 @@ public sealed class TripoPanelSession : IAsyncDisposable
             cancellationToken);
     }
 
-    private async Task<IReadOnlyList<
+    private static async Task<IReadOnlyList<
         TripoPanelRecoveryOperationInspection>>
         InspectRecoveryOperationsAsync(
             TripoPanelRecoveryLoadResult recovery,
