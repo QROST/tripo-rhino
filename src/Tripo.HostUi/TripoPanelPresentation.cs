@@ -1,5 +1,47 @@
 namespace Tripo.HostUi;
 
+public sealed record TripoApiKeyPromptPolicy(
+    bool Replacing,
+    bool RecoveryMode,
+    bool ExactOriginalKeyRequired,
+    bool PersistAllowed,
+    bool RequiresReplacementConfirmation,
+    string? WorkflowOperationId)
+{
+    public static TripoApiKeyPromptPolicy Create(
+        TripoPanelState state)
+    {
+        ArgumentNullException.ThrowIfNull(state);
+        bool replacing =
+            state.CredentialStatus?.HasApiKey == true;
+        bool recoveryMode =
+            state.RequiresCredentialRecovery;
+        string? workflowOperationId =
+            state.ImportDispatchAttempted ||
+            state.ImportReceipt is not null
+                ? state.PreparedImport?.OperationId
+                : state.ConversionDispatchAttempted ||
+                  state.ConversionReceipt is not null ||
+                  state.ConversionOperationStatus is not null ||
+                  state.ConversionStatus is not null
+                    ? state.PreparedConversion?.OperationId
+                    : state.GenerationDispatchAttempted ||
+                      state.GenerationReceipt is not null ||
+                      state.GenerationOperationStatus is not null ||
+                      state.GenerationStatus is not null
+                        ? state.PreparedGeneration?.OperationId
+                        : null;
+        return new TripoApiKeyPromptPolicy(
+            replacing,
+            recoveryMode,
+            state.HasUnresolvedPaidDispatch,
+            PersistAllowed: !recoveryMode,
+            RequiresReplacementConfirmation:
+                replacing && !recoveryMode,
+            workflowOperationId);
+    }
+}
+
 public static class TripoPanelRecoveryReviewFormatter
 {
     public static string Format(
@@ -368,7 +410,6 @@ public sealed class TripoPanelPresentation
             ConnectEnabled = !state.Busy,
             ApiKeyEnabled =
                 ready &&
-                !state.HasUnresolvedPaidDispatch &&
                 (!recoveryBlocked ||
                  (recovery.Hints.Count > 0 &&
                   recovery.Issues.Count == 0)),
@@ -481,6 +522,13 @@ public sealed class TripoPanelPresentation
         if (recovery.Issues.Count > 0)
         {
             return "Recovery needs attention…";
+        }
+
+        if (state.RequiresCredentialRecovery)
+        {
+            return recovery.HasBlock
+                ? "Review recovery, then restore API key…"
+                : "Restore workflow API key…";
         }
 
         if (!recovery.HasBlock)

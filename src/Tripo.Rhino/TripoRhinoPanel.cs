@@ -446,7 +446,7 @@ public sealed class TripoRhinoPanel : Panel, IPanel
             if (_session.State.CredentialStatus?.HasApiKey == false &&
                 !_session.Recovery.HasBlock)
             {
-                await PromptForApiKeyAsync();
+                await PromptForCurrentWorkflowApiKeyAsync();
             }
         }
         catch (OperationCanceledException) when (_closing)
@@ -483,7 +483,7 @@ public sealed class TripoRhinoPanel : Panel, IPanel
 
             if (!_closing)
             {
-                await PromptForApiKeyAsync();
+                await PromptForCurrentWorkflowApiKeyAsync();
             }
         }
         catch (OperationCanceledException) when (_closing)
@@ -498,15 +498,28 @@ public sealed class TripoRhinoPanel : Panel, IPanel
         }
     }
 
-    private async Task PromptForApiKeyAsync()
+    private async Task PromptForCurrentWorkflowApiKeyAsync()
+    {
+        Tripo.HostUi.TripoApiKeyPromptPolicy policy =
+            Tripo.HostUi.TripoApiKeyPromptPolicy.Create(
+                _session.State);
+        if (policy.RecoveryMode &&
+            !ConfirmRecoveryApiKey(policy))
+        {
+            return;
+        }
+
+        await PromptForApiKeyAsync(policy);
+    }
+
+    private async Task PromptForApiKeyAsync(
+        Tripo.HostUi.TripoApiKeyPromptPolicy policy)
     {
         if (_closing)
         {
             return;
         }
 
-        bool replacing =
-            _session.State.CredentialStatus?.HasApiKey == true;
         PasswordBox password = new()
         {
             MaxLength = 2048,
@@ -514,25 +527,38 @@ public sealed class TripoRhinoPanel : Panel, IPanel
         };
         CheckBox persist = new()
         {
-            Checked = true,
+            Checked = policy.PersistAllowed,
+            Enabled = policy.PersistAllowed,
             Text = "Save in this user's OS credential store",
+            ToolTip = policy.RecoveryMode
+                ? "Recovery credentials remain session-only until the " +
+                  "account-bound workflow is reconciled and explicitly reset."
+                : null,
         };
         CheckBox confirmReplacement = new()
         {
             Text =
                 "I want this new key to be used for future paid requests.",
-            Visible = replacing,
+            Visible = policy.RequiresReplacementConfirmation,
         };
         Button save = new()
         {
             Enabled = false,
-            Text = replacing ? "Replace API key" : "Save API key",
+            Text = policy.RecoveryMode
+                ? "Use recovery key"
+                : policy.Replacing
+                    ? "Replace API key"
+                    : "Save API key",
         };
         Button cancel = new() { Text = "Cancel" };
         Dialog<bool> dialog = new()
         {
-            Title = replacing ? "Replace Tripo API key" : "Set Tripo API key",
-            ClientSize = new Eto.Drawing.Size(520, replacing ? 410 : 370),
+            Title = policy.Replacing
+                ? "Replace Tripo API key"
+                : "Set Tripo API key",
+            ClientSize = new Eto.Drawing.Size(
+                520,
+                policy.Replacing ? 410 : 370),
             Resizable = true,
             Content = new Scrollable
             {
@@ -550,6 +576,19 @@ public sealed class TripoRhinoPanel : Panel, IPanel
                             Text = ApiKeyInstructions,
                             Wrap = WrapMode.Word,
                         },
+                        policy.RecoveryMode
+                            ? new Label
+                            {
+                                Text = policy.ExactOriginalKeyRequired
+                                    ? "Recovery mode: this key is session-only. " +
+                                      "Restore the exact original key for the " +
+                                      "unresolved paid UUID."
+                                    : "Recovery mode: this key is session-only. " +
+                                      "Use a key for the same Tripo account as " +
+                                      "the unfinished workflow.",
+                                Wrap = WrapMode.Word,
+                            }
+                            : null,
                         LeftLabel("API key"),
                         password,
                         persist,
@@ -562,13 +601,14 @@ public sealed class TripoRhinoPanel : Panel, IPanel
         void UpdateSaveEnabled() =>
             save.Enabled =
                 !string.IsNullOrWhiteSpace(password.Text) &&
-                (!replacing || confirmReplacement.Checked == true);
+                (!policy.RequiresReplacementConfirmation ||
+                 confirmReplacement.Checked == true);
         password.TextChanged += (_, _) => UpdateSaveEnabled();
         confirmReplacement.CheckedChanged +=
             (_, _) => UpdateSaveEnabled();
         save.Click += (_, _) => dialog.Close(true);
         cancel.Click += (_, _) => dialog.Close(false);
-        if (!replacing)
+        if (!policy.RequiresReplacementConfirmation)
         {
             dialog.DefaultButton = save;
         }
@@ -602,6 +642,25 @@ public sealed class TripoRhinoPanel : Panel, IPanel
             secret = null;
             dialog.Dispose();
         }
+    }
+
+    private bool ConfirmRecoveryApiKey(
+        Tripo.HostUi.TripoApiKeyPromptPolicy policy)
+    {
+        return MessageBox.Show(
+            this,
+            (policy.ExactOriginalKeyRequired
+                ? "A paid dispatch has no durable task ID. Restore the exact " +
+                  "original API key; the journal fingerprint is bound to that key."
+                : "An accepted remote task or unresolved import still needs " +
+                  "access. Use a key for the same Tripo account.") +
+            "\n\nWorkflow operation ID:\n" +
+            (policy.WorkflowOperationId ?? "Unavailable") +
+            "\n\nThe recovery key remains session-only.",
+            "Restore workflow access with an API key?",
+            MessageBoxButtons.YesNo,
+            MessageBoxType.Warning,
+            MessageBoxDefaultButton.No) == DialogResult.Yes;
     }
 
     private async void OnCheckRecovery(object? sender, EventArgs args)
@@ -1203,7 +1262,13 @@ public sealed class TripoRhinoPanel : Panel, IPanel
             presentation.ConnectEnabled &&
             !_recoveryReviewInProgress;
         _apiKey.Text = presentation.ApiKeyText;
-        _apiKey.ToolTip = presentation.RecoveryHasBlock
+        _apiKey.ToolTip = _session.State.RequiresCredentialRecovery
+            ? _session.State.HasUnresolvedPaidDispatch
+                ? "Restore the exact original API key for this workflow. " +
+                  "The recovery key remains session-only."
+                : "Use a key for the same Tripo account. The recovery key " +
+                  "remains session-only until reset."
+            : presentation.RecoveryHasBlock
             ? "Review the previous request before setting or changing the key."
             : "Set or replace the Tripo v3 API key.";
         _apiKey.Enabled =

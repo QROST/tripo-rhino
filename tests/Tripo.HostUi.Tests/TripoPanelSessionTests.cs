@@ -131,7 +131,7 @@ public sealed class TripoPanelSessionTests
     }
 
     [Fact]
-    public async Task UnresolvedPaidDispatchCannotChangeTheApiKey()
+    public async Task UnresolvedPaidDispatchAllowsOnlySessionRecoveryKey()
     {
         FakeHostControlClient client = new()
         {
@@ -144,16 +144,21 @@ public sealed class TripoPanelSessionTests
             () => session.DispatchPreparedGenerationAsync(
                 userConfirmedExternalCost: true));
 
-        InvalidOperationException setError =
+        InvalidOperationException persistError =
             await Assert.ThrowsAsync<InvalidOperationException>(
-                () => session.SetApiKeyAsync("replacement-key", persist: false));
+                () => session.SetApiKeyAsync(
+                    "same-account-key",
+                    persist: true));
         InvalidOperationException clearError =
             await Assert.ThrowsAsync<InvalidOperationException>(
                 () => session.ClearApiKeyAsync());
+        await session.SetApiKeyAsync(
+            "same-account-key",
+            persist: false);
 
-        Assert.Contains("cannot change", setError.Message);
-        Assert.Contains("cannot change", clearError.Message);
-        Assert.Null(client.LastApiKey);
+        Assert.Contains("session-only", persistError.Message);
+        Assert.Contains("account-bound", clearError.Message);
+        Assert.Equal("same-account-key", client.LastApiKey);
         Assert.Equal(0, client.ClearApiKeyCalls);
     }
 
@@ -194,7 +199,7 @@ public sealed class TripoPanelSessionTests
                     Path.Combine(root, "ui-recovery", "rhino"),
                     "*.json"));
 
-            await session.SetApiKeyAsync("replacement-key", persist: false);
+            await session.SetApiKeyAsync("replacement-key", persist: true);
             await session.DispatchPreparedGenerationAsync(
                 userConfirmedExternalCost: true);
 
@@ -244,11 +249,14 @@ public sealed class TripoPanelSessionTests
             await Assert.ThrowsAsync<Tripo.Bridge.HostControlCallException>(
                 () => session.DispatchPreparedGenerationAsync(
                     userConfirmedExternalCost: true));
-            InvalidOperationException blocked =
+            InvalidOperationException persistError =
                 await Assert.ThrowsAsync<InvalidOperationException>(
                     () => session.SetApiKeyAsync(
                         "replacement-key",
-                        persist: false));
+                        persist: true));
+            await session.SetApiKeyAsync(
+                "replacement-key",
+                persist: false);
 
             Assert.True(session.State.GenerationDispatchAttempted);
             Assert.True(session.State.HasUnresolvedPaidDispatch);
@@ -256,7 +264,8 @@ public sealed class TripoPanelSessionTests
             Assert.Equal(
                 prepared.OperationId,
                 session.State.PreparedGeneration?.OperationId);
-            Assert.Contains("cannot change", blocked.Message);
+            Assert.Contains("session-only", persistError.Message);
+            Assert.Equal("replacement-key", client.LastApiKey);
             Assert.True(store.LoadCredentialMutationBlocks().HasBlock);
             Assert.Single(
                 Directory.GetFiles(
@@ -393,12 +402,16 @@ public sealed class TripoPanelSessionTests
         await Assert.ThrowsAsync<InvalidDataException>(
             () => session.RefreshGenerationStatusAsync());
         await Assert.ThrowsAsync<InvalidOperationException>(
-            () => session.SetApiKeyAsync("replacement-key", persist: false));
+            () => session.SetApiKeyAsync("replacement-key", persist: true));
+        await session.SetApiKeyAsync(
+            "replacement-key",
+            persist: false);
 
         Assert.Equal(
             prepared.OperationId,
             session.State.PreparedGeneration?.OperationId);
         Assert.True(session.State.HasUnresolvedPaidDispatch);
+        Assert.Equal("replacement-key", client.LastApiKey);
     }
 
     [Fact]
@@ -436,7 +449,11 @@ public sealed class TripoPanelSessionTests
             Assert.NotNull(session.State.GenerationStatus);
             Assert.Null(session.State.PreparedConversion);
             Assert.False(session.State.HasUnresolvedPaidDispatch);
-            Assert.False(store.LoadCredentialMutationBlocks().HasBlock);
+            Assert.True(store.LoadCredentialMutationBlocks().HasBlock);
+            await Assert.ThrowsAsync<InvalidOperationException>(
+                () => session.SetApiKeyAsync(
+                    "replacement-key",
+                    persist: true));
             await session.SetApiKeyAsync("replacement-key", persist: false);
             Tripo.HostUi.PreparedObjConversion replacement =
                 session.PrepareConversion(10_000, withMaterials: false);
@@ -486,7 +503,7 @@ public sealed class TripoPanelSessionTests
             Assert.NotNull(session.State.GenerationStatus);
             Assert.Null(session.State.PreparedConversion);
             Assert.False(session.State.HasUnresolvedPaidDispatch);
-            Assert.False(store.LoadCredentialMutationBlocks().HasBlock);
+            Assert.True(store.LoadCredentialMutationBlocks().HasBlock);
             string recoveryFile = Assert.Single(
                 Directory.GetFiles(
                     Path.Combine(root, "ui-recovery", "rhino"),
@@ -495,6 +512,10 @@ public sealed class TripoPanelSessionTests
                 rejected.OperationId,
                 File.ReadAllText(recoveryFile),
                 StringComparison.Ordinal);
+            await Assert.ThrowsAsync<InvalidOperationException>(
+                () => session.SetApiKeyAsync(
+                    "replacement-key",
+                    persist: true));
             await session.SetApiKeyAsync("replacement-key", persist: false);
             Tripo.HostUi.PreparedObjConversion replacement =
                 session.PrepareConversion(10_000, withMaterials: false);
@@ -982,7 +1003,7 @@ public sealed class TripoPanelSessionTests
     }
 
     [Fact]
-    public async Task PaidDispatchLeaseBlocksCredentialMutationUntilTaskIdIsDurable()
+    public async Task PaidWorkflowBlocksSiblingCredentialMutationUntilCleared()
     {
         string root = CreateTemporaryRoot();
         try
@@ -1036,6 +1057,22 @@ public sealed class TripoPanelSessionTests
             }
 
             await dispatch;
+            InvalidOperationException acceptedTaskBlock =
+                await Assert.ThrowsAsync<InvalidOperationException>(
+                    () => credentialSession.SetApiKeyAsync(
+                        "replacement-key",
+                        persist: false));
+            Assert.Contains(
+                "another Rhino/Revit panel",
+                acceptedTaskBlock.Message);
+            await dispatchSession.RefreshGenerationStatusAsync();
+            await dispatchSession.SetApiKeyAsync(
+                "owner-terminal-key",
+                persist: false);
+            Assert.Equal(
+                "owner-terminal-key",
+                dispatchClient.LastApiKey);
+            dispatchSession.ResetWorkflow();
             await credentialSession.SetApiKeyAsync(
                 "replacement-key",
                 persist: false);
@@ -2138,6 +2175,120 @@ public sealed class TripoPanelSessionTests
                 await owner.DisposeAsync();
             }
 
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task UnconfirmedImportHintGloballyBlocksCredentialMutation()
+    {
+        string root = CreateTemporaryRoot();
+        try
+        {
+            string directory =
+                Path.Combine(root, "ui-recovery", "rhino");
+            Directory.CreateDirectory(directory);
+            Tripo.HostUi.TripoPanelRecoveryHint hint = new(
+                Tripo.HostUi.TripoPanelRecoveryStore.CurrentSchemaVersion,
+                "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+                "rhino",
+                int.MaxValue,
+                DateTimeOffset.UnixEpoch,
+                "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+                DateTimeOffset.UtcNow,
+                null,
+                null,
+                new Tripo.HostUi.TripoPanelImportRecoveryHint(
+                    "cccccccc-cccc-4ccc-8ccc-cccccccccccc",
+                    "task_conversion123",
+                    "Chair",
+                    "native",
+                    ApplyMaterials: true,
+                    DispatchAttempted: true,
+                    ReceiptKnown: false));
+            string path = Path.Combine(
+                directory,
+                hint.RecoveryId + ".json");
+            File.WriteAllText(
+                path,
+                System.Text.Json.JsonSerializer.Serialize(
+                    hint,
+                    CreateStrictRecoveryJsonOptions()));
+            Tripo.Bridge.BridgePaths.SetPrivateFileMode(path);
+
+            FakeHostControlClient observerClient = new()
+            {
+                Host = "revit",
+            };
+            await using Tripo.HostUi.TripoPanelSession observer =
+                new(
+                    new FakeConnector(observerClient),
+                    new Tripo.HostUi.TripoPanelRecoveryStore("revit", root));
+            await observer.ConnectAsync();
+            InvalidOperationException blocked =
+                await Assert.ThrowsAsync<InvalidOperationException>(
+                    () => observer.SetApiKeyAsync(
+                        "replacement-key",
+                        persist: false));
+
+            Assert.Contains("another Rhino/Revit panel", blocked.Message);
+            Assert.Null(observerClient.LastApiKey);
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task CurrentHintExclusionRequiresExactOwnerIdentity()
+    {
+        string root = CreateTemporaryRoot();
+        try
+        {
+            Tripo.HostUi.TripoPanelRecoveryStore store =
+                new("rhino", root);
+            await using Tripo.HostUi.TripoPanelSession session =
+                new(
+                    new FakeConnector(new FakeHostControlClient()),
+                    store);
+            await session.ConnectAsync();
+            session.PrepareGeneration(
+                "a chair",
+                10_000,
+                withMaterials: false);
+            await session.DispatchPreparedGenerationAsync(
+                userConfirmedExternalCost: true);
+
+            string file = Assert.Single(
+                Directory.GetFiles(
+                    Path.Combine(root, "ui-recovery", "rhino"),
+                    "*.json"));
+            Tripo.HostUi.TripoPanelRecoveryHint hint =
+                System.Text.Json.JsonSerializer.Deserialize<
+                    Tripo.HostUi.TripoPanelRecoveryHint>(
+                    File.ReadAllText(file),
+                    Tripo.Bridge.BridgeJson.Options)
+                ?? throw new InvalidOperationException(
+                    "The recovery hint could not be read.");
+            hint = hint with
+            {
+                OwnerProcessId = int.MaxValue,
+                OwnerProcessStartedAtUtc = DateTimeOffset.UnixEpoch,
+            };
+            File.WriteAllText(
+                file,
+                System.Text.Json.JsonSerializer.Serialize(
+                    hint,
+                    CreateStrictRecoveryJsonOptions()));
+            Tripo.Bridge.BridgePaths.SetPrivateFileMode(file);
+
+            Assert.True(
+                store.LoadCredentialMutationBlocks(
+                    excludeCurrentStoreHint: true).HasBlock);
+        }
+        finally
+        {
             Directory.Delete(root, recursive: true);
         }
     }

@@ -175,6 +175,21 @@ public sealed record TripoPanelState(
         HasUnresolvedPaidDispatch ||
         (ImportDispatchAttempted && ImportReceipt is null);
 
+    public bool HasCredentialBoundWorkflow =>
+        GenerationDispatchAttempted ||
+        GenerationReceipt is not null ||
+        GenerationOperationStatus is not null ||
+        GenerationStatus is not null ||
+        ConversionDispatchAttempted ||
+        ConversionReceipt is not null ||
+        ConversionOperationStatus is not null ||
+        ConversionStatus is not null ||
+        ImportDispatchAttempted ||
+        ImportReceipt is not null;
+
+    public bool RequiresCredentialRecovery =>
+        HasCredentialBoundWorkflow;
+
     public bool HasDurableGenerationTask =>
         GenerationReceipt is not null ||
         GenerationOperationStatus?.TaskIdDurable == true;
@@ -338,7 +353,16 @@ public sealed class TripoPanelSession : IAsyncDisposable
                 using IDisposable? lease =
                     _recoveryStore?.AcquireCredentialWorkflowLease();
                 EnsureNoStaleRecovery();
-                EnsureCredentialMutationAllowed();
+                if (persist && State.RequiresCredentialRecovery)
+                {
+                    throw new InvalidOperationException(
+                        "A recovery API key must remain session-only until " +
+                        "the account-bound workflow is reconciled and " +
+                        "explicitly reset.");
+                }
+
+                EnsureCredentialMutationAllowed(
+                    allowCredentialRecovery: true);
                 Tripo.Bridge.IHostControlClient client = RequireClient();
                 Tripo.Bridge.HostControlCredentialMutationReceipt receipt =
                     await client.SetApiKeyAsync(apiKey, persist, token)
@@ -359,7 +383,8 @@ public sealed class TripoPanelSession : IAsyncDisposable
                 using IDisposable? lease =
                     _recoveryStore?.AcquireCredentialWorkflowLease();
                 EnsureNoStaleRecovery();
-                EnsureCredentialMutationAllowed();
+                EnsureCredentialMutationAllowed(
+                    allowCredentialRecovery: false);
                 Tripo.Bridge.IHostControlClient client = RequireClient();
                 Tripo.Bridge.HostControlCredentialMutationReceipt receipt =
                     await client.ClearApiKeyAsync(token).ConfigureAwait(false);
@@ -1235,18 +1260,22 @@ public sealed class TripoPanelSession : IAsyncDisposable
         }
     }
 
-    private void EnsureCredentialMutationAllowed()
+    private void EnsureCredentialMutationAllowed(
+        bool allowCredentialRecovery)
     {
-        if (State.HasUnresolvedPaidDispatch)
+        TripoPanelState state = State;
+        if (state.HasCredentialBoundWorkflow &&
+            !allowCredentialRecovery)
         {
             throw new InvalidOperationException(
-                "The API key cannot change while a paid operation has an " +
-                "unresolved dispatch. Reconcile it with Refresh or retry the " +
-                "same operation ID first.");
+                "The API key cannot change or be cleared while an " +
+                "account-bound workflow remains active. Refresh it to a " +
+                "terminal status or reconcile it, then explicitly reset first.");
         }
 
         TripoPanelRecoveryLoadResult global =
-            _recoveryStore?.LoadCredentialMutationBlocks() ??
+            _recoveryStore?.LoadCredentialMutationBlocks(
+                excludeCurrentStoreHint: true) ??
             TripoPanelRecoveryLoadResult.Empty;
         if (global.HasBlock)
         {

@@ -5,6 +5,99 @@ namespace Tripo.HostUi.Tests;
 public sealed class TripoPanelPresentationTests
 {
     [Fact]
+    public void ApiKeyPromptPolicyMakesRecoverySessionOnlyAndUsesLatestUuid()
+    {
+        Tripo.HostUi.PreparedTextGeneration generation = new(
+            "a chair",
+            10_000,
+            false,
+            DocumentSessionId,
+            "11111111-1111-4111-8111-111111111111");
+        Tripo.HostUi.PreparedObjConversion conversion = new(
+            "task_source123",
+            10_000,
+            false,
+            DocumentSessionId,
+            "22222222-2222-4222-8222-222222222222");
+        Tripo.HostUi.PreparedObjImport import = new(
+            "task_conversion123",
+            "Chair",
+            DocumentSessionId,
+            "33333333-3333-4333-8333-333333333333",
+            "native",
+            true);
+        Tripo.HostUi.TripoApiKeyPromptPolicy policy =
+            Tripo.HostUi.TripoApiKeyPromptPolicy.Create(
+                ReadyState() with
+                {
+                    PreparedGeneration = generation,
+                    GenerationDispatchAttempted = true,
+                    PreparedConversion = conversion,
+                    ConversionDispatchAttempted = true,
+                    PreparedImport = import,
+                    ImportDispatchAttempted = true,
+                });
+
+        Assert.True(policy.Replacing);
+        Assert.True(policy.RecoveryMode);
+        Assert.True(policy.ExactOriginalKeyRequired);
+        Assert.False(policy.PersistAllowed);
+        Assert.False(policy.RequiresReplacementConfirmation);
+        Assert.Equal(import.OperationId, policy.WorkflowOperationId);
+    }
+
+    [Fact]
+    public void ApiKeyPromptPolicyKeepsNormalReplacementAttestation()
+    {
+        Tripo.HostUi.TripoApiKeyPromptPolicy policy =
+            Tripo.HostUi.TripoApiKeyPromptPolicy.Create(
+                ReadyState());
+
+        Assert.True(policy.Replacing);
+        Assert.False(policy.RecoveryMode);
+        Assert.False(policy.ExactOriginalKeyRequired);
+        Assert.True(policy.PersistAllowed);
+        Assert.True(policy.RequiresReplacementConfirmation);
+        Assert.Null(policy.WorkflowOperationId);
+    }
+
+    [Fact]
+    public void ApiKeyPromptPolicyIgnoresUnsentDownstreamUuid()
+    {
+        Tripo.HostUi.PreparedTextGeneration generation = new(
+            "a chair",
+            10_000,
+            false,
+            DocumentSessionId,
+            "11111111-1111-4111-8111-111111111111");
+        Tripo.HostUi.PreparedObjConversion conversion = new(
+            "task_source123",
+            10_000,
+            false,
+            DocumentSessionId,
+            "22222222-2222-4222-8222-222222222222");
+        Tripo.HostUi.TripoApiKeyPromptPolicy policy =
+            Tripo.HostUi.TripoApiKeyPromptPolicy.Create(
+                ReadyState() with
+                {
+                    PreparedGeneration = generation,
+                    GenerationDispatchAttempted = true,
+                    GenerationReceipt =
+                        new Tripo.Bridge.HostControlTextTaskCreationReceipt(
+                            generation.OperationId,
+                            "task_source123",
+                            "v3"),
+                    PreparedConversion = conversion,
+                });
+
+        Assert.True(policy.RecoveryMode);
+        Assert.False(policy.ExactOriginalKeyRequired);
+        Assert.Equal(
+            generation.OperationId,
+            policy.WorkflowOperationId);
+    }
+
+    [Fact]
     public void InitialStateIsCompactAndDisconnected()
     {
         Tripo.HostUi.TripoPanelPresentation presentation =
@@ -152,7 +245,7 @@ public sealed class TripoPanelPresentationTests
     }
 
     [Fact]
-    public void RecoveryShortcutCannotBypassCurrentUnresolvedPaidDispatch()
+    public void CurrentUnresolvedPaidDispatchKeepsRecoveryKeyEntryAvailable()
     {
         Tripo.HostUi.TripoPanelPresentation presentation =
             Present(
@@ -163,14 +256,44 @@ public sealed class TripoPanelPresentationTests
                 BlockingGenerationRecovery());
 
         Assert.True(presentation.ReviewRecoveryEnabled);
-        Assert.False(presentation.ApiKeyEnabled);
+        Assert.True(presentation.ApiKeyEnabled);
         Assert.False(presentation.GenerateEnabled);
         Assert.Equal(
             "Reload and review all work…",
             presentation.RecoveryActionText);
         Assert.Contains(
+            "recovery",
+            presentation.ApiKeyText,
+            StringComparison.OrdinalIgnoreCase);
+        Assert.Contains(
             "preserve dispatched operation IDs",
             presentation.RecoveryDetails);
+    }
+
+    [Fact]
+    public void MissingKeyDuringPaidRecoveryKeepsSessionOnlyEntryAvailable()
+    {
+        Tripo.HostUi.TripoPanelPresentation presentation =
+            Present(
+                ReadyState() with
+                {
+                    CredentialStatus =
+                        new Tripo.Bridge.HostControlCredentialStatusReceipt(
+                            false,
+                            "none",
+                            false,
+                            true,
+                            "keychain",
+                            false),
+                    GenerationDispatchAttempted = true,
+                });
+
+        Assert.True(presentation.ApiKeyEnabled);
+        Assert.Contains(
+            "Restore",
+            presentation.ApiKeyText,
+            StringComparison.Ordinal);
+        Assert.False(presentation.GenerateEnabled);
     }
 
     [Fact]

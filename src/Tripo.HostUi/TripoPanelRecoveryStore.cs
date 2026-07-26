@@ -261,7 +261,8 @@ public sealed class TripoPanelRecoveryStore : IDisposable
     public TripoPanelRecoveryLoadResult LoadStale() =>
         Load(includeActiveOwners: false);
 
-    public TripoPanelRecoveryLoadResult LoadCredentialMutationBlocks()
+    public TripoPanelRecoveryLoadResult LoadCredentialMutationBlocks(
+        bool excludeCurrentStoreHint = false)
     {
         List<LoadedTripoPanelRecoveryHint> hints = [];
         List<TripoPanelRecoveryIssue> issues = [];
@@ -297,7 +298,10 @@ public sealed class TripoPanelRecoveryStore : IDisposable
 
             hints.AddRange(
                 result.Hints
-                    .Where(HasUnresolvedPaidOperation)
+                    .Where(HasCredentialSensitiveOperation)
+                    .Where(loaded =>
+                        !excludeCurrentStoreHint ||
+                        !IsCurrentOwnedHint(loaded))
                     .Select(loaded => loaded with
                     {
                         FileName = host + "/" + loaded.FileName,
@@ -1180,10 +1184,32 @@ public sealed class TripoPanelRecoveryStore : IDisposable
         return File.Exists(path) && IsReparsePoint(path);
     }
 
-    private static bool HasUnresolvedPaidOperation(
+    private static bool HasCredentialSensitiveOperation(
         LoadedTripoPanelRecoveryHint loaded) =>
-        loaded.Hint.Generation is { TaskIdDurable: false } ||
-        loaded.Hint.Conversion is { TaskIdDurable: false };
+        loaded.Hint.Generation is not null ||
+        loaded.Hint.Conversion is not null ||
+        loaded.Hint.Import is { ReceiptKnown: false };
+
+    private bool IsCurrentOwnedHint(
+        LoadedTripoPanelRecoveryHint loaded)
+    {
+        TripoPanelRecoveryHint hint = loaded.Hint;
+        if (!string.Equals(
+                hint.RecoveryId,
+                _recoveryId,
+                StringComparison.Ordinal) ||
+            !string.Equals(
+                hint.Host,
+                _host,
+                StringComparison.Ordinal) ||
+            hint.OwnerProcessId != _ownerProcessId ||
+            hint.OwnerProcessStartedAtUtc != _ownerProcessStartedAtUtc)
+        {
+            return false;
+        }
+
+        return OwnsPath(GetHintPath(hint.RecoveryId));
+    }
 
     private static void EnsurePrivateNonReparseDirectory(string path)
     {
