@@ -1036,7 +1036,14 @@ internal sealed class WindowsCredentialManagerApiKeyStore :
         finally
         {
             CryptographicOperations.ZeroMemory(bytes);
-            Marshal.FreeCoTaskMem(blob);
+            try
+            {
+                ZeroUnmanagedMemory(blob, bytes.Length);
+            }
+            finally
+            {
+                Marshal.FreeCoTaskMem(blob);
+            }
         }
     }
 
@@ -1057,6 +1064,16 @@ internal sealed class WindowsCredentialManagerApiKeyStore :
             "Windows Credential Manager rejected the credential operation. " +
             "The API key was not written to a fallback file.",
             innerException: new Win32Exception(error));
+
+    private static void ZeroUnmanagedMemory(
+        IntPtr pointer,
+        int length)
+    {
+        for (int index = 0; index < length; index++)
+        {
+            Marshal.WriteByte(pointer, index, 0);
+        }
+    }
 
     [DllImport(
         "advapi32.dll",
