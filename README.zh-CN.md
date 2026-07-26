@@ -28,9 +28,11 @@ sidecar 是唯一解析、存储或使用 Tripo API key 的进程。plug-in 的 
 > RhinoCommon/Grasshopper packages 编译。Eto text workflow、Grasshopper
 > text/本地 PNG 或 JPEG workflow、credential dialog、sidecar launcher 与 bundled
 > sidecar layout 已存在源码，并有 portable control/workflow/MCP/process tests。
-> 真实 Rhino panel/GHA 加载、component 可见性与 menu 交互、macOS Keychain 与
-> Windows Credential Manager 交互、Undo、scale/orientation、性能与视觉验收仍是
-> open gates。目前没有 Yak package、安装器、签名、notarization 或自动更新机制。
+> Windows CI 还会对隔离、合成的 Credential Manager target 执行 write/read/delete
+> canary。真实 Rhino panel/GHA 加载、component 可见性与 menu 交互、macOS
+> Keychain 与 production-user Credential Manager 交互、Undo、scale/orientation、
+> 性能与视觉验收仍是 open gates。目前没有 Yak package、安装器、签名、
+> notarization 或自动更新机制。
 
 GHA 的详细构建、安装、components、隐私与恢复说明见
 [Grasshopper 指南](./src/Tripo.Rhino.Grasshopper/README.zh-CN.md)。
@@ -231,6 +233,14 @@ store** 勾选，会写入 macOS Keychain 或 Windows Credential Manager；取�
 paid-operation identity，并可能让未完成 panel 或 MCP operation 的 same-UUID
 recovery fail closed；轮换 key 前必须先核对并解决每个未完成的付费 UUID。
 
+native 持久化 identity 是：macOS generic-password item 的 service
+`ai.qrost.TripoMCPs.TripoV3`，account 为当前 OS username；Windows Generic
+Credential 的 target 为 `TripoMCPs/TripoV3/<username>`。Windows 不会把 key 写入
+project 或临时文件。不要自行创建 temp key file：不需持久化时应取消勾选，仅存
+sidecar session memory；需要持久化则使用当前用户 native store；MCP 使用 client
+secret/environment 机制。`secrets/tripo-v3-api-key` 只是在不支持 native store 的
+OS 上明确报告的 private fallback，绝不是 Windows 或 macOS 路径。
+
 最安全的本地数据设置是 Rhino 与 MCP server 都不设置
 `TRIPO_LOCAL_DATA_DIR`。双方会共同使用当前用户 local application-data 目录下的
 `TripoMCP`。
@@ -258,6 +268,9 @@ roots，无法建立正确的 bridge 连接。
    会被拒绝，不会静默继承旧 task。
 3. 若没有可用 key，在 **API key…** 粘贴 key，并选择 persistent 或 session-only
    storage。可在 [Tripo Platform](https://platform.tripo3d.ai/api-keys) 创建 key。
+   active account-bound recovery 中该 action 仍可用，但会强制 session-only：
+   ambiguous paid UUID 必须恢复精确原 key；accepted task/import 必须使用同一
+   Tripo account 的 key。
 4. 输入 prompt、face limit 与材质选项，然后点击 **Generate**。panel 会先显示
    可选择复制的 durable operation UUID，再显示 credit confirmation；拒绝确认不会
    发送付费请求。
@@ -271,8 +284,10 @@ panel 不自动轮询，也不声称能取消远端 task。响应丢失后，该
 **Refresh**；只有 paid-operation journal 表明 creation 可以继续时，重试才会启用，
 button 会明确标为 **Retry same UUID**。一旦取得 durable task 或 import receipt，
 对应阶段 action 就会禁用，不会伪装成新请求。任意 dispatch 未决时，
-**New workflow** 会禁用；付费 dispatch 未决时，API-key mutation 也会禁用。只要
-Rhino 保留该 panel instance，隐藏或关闭 tab 都不会取消 workflow。durable
+**New workflow** 会禁用；account-bound workflow 显式 reset 前，stored-key
+replacement 与 clear 都会禁用。当前 effective key 缺失或被拒时，只能以
+session-only key 恢复当前 workflow。只要 Rhino 保留该 panel instance，隐藏或关闭
+tab 都不会取消 workflow。durable
 `request_rejected` 不属于未决状态：generation 被拒会清除 generation 与 downstream
 stage；conversion 被拒只清除 conversion/import，并保留成功 generation。修正
 credential 后，为被拒阶段准备新 UUID。
@@ -288,9 +303,11 @@ Authorization header、URL 或任意 path。
 下次打开 panel 时会显示 stale recovery ID，并阻止新 workflow。
 另一个 Rhino process 拥有的 hint 会保守地阻塞，因为不能跨 process 猜测 panel
 session 是否仍存活；recovery 必须在 owner process 中完成，或在确认它退出后再进行。
-API-key change 还会拒绝 Rhino 或 Revit 中任何未决且已记录的 UI paid hint、无法
-确认已退出的 foreign-owner record 或无效 recovery storage。一个 root-global UI
-intent lease 会串行化跨 panel 的 credential-recovery scan、key-mutation request
+API-key change 还会拒绝 Rhino 或 Revit 中任何尚未 reset 的
+generation/conversion workflow、未确认 import、无法确认已退出的 foreign-owner
+record 或无效 recovery storage。只有 host、recovery ID、process identity、启动
+时间与 owned path 全部匹配时，才可仅排除当前 panel 自己的 hint。一个 root-global
+UI intent lease 会串行化跨 panel 的 credential-recovery scan、key-mutation request
 与 paid dispatch call。另一个 private sidecar execution lease 会持有实际 key
 mutation，以及每个 UI 或 standalone MCP paid workflow 从 credential-derived
 fingerprint 直到 durable task、明确 `request_rejected` 或 ambiguous-outcome journal

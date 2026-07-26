@@ -26,7 +26,9 @@ The automated suite covers:
 
 - authenticated, bounded bridge and host-control transports;
 - exact host PID and document-session binding;
-- credential precedence, native secret-store behavior, and redaction;
+- credential precedence and redaction, macOS/Windows native-store selection
+  without file fallback, and an opt-in isolated Windows native
+  write/read/delete canary;
 - paid-operation write-ahead journal, replay, conflict, lock, and
   `outcome_unknown` refusal to resend;
 - image transfer, signed download, ZIP extraction, bundle hashing, OBJ/MTL
@@ -48,6 +50,16 @@ contracts against pinned reference packages. It does not prove that Rhino
 loaded the `.rhp` or `.gha`, that macOS Keychain or Windows Credential Manager
 behaved correctly in the real host, or that imported materials render as
 intended.
+
+On the Windows CI lane,
+`TRIPO_RUN_WINDOWS_CREDENTIAL_MANAGER_CANARY=1` exercises `CredWriteW`,
+`CredReadW`, and `CredDeleteW` with a synthetic value under a unique
+`TripoMCPs/Tests/.../<pid>/<guid>` target. Cleanup runs in `finally`; a hard
+runner termination can still leave a clearly prefixed synthetic orphan. The
+canary never reads `TRIPO_API_KEY` or the production
+`TripoMCPs/TripoV3/<username>` target. It proves the native API works in that
+ephemeral runner profile, not that Rhino UI, a production user profile, or
+cross-host deployment has been accepted.
 
 Real Rhino 8 acceptance remains a separate gate:
 

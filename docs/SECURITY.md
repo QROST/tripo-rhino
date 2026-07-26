@@ -13,6 +13,11 @@
   current-user OS secret store. macOS uses Keychain and Windows uses Credential
   Manager. A private local file is used only on unsupported operating systems
   where no native store is implemented.
+- The macOS item uses service `ai.qrost.TripoMCPs.TripoV3` and the current OS
+  username as its account. The Windows Generic Credential target is
+  `TripoMCPs/TripoV3/<username>`. Supported desktop platforms never persist the
+  key in a temp file; a caller that does not want native persistence must use
+  sidecar-session memory or its MCP client's secret/environment mechanism.
 - `TRIPO_API_KEY` remains the recommended non-persistent path for MCP clients,
   CI, and power users. An environment key cannot be cleared by the sidecar.
 - Treat the key as an opaque Bearer credential; do not infer or rewrite a provider-specific prefix.
@@ -25,9 +30,11 @@
   key or Authorization material.
 - Credential status reports only presence/source and whether a stored key can
   be cleared. Set and clear responses never echo key material.
-- Native secret-store subprocesses have bounded input/output and timeouts. The
-  unsupported-platform fallback rejects symlinks, bounds file size and UTF-8
-  content, and enforces `0700` directory / `0600` file modes on Unix.
+- Native secret-store calls fail closed without falling back after an error.
+  Windows write buffers are cleared in managed and unmanaged memory before
+  release. The unsupported-platform fallback rejects symlinks, bounds file
+  size and UTF-8 content, and enforces `0700` directory / `0600` file modes on
+  Unix.
 - Signed download URLs are treated as short-lived secrets and are never persisted in receipts.
 - Paid-operation fingerprints use the API key only as an HMAC key over the exact request identity. The API key, prompt, signed URL, and artifact path are not written to the operation journal.
 - Replacing the effective key changes that fingerprint identity. The host
@@ -126,11 +133,15 @@ The lock and journal protect cooperating processes under one login. They do not 
   exited; inability to query process metadata remains blocking. Reconcile it in
   the owner process instead.
   Credential mutation additionally scans both Rhino and Revit recovery roots,
-  including active hints, and refuses while any recorded UI paid dispatch is
-  unresolved without a durable task ID, a foreign owner cannot be verified as
-  exited, or recovery storage is invalid. A definitive `request_rejected` stage
-  is cleared instead of remaining a mutation block. The UI holds its intent
-  lease from credential-recovery
+  including active hints, and refuses while any generation/conversion workflow
+  remains recorded before explicit reset, an import receipt is unconfirmed, a
+  foreign owner cannot be verified as exited, or recovery storage is invalid.
+  The only excluded hint must match the current store's host, recovery ID,
+  process ID, process start time, and owned path. A definitive
+  `request_rejected` stage is cleared instead of remaining a mutation block.
+  The current owner may restore a recovery key only in sidecar-session memory;
+  persistent replacement and clearing remain blocked until reset. The UI holds
+  its intent lease from credential-recovery
   scan through completion or cancellation of the key-mutation or paid
   host-control call. Independently, the sidecar holds a private execution lease
   for the actual credential mutation and for each paid workflow from before

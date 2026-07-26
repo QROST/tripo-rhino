@@ -30,10 +30,11 @@ the key to Rhino settings or the `.3dm` document.
 > against pinned RhinoCommon/Grasshopper packages. The Eto text workflow,
 > Grasshopper text/local-PNG-or-JPEG workflow, credential dialog, sidecar
 > launcher, and bundled sidecar layout exist in source, with portable
-> control/workflow/MCP/process tests. Real Rhino panel/GHA loading, component
-> visibility and menu interaction, macOS Keychain and Windows Credential
-> Manager interaction, Undo, scale/orientation, performance, and visual
-> acceptance remain open gates.
+> control/workflow/MCP/process tests. Windows CI also performs an isolated,
+> synthetic Credential Manager write/read/delete canary. Real Rhino panel/GHA
+> loading, component visibility and menu interaction, macOS Keychain and
+> production-user Credential Manager interaction, Undo, scale/orientation,
+> performance, and visual acceptance remain open gates.
 > There is no Yak package, installer, signing, notarization, or automatic update
 > mechanism.
 
@@ -252,6 +253,15 @@ files. Replacing the effective key changes paid-operation identity and can make
 same-UUID recovery fail closed for unfinished panel or MCP operations. Reconcile
 every unfinished paid UUID before rotating a key.
 
+The native persistent identities are a macOS generic-password item with service
+`ai.qrost.TripoMCPs.TripoV3` and the current OS username as its account, or a
+Windows Generic Credential with target `TripoMCPs/TripoV3/<username>`. Windows
+does not save the key in a project or temporary file. Do not create a temp key
+file: use session-only memory by clearing the checkbox, the native user store,
+or an MCP client's secret/environment mechanism. The private
+`secrets/tripo-v3-api-key` file is an explicitly reported fallback only on an
+unsupported OS, never the Windows or macOS path.
+
 The safest local-data configuration is to leave `TRIPO_LOCAL_DATA_DIR` unset in
 both processes. They then share the current user's default local
 application-data directory under `TripoMCP`.
@@ -283,7 +293,10 @@ recovery.
    silently adopting the old task.
 3. If no key is usable, paste one into **API key…** and choose persistent or
    session-only storage. Create keys at
-   [Tripo Platform](https://platform.tripo3d.ai/api-keys).
+   [Tripo Platform](https://platform.tripo3d.ai/api-keys). During an active
+   account-bound recovery, the same action remains available but is forced to
+   session-only: restore the exact original key for an ambiguous paid UUID, or
+   a key for the same Tripo account for an accepted task/import.
 4. Enter the prompt, face limit, and material preference. Click **Generate**.
    The panel displays a selectable durable operation UUID before showing a
    credit confirmation. Declining sends no paid request.
@@ -299,9 +312,11 @@ when the paid-operation journal says creation can resume, and the button is
 explicitly labelled **Retry same UUID**. Once a durable task or import
 receipt is known, the stage action is disabled instead of looking like a new
 request. **New workflow** is disabled while any dispatch is unresolved, and
-API-key mutation is disabled while a paid dispatch is unresolved. Hiding or
-closing a tab does not cancel the workflow while Rhino retains that panel
-instance. A durable `request_rejected` receipt is not unresolved: generation
+stored-key replacement and clearing remain disabled until an account-bound
+workflow is explicitly reset. A missing or rejected effective key can be
+restored for the current workflow only as a session key. Hiding or closing a
+tab does not cancel the workflow while Rhino retains that panel instance. A
+durable `request_rejected` receipt is not unresolved: generation
 rejection clears generation and downstream stages, while conversion rejection
 clears conversion/import and preserves successful generation. Correct the
 credential and prepare a new UUID for the rejected stage.
@@ -320,9 +335,12 @@ panel shows stale recovery IDs and blocks
 new workflows. A hint owned by another Rhino process is conservatively
 blocking because panel-session liveness is not guessed across processes.
 Recovery must happen in that owner process, or after its exit can be verified.
-API-key changes also refuse any unresolved recorded UI paid hint, unverifiable
-foreign-owner record, or invalid recovery storage from Rhino or Revit. A
-root-global UI intent lease serializes cross-panel credential-recovery scans,
+API-key changes also refuse any recorded generation/conversion workflow that
+has not been reset, any unconfirmed import, unverifiable foreign-owner record,
+or invalid recovery storage from Rhino or Revit. The exact current panel hint
+alone may be excluded after its host, recovery ID, process identity, start time,
+and owned path all match. A root-global UI intent lease serializes
+cross-panel credential-recovery scans,
 key-mutation requests, and paid dispatch calls. A separate private sidecar
 execution lease holds the actual key mutation and each paid UI or standalone
 MCP workflow from credential-derived fingerprinting through its durable task,
