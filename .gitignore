@@ -13,3 +13,5 @@ TestResults/
 *.user
 PROGRESS.md
 Chat.md
+private/
+*.key
