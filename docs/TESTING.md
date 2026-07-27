@@ -37,6 +37,8 @@ The automated suite covers:
   parsing, coordinate conversion, and parser limits;
 - host UI state, recovery hints, explicit paid confirmations, and stable UUID
   retries;
+- host-agnostic UI render coalescing, including leading busy and trailing final
+  state, stale-session replacement, and disposal before queued callbacks;
 - MCP schema plus real stdio initialization/tool-list handshakes;
 - raw and packaged sidecar health/shutdown handshakes;
 - stable Rhino plug-in identity;
@@ -80,11 +82,17 @@ Real Rhino 8 acceptance remains a separate gate:
    status**.
 7. Close the document while a recovery status query is delayed and verify no
    dialog, archival, or API-key mutation continues after panel teardown.
-8. Switch or close documents during delayed work and confirm fail-closed
+8. Repeatedly click **Refresh generation** through busy, status, and final
+   transitions on macOS; confirm the Eto panel remains responsive and the final
+   status or error is visible.
+9. Open and cancel/save the API-key and recovery dialogs repeatedly; confirm
+   they close before sidecar work begins and do not trigger Scrollable layout
+   crashes.
+10. Switch or close documents during delayed work and confirm fail-closed
    behavior.
-9. Verify scale, handedness, material appearance, one-step Undo, restart
+11. Verify scale, handedness, material appearance, one-step Undo, restart
    recovery, and no unexpected document mutation from Grasshopper recompute.
-10. Verify package layout from a clean checkout rather than a developer `bin/`
+12. Verify package layout from a clean checkout rather than a developer `bin/`
    directory.
 
 Static checks, unit/process tests, real Rhino interaction, visual acceptance,

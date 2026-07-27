@@ -18,6 +18,8 @@ public sealed class TripoRhinoPanel : Panel, IPanel
     private readonly uint _documentSerialNumber;
     private readonly TripoRhinoPlugin _plugin;
     private Tripo.HostUi.TripoPanelSession _session;
+    private readonly Tripo.HostUi.CoalescingUiRenderQueue<PanelRenderFrame>
+        _renderQueue;
     private readonly CancellationTokenSource _panelLifetime = new();
     private readonly TextArea _prompt = new()
     {
@@ -113,12 +115,17 @@ public sealed class TripoRhinoPanel : Panel, IPanel
     private bool _recoveryWasBlocked;
     private bool _recoveryReviewInProgress;
     private bool _closing;
+    private long _sessionGeneration = 1;
 
     public TripoRhinoPanel(uint documentSerialNumber)
     {
         _documentSerialNumber = documentSerialNumber;
         _plugin = TripoRhinoPlugin.Instance;
         _session = _plugin.CreatePanelSession();
+        _renderQueue = new(
+            callback => Application.Instance.AsyncInvoke(callback),
+            ApplyRenderFrame,
+            ShowError);
         _generationDiagnosticBlock = FieldBlock(
             "Generation diagnostic",
             _generationDiagnostic);
@@ -163,7 +170,7 @@ public sealed class TripoRhinoPanel : Panel, IPanel
         _prompt.TextChanged += OnFormInputChanged;
         _name.TextChanged += OnFormInputChanged;
         Load += OnLoaded;
-        UpdateControls(_session.State);
+        ApplyControls(_session.State, _session.Recovery);
     }
 
     public void PanelShown(uint documentSerialNumber, ShowPanelReason reason)
@@ -422,7 +429,7 @@ public sealed class TripoRhinoPanel : Panel, IPanel
         await ConnectSafelyAsync();
 
     private void OnFormInputChanged(object? sender, EventArgs args) =>
-        UpdateControls(_session.State);
+        RequestRender();
 
     private async void OnConnect(object? sender, EventArgs args) =>
         await ConnectSafelyAsync();
@@ -500,24 +507,59 @@ public sealed class TripoRhinoPanel : Panel, IPanel
 
     private async Task PromptForCurrentWorkflowApiKeyAsync()
     {
-        Tripo.HostUi.TripoApiKeyPromptPolicy policy =
-            Tripo.HostUi.TripoApiKeyPromptPolicy.Create(
-                _session.State);
-        if (policy.RecoveryMode &&
-            !ConfirmRecoveryApiKey(policy))
+        if (_closing)
         {
             return;
         }
 
-        await PromptForApiKeyAsync(policy);
+        Tripo.HostUi.TripoPanelSession ownerSession = _session;
+        Tripo.HostUi.TripoApiKeyPromptPolicy policy =
+            Tripo.HostUi.TripoApiKeyPromptPolicy.Create(
+                ownerSession.State);
+        ApiKeySubmission? submission =
+            await RhinoUiThread.InvokeAsync(
+                    () => CollectApiKeySubmission(policy),
+                    _panelLifetime.Token)
+                .ConfigureAwait(false);
+        if (submission is null)
+        {
+            return;
+        }
+
+        if (_closing || !ReferenceEquals(ownerSession, _session))
+        {
+            submission.Clear();
+            return;
+        }
+
+        string secret = submission.TakeSecret();
+        try
+        {
+            await ownerSession.SetApiKeyAsync(
+                    secret,
+                    submission.Persist,
+                    _panelLifetime.Token)
+                .ConfigureAwait(false);
+        }
+        finally
+        {
+            secret = string.Empty;
+            submission.Clear();
+        }
     }
 
-    private async Task PromptForApiKeyAsync(
+    private ApiKeySubmission? CollectApiKeySubmission(
         Tripo.HostUi.TripoApiKeyPromptPolicy policy)
     {
         if (_closing)
         {
-            return;
+            return null;
+        }
+
+        if (policy.RecoveryMode &&
+            !ConfirmRecoveryApiKey(policy))
+        {
+            return null;
         }
 
         PasswordBox password = new()
@@ -551,6 +593,37 @@ public sealed class TripoRhinoPanel : Panel, IPanel
                     : "Save API key",
         };
         Button cancel = new() { Text = "Cancel" };
+        StackLayout content = new()
+        {
+            Padding = 12,
+            Spacing = 8,
+        };
+        content.Items.Add(
+            new Label
+            {
+                Text = ApiKeyInstructions,
+                Wrap = WrapMode.Word,
+            });
+        if (policy.RecoveryMode)
+        {
+            content.Items.Add(
+                new Label
+                {
+                    Text = policy.ExactOriginalKeyRequired
+                        ? "Recovery mode: this key is session-only. " +
+                          "Restore the exact original key for the unresolved " +
+                          "paid UUID."
+                        : "Recovery mode: this key is session-only. Use a key " +
+                          "for the same Tripo account as the unfinished workflow.",
+                    Wrap = WrapMode.Word,
+                });
+        }
+
+        content.Items.Add(LeftLabel("API key"));
+        content.Items.Add(password);
+        content.Items.Add(persist);
+        content.Items.Add(confirmReplacement);
+        content.Items.Add(RightAlignedActions(save, cancel));
         Dialog<bool> dialog = new()
         {
             Title = policy.Replacing
@@ -560,43 +633,7 @@ public sealed class TripoRhinoPanel : Panel, IPanel
                 520,
                 policy.Replacing ? 410 : 370),
             Resizable = true,
-            Content = new Scrollable
-            {
-                Border = BorderType.None,
-                ExpandContentHeight = true,
-                ExpandContentWidth = true,
-                Content = new StackLayout
-                {
-                    Padding = 12,
-                    Spacing = 8,
-                    Items =
-                    {
-                        new Label
-                        {
-                            Text = ApiKeyInstructions,
-                            Wrap = WrapMode.Word,
-                        },
-                        policy.RecoveryMode
-                            ? new Label
-                            {
-                                Text = policy.ExactOriginalKeyRequired
-                                    ? "Recovery mode: this key is session-only. " +
-                                      "Restore the exact original key for the " +
-                                      "unresolved paid UUID."
-                                    : "Recovery mode: this key is session-only. " +
-                                      "Use a key for the same Tripo account as " +
-                                      "the unfinished workflow.",
-                                Wrap = WrapMode.Word,
-                            }
-                            : null,
-                        LeftLabel("API key"),
-                        password,
-                        persist,
-                        confirmReplacement,
-                        RightAlignedActions(save, cancel),
-                    },
-                },
-            },
+            Content = content,
         };
         void UpdateSaveEnabled() =>
             save.Enabled =
@@ -616,30 +653,26 @@ public sealed class TripoRhinoPanel : Panel, IPanel
         dialog.AbortButton = cancel;
         dialog.Shown += (_, _) => password.Focus();
 
-        string? secret = null;
         try
         {
             if (!dialog.ShowModal(this))
             {
-                return;
+                return null;
             }
 
             if (_closing)
             {
-                return;
+                return null;
             }
 
-            secret = password.Text;
+            string secret = password.Text;
+            bool shouldPersist = persist.Checked == true;
             password.Text = string.Empty;
-            await _session.SetApiKeyAsync(
-                secret,
-                persist.Checked == true,
-                _panelLifetime.Token);
+            return new ApiKeySubmission(secret, shouldPersist);
         }
         finally
         {
             password.Text = string.Empty;
-            secret = null;
             dialog.Dispose();
         }
     }
@@ -671,7 +704,7 @@ public sealed class TripoRhinoPanel : Panel, IPanel
         }
 
         _recoveryReviewInProgress = true;
-        UpdateControls(_session.State);
+        RequestRender();
         try
         {
             Tripo.HostUi.TripoPanelRecoveryLoadResult recovery =
@@ -680,7 +713,7 @@ public sealed class TripoRhinoPanel : Panel, IPanel
             {
                 _recoveryInspection = null;
                 _recoveryInspectionToken = null;
-                UpdateControls(_session.State);
+                RequestRender();
                 return;
             }
 
@@ -706,7 +739,7 @@ public sealed class TripoRhinoPanel : Panel, IPanel
                 Tripo.HostUi.TripoPanelRecoveryReviewFormatter.Format(
                     snapshot);
             _recoveryInspectionToken = snapshot.RecoveryToken;
-            UpdateControls(_session.State);
+            RequestRender();
         }
         catch (OperationCanceledException) when (_closing)
         {
@@ -721,7 +754,7 @@ public sealed class TripoRhinoPanel : Panel, IPanel
         finally
         {
             _recoveryReviewInProgress = false;
-            UpdateControls(_session.State);
+            RequestRender();
         }
     }
 
@@ -751,7 +784,7 @@ public sealed class TripoRhinoPanel : Panel, IPanel
         }
 
         _recoveryReviewInProgress = true;
-        UpdateControls(_session.State);
+        RequestRender();
         try
         {
             Tripo.HostUi.TripoPanelRecoveryLoadResult recovery =
@@ -828,7 +861,7 @@ public sealed class TripoRhinoPanel : Panel, IPanel
                     snapshot);
             _recoveryInspection = details;
             _recoveryInspectionToken = snapshot.RecoveryToken;
-            UpdateControls(_session.State);
+            RequestRender();
             if (snapshot.HasOperationInProgress)
             {
                 MessageBox.Show(
@@ -872,13 +905,13 @@ public sealed class TripoRhinoPanel : Panel, IPanel
 
             _recoveryInspection = null;
             _recoveryInspectionToken = null;
-            UpdateControls(_session.State);
+            RequestRender();
             return !_session.Recovery.HasBlock;
         }
         finally
         {
             _recoveryReviewInProgress = false;
-            UpdateControls(_session.State);
+            RequestRender();
         }
     }
 
@@ -898,6 +931,7 @@ public sealed class TripoRhinoPanel : Panel, IPanel
     private async Task ReloadPanelSessionForRecoveryAsync()
     {
         Tripo.HostUi.TripoPanelSession previous = _session;
+        _renderQueue.CancelPending();
         previous.StateChanged -= OnStateChanged;
         previous.RecoveryChanged -= OnRecoveryChanged;
         await _plugin.ReleasePanelSessionAsync(previous);
@@ -909,12 +943,13 @@ public sealed class TripoRhinoPanel : Panel, IPanel
         Tripo.HostUi.TripoPanelSession replacement =
             _plugin.CreatePanelSession();
         _session = replacement;
+        _sessionGeneration++;
         replacement.StateChanged += OnStateChanged;
         replacement.RecoveryChanged += OnRecoveryChanged;
         _recoveryInspection = null;
         _recoveryInspectionToken = null;
         _displayedPreparedOperationId = null;
-        UpdateControls(replacement.State);
+        RequestRender();
     }
 
     private bool ShowRecoveryReviewDialog(string details)
@@ -941,44 +976,39 @@ public sealed class TripoRhinoPanel : Panel, IPanel
                 "Archive only the local recovery notice and unlock Tripo.",
         };
         Button cancel = new() { Text = "Keep blocked" };
+        StackLayout content = new()
+        {
+            Padding = 12,
+            Spacing = 9,
+            Items =
+            {
+                new Label
+                {
+                    Text =
+                        "A previous paid request may have reached Tripo " +
+                        "before its result was saved. Review the evidence " +
+                        "below to avoid an accidental duplicate charge.",
+                    Wrap = WrapMode.Word,
+                },
+                evidence,
+                confirmed,
+                new Label
+                {
+                    Text =
+                        "Continuing archives only this local notice. It " +
+                        "does not retry, cancel, refund, or delete a remote " +
+                        "Tripo task.",
+                    Wrap = WrapMode.Word,
+                },
+                RightAlignedActions(unlock, cancel),
+            },
+        };
         Dialog<bool> dialog = new()
         {
             Title = "Review previous Tripo work",
             ClientSize = new Eto.Drawing.Size(600, 500),
             Resizable = true,
-            Content = new Scrollable
-            {
-                Border = BorderType.None,
-                ExpandContentHeight = true,
-                ExpandContentWidth = true,
-                Content = new StackLayout
-                {
-                    Padding = 12,
-                    Spacing = 9,
-                    Items =
-                    {
-                        new Label
-                        {
-                            Text =
-                                "A previous paid request may have reached Tripo " +
-                                "before its result was saved. Review the evidence " +
-                                "below to avoid an accidental duplicate charge.",
-                            Wrap = WrapMode.Word,
-                        },
-                        evidence,
-                        confirmed,
-                        new Label
-                        {
-                            Text =
-                                "Continuing archives only this local notice. It " +
-                                "does not retry, cancel, refund, or delete a remote " +
-                                "Tripo task.",
-                            Wrap = WrapMode.Word,
-                        },
-                        RightAlignedActions(unlock, cancel),
-                    },
-                },
-            },
+            Content = content,
         };
         confirmed.CheckedChanged +=
             (_, _) => unlock.Enabled = confirmed.Checked == true;
@@ -1016,7 +1046,7 @@ public sealed class TripoRhinoPanel : Panel, IPanel
                     _prompt.Text,
                     checked((int)_faceLimit.Value),
                     _withMaterials.Checked == true);
-            UpdateControls(_session.State);
+            RequestRender();
             if (!ConfirmPaidDispatch(
                     retry
                         ? "Retry same generation operation?"
@@ -1059,7 +1089,7 @@ public sealed class TripoRhinoPanel : Panel, IPanel
                 _session.PrepareConversion(
                     checked((int)_faceLimit.Value),
                     _withMaterials.Checked == true);
-            UpdateControls(_session.State);
+            RequestRender();
             if (!ConfirmPaidDispatch(
                     retry
                         ? "Retry same OBJ conversion operation?"
@@ -1101,7 +1131,7 @@ public sealed class TripoRhinoPanel : Panel, IPanel
                     _name.Text,
                     _importMode.SelectedValue?.ToString() ?? "native",
                     _applyMaterials.Checked == true);
-            UpdateControls(_session.State);
+            RequestRender();
             await _session.ImportPreparedAsync();
         }
         catch (Exception exception)
@@ -1145,45 +1175,82 @@ public sealed class TripoRhinoPanel : Panel, IPanel
         object? sender,
         Tripo.HostUi.TripoPanelState state)
     {
-        Application.Instance.AsyncInvoke(
-            () =>
-            {
-                if (!ReferenceEquals(sender, _session))
-                {
-                    return;
-                }
+        if (_closing ||
+            sender is not Tripo.HostUi.TripoPanelSession ownerSession ||
+            !ReferenceEquals(ownerSession, _session))
+        {
+            return;
+        }
 
-                UpdateControls(state);
-            });
+        RequestRender(ownerSession, state, ownerSession.Recovery);
     }
 
     private void OnRecoveryChanged(
         object? sender,
         Tripo.HostUi.TripoPanelRecoveryLoadResult recovery)
     {
-        Application.Instance.AsyncInvoke(
-            () =>
-            {
-                if (!ReferenceEquals(sender, _session))
-                {
-                    return;
-                }
+        if (_closing ||
+            sender is not Tripo.HostUi.TripoPanelSession ownerSession ||
+            !ReferenceEquals(ownerSession, _session))
+        {
+            return;
+        }
 
-                if (_recoveryInspectionToken is not null &&
-                    !string.Equals(
-                        _recoveryInspectionToken,
-                        recovery.PresentationToken,
-                        StringComparison.Ordinal))
-                {
-                    _recoveryInspection = null;
-                    _recoveryInspectionToken = null;
-                }
-
-                UpdateControls(_session.State);
-            });
+        RequestRender(ownerSession, ownerSession.State, recovery);
     }
 
-    private void UpdateControls(Tripo.HostUi.TripoPanelState state)
+    private void RequestRender()
+    {
+        Tripo.HostUi.TripoPanelSession ownerSession = _session;
+        RequestRender(
+            ownerSession,
+            ownerSession.State,
+            ownerSession.Recovery);
+    }
+
+    private void RequestRender(
+        Tripo.HostUi.TripoPanelSession ownerSession,
+        Tripo.HostUi.TripoPanelState state,
+        Tripo.HostUi.TripoPanelRecoveryLoadResult recovery)
+    {
+        if (_closing)
+        {
+            return;
+        }
+
+        _renderQueue.Request(
+            new PanelRenderFrame(
+                ownerSession,
+                _sessionGeneration,
+                state,
+                recovery));
+    }
+
+    private void ApplyRenderFrame(PanelRenderFrame frame)
+    {
+        if (_closing ||
+            frame.SessionGeneration != _sessionGeneration ||
+            !ReferenceEquals(frame.OwnerSession, _session))
+        {
+            return;
+        }
+
+        if (_recoveryInspectionToken is not null &&
+            !string.Equals(
+                _recoveryInspectionToken,
+                frame.Recovery.PresentationToken,
+                StringComparison.Ordinal))
+        {
+            _recoveryInspection = null;
+            _recoveryInspectionToken = null;
+        }
+
+        ApplyControls(frame.State, frame.Recovery);
+    }
+
+    private void ApplyControls(
+        Tripo.HostUi.TripoPanelState state,
+        Tripo.HostUi.TripoPanelRecoveryLoadResult recovery)
     {
         if (_closing)
         {
@@ -1193,10 +1260,10 @@ public sealed class TripoRhinoPanel : Panel, IPanel
         Tripo.HostUi.TripoPanelPresentation presentation =
             Tripo.HostUi.TripoPanelPresentation.Create(
                 state,
-                _session.Recovery,
+                recovery,
                 string.Equals(
                     _recoveryInspectionToken,
-                    _session.Recovery.PresentationToken,
+                    recovery.PresentationToken,
                     StringComparison.Ordinal)
                     ? _recoveryInspection
                     : null,
@@ -1262,8 +1329,8 @@ public sealed class TripoRhinoPanel : Panel, IPanel
             presentation.ConnectEnabled &&
             !_recoveryReviewInProgress;
         _apiKey.Text = presentation.ApiKeyText;
-        _apiKey.ToolTip = _session.State.RequiresCredentialRecovery
-            ? _session.State.HasUnresolvedPaidDispatch
+        _apiKey.ToolTip = state.RequiresCredentialRecovery
+            ? state.HasUnresolvedPaidDispatch
                 ? "Restore the exact original API key for this workflow. " +
                   "The recovery key remains session-only."
                 : "Use a key for the same Tripo account. The recovery key " +
@@ -1323,16 +1390,19 @@ public sealed class TripoRhinoPanel : Panel, IPanel
 
     private void ShowError(Exception exception)
     {
-        if (_closing)
-        {
-            return;
-        }
-
-        MessageBox.Show(
-            this,
-            BoundMessage(exception.Message),
-            "Tripo",
-            MessageBoxType.Error);
+        string message = BoundMessage(exception.Message);
+        RhinoUiThread.Invoke(
+            () =>
+            {
+                if (!_closing)
+                {
+                    MessageBox.Show(
+                        this,
+                        message,
+                        "Tripo",
+                        MessageBoxType.Error);
+                }
+            });
     }
 
     private async Task DisposeSessionAsync()
@@ -1343,6 +1413,7 @@ public sealed class TripoRhinoPanel : Panel, IPanel
         }
 
         _closing = true;
+        _renderQueue.Dispose();
         _panelLifetime.Cancel();
         _session.StateChanged -= OnStateChanged;
         _session.RecoveryChanged -= OnRecoveryChanged;
@@ -1366,4 +1437,54 @@ public sealed class TripoRhinoPanel : Panel, IPanel
         {
             ReadOnly = true,
         };
+
+    private sealed class PanelRenderFrame
+    {
+        public PanelRenderFrame(
+            Tripo.HostUi.TripoPanelSession ownerSession,
+            long sessionGeneration,
+            Tripo.HostUi.TripoPanelState state,
+            Tripo.HostUi.TripoPanelRecoveryLoadResult recovery)
+        {
+            OwnerSession = ownerSession;
+            SessionGeneration = sessionGeneration;
+            State = state;
+            Recovery = recovery;
+        }
+
+        public Tripo.HostUi.TripoPanelSession OwnerSession { get; }
+
+        public long SessionGeneration { get; }
+
+        public Tripo.HostUi.TripoPanelState State { get; }
+
+        public Tripo.HostUi.TripoPanelRecoveryLoadResult Recovery { get; }
+    }
+
+    private sealed class ApiKeySubmission
+    {
+        private string _secret;
+
+        public ApiKeySubmission(string secret, bool persist)
+        {
+            _secret = secret;
+            Persist = persist;
+        }
+
+        public bool Persist { get; }
+
+        public string TakeSecret()
+        {
+            string secret = _secret;
+            _secret = string.Empty;
+            return secret;
+        }
+
+        public void Clear()
+        {
+            _secret = string.Empty;
+        }
+
+        public override string ToString() => nameof(ApiKeySubmission);
+    }
 }

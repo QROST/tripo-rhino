@@ -2,6 +2,18 @@ namespace Tripo.Rhino;
 
 internal static class RhinoUiThread
 {
+    public static void Invoke(Action operation)
+    {
+        ArgumentNullException.ThrowIfNull(operation);
+        if (!global::Rhino.RhinoApp.InvokeRequired)
+        {
+            operation();
+            return;
+        }
+
+        global::Rhino.RhinoApp.InvokeOnUiThread(operation);
+    }
+
     public static Task<T> InvokeAsync<T>(
         Func<T> operation,
         CancellationToken cancellationToken)
