@@ -300,23 +300,29 @@ recovery.
 4. Enter the prompt, face limit, and material preference. Click **Generate**.
    The panel displays a selectable durable operation UUID before showing a
    credit confirmation. Declining sends no paid request.
-5. Click **Refresh generation** until the task reports `success`.
+5. The panel refreshes a durable generation task every two seconds while it is
+   `queued` or `running`. **Refresh generation** remains available for an
+   immediate refresh or to resume polling after a status error.
 6. Click **Convert to OBJ**. This creates a different UUID and requires a
    separate credit confirmation. Refresh conversion until `success`.
 7. Choose object name, `native`/`mesh`/`instance`, and whether to apply baked
    diffuse materials; then click **Import into Rhino**.
 
-The panel does not auto-poll or claim to cancel remote tasks. After a lost
-response, the stage first requires **Refresh**. A retry becomes available only
-when the paid-operation journal says creation can resume, and the button is
-explicitly labelled **Retry same UUID**. Once a durable task or import
-receipt is known, the stage action is disabled instead of looking like a new
-request. **New workflow** is disabled while any dispatch is unresolved, and
-stored-key replacement and clearing remain disabled until an account-bound
-workflow is explicitly reset. A missing or rejected effective key can be
-restored for the current workflow only as a session key. Hiding or closing a
-tab does not cancel the workflow while Rhino retains that panel instance. A
-durable `request_rejected` receipt is not unresolved: generation
+The panel's only automatic polling is the read-only generation status query
+for a durable task ID. It is single-flight, stops on terminal status, recovery
+block, disconnect, session replacement, or panel teardown, and never claims to
+cancel the remote task. After a lost creation response without a durable task
+ID, the stage still requires explicit recovery review and does not poll or
+resend. A retry becomes available only when the paid-operation journal says
+creation can resume, and the button is explicitly labelled **Retry same
+UUID**. Once a durable task or import receipt is known, the stage action is
+disabled instead of looking like a new request. **New workflow** is disabled
+while any dispatch is unresolved, and stored-key replacement and clearing
+remain disabled until an account-bound workflow is explicitly reset. A missing
+or rejected effective key can be restored for the current workflow only as a
+session key. Hiding or closing a tab does not cancel the workflow while Rhino
+retains that panel instance. A durable `request_rejected` receipt is not
+unresolved: generation
 rejection clears generation and downstream stages, while conversion rejection
 clears conversion/import and preserves successful generation. Correct the
 credential and prepare a new UUID for the rejected stage.

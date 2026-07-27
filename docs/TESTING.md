@@ -82,9 +82,11 @@ Real Rhino 8 acceptance remains a separate gate:
    status**.
 7. Close the document while a recovery status query is delayed and verify no
    dialog, archival, or API-key mutation continues after panel teardown.
-8. Repeatedly click **Refresh generation** through busy, status, and final
-   transitions on macOS; confirm the Eto panel remains responsive and the final
-   status or error is visible.
+8. Let a durable generation task remain `queued`/`running`; verify its progress
+   advances automatically about every two seconds without overlapping status
+   calls. Confirm terminal status, disconnect, session replacement, and panel
+   teardown stop polling. Then force one status error, verify polling stops
+   without repeated dialogs, and confirm **Refresh generation** resumes it.
 9. Open and cancel/save the API-key and recovery dialogs repeatedly; confirm
    they close before sidecar work begins and do not trigger Scrollable layout
    crashes.
