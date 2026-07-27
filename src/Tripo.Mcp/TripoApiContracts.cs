@@ -57,7 +57,7 @@ internal sealed record ConvertModelRequest(
     [property: JsonPropertyName("with_animation")] bool WithAnimation);
 
 internal sealed record ApiEnvelope<T>(
-    [property: JsonPropertyName("code")] int Code,
+    [property: JsonPropertyName("code")] int? Code,
     [property: JsonPropertyName("data")] T? Data,
     [property: JsonPropertyName("message")] string? Message,
     [property: JsonPropertyName("suggestion")] string? Suggestion,

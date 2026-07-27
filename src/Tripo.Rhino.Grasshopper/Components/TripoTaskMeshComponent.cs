@@ -118,14 +118,13 @@ public sealed class TripoTaskMeshComponent : TripoCanvasComponent
             DA.GetData(1, ref faceLimit) &&
             DA.GetData(2, ref withMaterials);
         if (valid &&
-            (string.IsNullOrWhiteSpace(sourceTaskId) ||
-             !sourceTaskId.StartsWith("task_", StringComparison.Ordinal) ||
+            (!Tripo.Bridge.TripoTaskId.IsValid(sourceTaskId) ||
              faceLimit is < 500 or > 200_000))
         {
             AddRuntimeMessage(
                 GH_RuntimeMessageLevel.Error,
-                "Source Task ID must begin with task_ and Face Limit must be " +
-                "500–200000.");
+                "Source Task ID must be a valid Tripo task ID and Face Limit " +
+                "must be 500–200000.");
             valid = false;
         }
 

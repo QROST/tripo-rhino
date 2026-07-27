@@ -393,7 +393,8 @@ MCP 入口通过以下八个 tools 暴露同一套 shared workflow：
 - `prompt`：1–1024 个字符；
 - `faceLimit`：500–200000；
 - 导入对象 `name`：1–128 个字符；
-- task ID 必须以 `task_` 开头；
+- task ID 必须原样使用 Tripo 返回值：接受当前 v3 的 `task_...`，也接受
+  legacy-compatible response 中的 canonical lowercase UUID；
 - `documentSessionId` 必须是 `tripo_host_context` 返回的精确 UUID；
 - 每个 `operationId` 都是 caller-generated UUID；
 - `importMode` 可以是 `native`、`mesh` 或 `instance`；本 build 会以

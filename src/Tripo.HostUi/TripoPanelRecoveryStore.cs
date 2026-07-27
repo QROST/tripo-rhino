@@ -992,27 +992,10 @@ public sealed class TripoPanelRecoveryStore : IDisposable
         string value,
         string parameterName)
     {
-        if (string.IsNullOrWhiteSpace(value) ||
-            value.Length is < 8 or > 133 ||
-            !value.StartsWith("task_", StringComparison.Ordinal))
+        if (!Tripo.Bridge.TripoTaskId.IsValid(value))
         {
             throw new InvalidDataException(
                 $"{parameterName} is not a valid Tripo task ID.");
-        }
-
-        for (int index = 5; index < value.Length; index++)
-        {
-            char character = value[index];
-            bool allowed =
-                character is >= 'A' and <= 'Z' or
-                >= 'a' and <= 'z' or
-                >= '0' and <= '9' or
-                '_' or '-';
-            if (!allowed)
-            {
-                throw new InvalidDataException(
-                    $"{parameterName} is not a valid Tripo task ID.");
-            }
         }
 
         return value;

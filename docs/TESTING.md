@@ -31,6 +31,8 @@ The automated suite covers:
   write/read/delete canary;
 - paid-operation write-ahead journal, replay, conflict, lock, and
   `outcome_unknown` refusal to resend;
+- explicit successful-response `code` validation plus exact round-trip of
+  current `task_...` and canonical lowercase UUID task identities;
 - image transfer, signed download, ZIP extraction, bundle hashing, OBJ/MTL
   parsing, coordinate conversion, and parser limits;
 - host UI state, recovery hints, explicit paid confirmations, and stable UUID

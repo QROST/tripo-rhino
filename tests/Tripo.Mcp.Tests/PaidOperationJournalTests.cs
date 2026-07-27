@@ -5,8 +5,11 @@ namespace Tripo.Mcp.Tests;
 
 public sealed class PaidOperationJournalTests
 {
-    [Fact]
-    public async Task PersistedTaskIdReplaysAcrossJournalInstances()
+    [Theory]
+    [InlineData("task_source123")]
+    [InlineData("ef731ad6-aeb0-4950-9a2e-2298359dfaf8")]
+    public async Task PersistedTaskIdReplaysAcrossJournalInstances(
+        string taskId)
     {
         using TemporaryJournalRoot root = new();
         string operationId = Guid.NewGuid().ToString("D");
@@ -19,7 +22,7 @@ public sealed class PaidOperationJournalTests
                          CancellationToken.None))
         {
             await lease.BeforeSendAsync(CancellationToken.None);
-            await lease.TaskIdReceivedAsync("task_source123");
+            await lease.TaskIdReceivedAsync(taskId);
         }
 
         Tripo.Mcp.PaidOperationJournal restartedJournal = new(root.Path);
@@ -31,7 +34,7 @@ public sealed class PaidOperationJournalTests
 
         Assert.Equal("task_id_persisted", replay.Status.State);
         Assert.True(replay.Status.TaskIdDurable);
-        Assert.Equal("task_source123", replay.Status.CreatedTaskId);
+        Assert.Equal(taskId, replay.Status.CreatedTaskId);
     }
 
     [Fact]

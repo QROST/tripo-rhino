@@ -695,7 +695,7 @@ public sealed partial class TripoV3Client : ITripoApiClient
                 await SendAsync<CreateTaskData>(request, cancellationToken)
                     .ConfigureAwait(false);
             string? taskId = envelope.Data?.TaskId;
-            if (string.IsNullOrWhiteSpace(taskId) || !TaskIdRegex().IsMatch(taskId))
+            if (!IsValidTaskId(taskId))
             {
                 throw new TripoApiException(
                     "Tripo returned a successful create response without a valid task ID." +
@@ -707,7 +707,7 @@ public sealed partial class TripoV3Client : ITripoApiClient
             validTaskIdReceived = true;
             try
             {
-                await checkpoint.TaskIdReceivedAsync(taskId).ConfigureAwait(false);
+                await checkpoint.TaskIdReceivedAsync(taskId!).ConfigureAwait(false);
             }
             catch (Exception exception)
             {
@@ -720,7 +720,7 @@ public sealed partial class TripoV3Client : ITripoApiClient
                     innerException: exception);
             }
 
-            return taskId;
+            return taskId!;
         }
         catch (Exception operationException)
         {
@@ -987,14 +987,14 @@ public sealed partial class TripoV3Client : ITripoApiClient
         if (!IsValidTaskId(taskId))
         {
             throw new ArgumentException(
-                "Task IDs must start with task_ and contain only letters, digits, underscores, or hyphens.",
+                "Task IDs must be a canonical lowercase UUID or start with " +
+                "task_ and contain only letters, digits, underscores, or hyphens.",
                 nameof(taskId));
         }
     }
 
     internal static bool IsValidTaskId(string? taskId) =>
-        !string.IsNullOrWhiteSpace(taskId) &&
-        TaskIdRegex().IsMatch(taskId);
+        Tripo.Bridge.TripoTaskId.IsValid(taskId);
 
     internal static void ValidateFileToken(string fileToken)
     {
@@ -1030,11 +1030,6 @@ public sealed partial class TripoV3Client : ITripoApiClient
                 "The first release limits faceLimit to 500 through 200000.");
         }
     }
-
-    [GeneratedRegex(
-        "^task_[A-Za-z0-9_-]{3,128}$",
-        RegexOptions.CultureInvariant)]
-    private static partial Regex TaskIdRegex();
 
     [GeneratedRegex(
         "^file_[A-Za-z0-9_-]{3,240}$",

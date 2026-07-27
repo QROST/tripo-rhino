@@ -8,6 +8,8 @@ public sealed class TripoV3ClientTests
 {
     private const string DocumentSessionId =
         "11111111-1111-1111-1111-111111111111";
+    private const string CanonicalTaskId =
+        "ef731ad6-aeb0-4950-9a2e-2298359dfaf8";
 
     [Fact]
     public async Task CreateTextModelAsyncUsesV3GeometryOnlyPayload()
@@ -46,6 +48,95 @@ public sealed class TripoV3ClientTests
         Assert.True(root.GetProperty("auto_size").GetBoolean());
         Assert.False(root.GetProperty("export_uv").GetBoolean());
         payload.Dispose();
+    }
+
+    [Fact]
+    public async Task CreateTextModelAsyncAcceptsCanonicalTaskUuid()
+    {
+        DelegateHttpMessageHandler handler = new((_, _) =>
+            Task.FromResult(
+                DelegateHttpMessageHandler.Json(
+                    JsonSerializer.Serialize(
+                        new
+                        {
+                            code = 0,
+                            data = new { task_id = CanonicalTaskId },
+                        }))));
+        Tripo.Mcp.TripoV3Client client = CreateClient(handler);
+        Tripo.Mcp.TextGenerationOptions options =
+            new("a test chair", 10_000);
+        RecordingCheckpoint checkpoint = CreateCheckpoint(client, options);
+
+        string taskId = await client.CreateTextModelAsync(
+            options,
+            DocumentSessionId,
+            checkpoint,
+            CancellationToken.None);
+
+        Assert.Equal(CanonicalTaskId, taskId);
+        Assert.Equal(CanonicalTaskId, checkpoint.TaskId);
+        Assert.Equal(1, handler.CallCount);
+        Assert.Equal(0, checkpoint.OutcomeUnknownCalls);
+    }
+
+    [Fact]
+    public async Task SuccessfulHttpCreateResponseRequiresExplicitZeroCode()
+    {
+        DelegateHttpMessageHandler handler = new((_, _) =>
+            Task.FromResult(
+                DelegateHttpMessageHandler.Json(
+                    """{"data":{"task_id":"task_source123"}}""")));
+        Tripo.Mcp.TripoV3Client client = CreateClient(handler);
+        Tripo.Mcp.TextGenerationOptions options =
+            new("a test chair", 10_000);
+        RecordingCheckpoint checkpoint = CreateCheckpoint(client, options);
+
+        await Assert.ThrowsAsync<Tripo.Mcp.TripoApiException>(
+            () => client.CreateTextModelAsync(
+                options,
+                DocumentSessionId,
+                checkpoint,
+                CancellationToken.None));
+
+        Assert.Null(checkpoint.TaskId);
+        Assert.Equal(1, handler.CallCount);
+        Assert.Equal(1, checkpoint.OutcomeUnknownCalls);
+    }
+
+    [Fact]
+    public void TaskIdValidationRejectsTrailingLineFeed()
+    {
+        Assert.False(
+            Tripo.Mcp.TripoV3Client.IsValidTaskId("task_source123\n"));
+    }
+
+    [Theory]
+    [InlineData("""{"code":0,"data":{"taskId":"task_source123"}}""")]
+    [InlineData("""{"code":0,"task_id":"task_source123"}""")]
+    [InlineData("""{"code":0,"data":{"task":{"task_id":"task_source123"}}}""")]
+    [InlineData("""{"code":0,"data":{"task_id":123}}""")]
+    [InlineData("""{"code":"0","data":{"task_id":"task_source123"}}""")]
+    public async Task UndocumentedCreateResponseShapesStayOutcomeUnknown(
+        string responseJson)
+    {
+        DelegateHttpMessageHandler handler = new((_, _) =>
+            Task.FromResult(
+                DelegateHttpMessageHandler.Json(responseJson)));
+        Tripo.Mcp.TripoV3Client client = CreateClient(handler);
+        Tripo.Mcp.TextGenerationOptions options =
+            new("a test chair", 10_000);
+        RecordingCheckpoint checkpoint = CreateCheckpoint(client, options);
+
+        await Assert.ThrowsAsync<Tripo.Mcp.TripoApiException>(
+            () => client.CreateTextModelAsync(
+                options,
+                DocumentSessionId,
+                checkpoint,
+                CancellationToken.None));
+
+        Assert.Null(checkpoint.TaskId);
+        Assert.Equal(1, handler.CallCount);
+        Assert.Equal(1, checkpoint.OutcomeUnknownCalls);
     }
 
     [Fact]
@@ -923,6 +1014,40 @@ public sealed class TripoV3ClientTests
 
         await Assert.ThrowsAsync<Tripo.Mcp.TripoApiException>(
             () => client.GetTaskAsync("task_expected123", CancellationToken.None));
+    }
+
+    [Fact]
+    public async Task GetTaskAsyncAcceptsCanonicalTaskUuidWithoutRewritingIt()
+    {
+        string? requestPath = null;
+        string responseJson = JsonSerializer.Serialize(
+            new
+            {
+                code = 0,
+                data = new
+                {
+                    task_id = CanonicalTaskId,
+                    type = "text_to_model",
+                    status = "success",
+                    progress = 100,
+                },
+            });
+        DelegateHttpMessageHandler handler = new((request, _) =>
+        {
+            requestPath = request.RequestUri?.AbsolutePath;
+            return Task.FromResult(
+                DelegateHttpMessageHandler.Json(responseJson));
+        });
+        Tripo.Mcp.TripoV3Client client = CreateClient(handler);
+
+        Tripo.Mcp.TripoTaskSnapshot snapshot =
+            await client.GetTaskAsync(
+                CanonicalTaskId,
+                CancellationToken.None);
+
+        Assert.Equal(CanonicalTaskId, snapshot.TaskId);
+        Assert.Equal($"/v3/tasks/{CanonicalTaskId}", requestPath);
+        Assert.Equal(1, handler.CallCount);
     }
 
     [Fact]

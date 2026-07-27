@@ -2241,6 +2241,69 @@ public sealed class TripoPanelSessionTests
     }
 
     [Fact]
+    public void RecoveryStorePersistsCanonicalTaskUuidWithoutRewritingIt()
+    {
+        const string documentSessionId =
+            "11111111-1111-4111-8111-111111111111";
+        const string operationId =
+            "22222222-2222-4222-8222-222222222222";
+        const string taskId =
+            "ef731ad6-aeb0-4950-9a2e-2298359dfaf8";
+        string root = CreateTemporaryRoot();
+        try
+        {
+            using Tripo.HostUi.TripoPanelRecoveryStore store =
+                new("rhino", root);
+            Tripo.HostUi.TripoPanelState state =
+                Tripo.HostUi.TripoPanelState.Initial with
+                {
+                    Connected = true,
+                    Context = new Tripo.Bridge.HostContextReceipt(
+                        "rhino",
+                        "8-test",
+                        123,
+                        documentSessionId,
+                        "Test.3dm",
+                        "Meters",
+                        []),
+                    PreparedGeneration =
+                        new Tripo.HostUi.PreparedTextGeneration(
+                            "a chair",
+                            10_000,
+                            false,
+                            documentSessionId,
+                            operationId),
+                    GenerationDispatchAttempted = true,
+                    GenerationReceipt =
+                        new Tripo.Bridge.HostControlTextTaskCreationReceipt(
+                            operationId,
+                            taskId,
+                            "v3.1-20260211"),
+                };
+
+            store.Save(state);
+
+            string file = Assert.Single(
+                Directory.GetFiles(
+                    Path.Combine(root, "ui-recovery", "rhino"),
+                    "*.json"));
+            Tripo.HostUi.TripoPanelRecoveryHint hint =
+                System.Text.Json.JsonSerializer.Deserialize<
+                    Tripo.HostUi.TripoPanelRecoveryHint>(
+                    File.ReadAllText(file),
+                    Tripo.Bridge.BridgeJson.Options)
+                ?? throw new InvalidOperationException(
+                    "The recovery hint could not be read.");
+            Assert.Equal(taskId, hint.Generation?.TaskId);
+            Assert.True(hint.Generation?.TaskIdDurable);
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
     public async Task CurrentHintExclusionRequiresExactOwnerIdentity()
     {
         string root = CreateTemporaryRoot();

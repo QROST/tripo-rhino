@@ -40,7 +40,8 @@ public sealed class TripoTools
     [Description(
         "Query one existing Tripo v3 task. This read does not create a task or import geometry.")]
     public Task<TaskStatusReceipt> GetTaskStatusAsync(
-        [Description("Tripo v3 task ID beginning with task_.")] string taskId,
+        [Description(
+            "Tripo task ID exactly as returned by the API.")] string taskId,
         CancellationToken cancellationToken) =>
         InvokeAsync(
             () => _workflow.GetTaskStatusAsync(taskId, cancellationToken),

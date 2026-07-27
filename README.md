@@ -433,7 +433,8 @@ Input boundaries:
 - `prompt`: 1–1024 characters;
 - `faceLimit`: 500–200000;
 - imported object `name`: 1–128 characters;
-- task IDs begin with `task_`;
+- task IDs are used exactly as returned by Tripo: current v3 `task_...` IDs
+  and canonical lowercase UUIDs from legacy-compatible responses are accepted;
 - `documentSessionId` must be the exact UUID from `tripo_host_context`;
 - each `operationId` is a caller-generated UUID;
 - `importMode` is `native`, `mesh`, or `instance`; this build rejects `family` with
