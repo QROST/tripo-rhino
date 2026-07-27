@@ -20,6 +20,8 @@ public sealed class TripoRhinoPanel : Panel, IPanel
     private Tripo.HostUi.TripoPanelSession _session;
     private readonly Tripo.HostUi.CoalescingUiRenderQueue<PanelRenderFrame>
         _renderQueue;
+    private readonly Tripo.HostUi.GenerationStatusPoller
+        _generationStatusPoller;
     private readonly CancellationTokenSource _panelLifetime = new();
     private readonly TextArea _prompt = new()
     {
@@ -98,6 +100,9 @@ public sealed class TripoRhinoPanel : Panel, IPanel
     private readonly Button _refreshGeneration = new()
     {
         Text = "Refresh generation",
+        ToolTip =
+            "Updates automatically every 2 seconds while queued or running. " +
+            "Click for an immediate refresh.",
     };
     private readonly Button _convert = new() { Text = "Convert to OBJ" };
     private readonly Button _refreshConversion = new()
@@ -126,6 +131,10 @@ public sealed class TripoRhinoPanel : Panel, IPanel
             callback => Application.Instance.AsyncInvoke(callback),
             ApplyRenderFrame,
             ShowError);
+        _generationStatusPoller = new(
+            TimeSpan.FromSeconds(2),
+            RefreshGenerationStatusAutomaticallyAsync,
+            ReportAutomaticGenerationRefreshFailure);
         _generationDiagnosticBlock = FieldBlock(
             "Generation diagnostic",
             _generationDiagnostic);
@@ -931,6 +940,7 @@ public sealed class TripoRhinoPanel : Panel, IPanel
     private async Task ReloadPanelSessionForRecoveryAsync()
     {
         Tripo.HostUi.TripoPanelSession previous = _session;
+        _generationStatusPoller.Stop();
         _renderQueue.CancelPending();
         previous.StateChanged -= OnStateChanged;
         previous.RecoveryChanged -= OnRecoveryChanged;
@@ -1070,12 +1080,87 @@ public sealed class TripoRhinoPanel : Panel, IPanel
     {
         try
         {
-            await _session.RefreshGenerationStatusAsync();
+            Tripo.HostUi.TripoPanelSession ownerSession = _session;
+            await ownerSession.RefreshGenerationStatusAsync(
+                _panelLifetime.Token);
+            if (!_closing && ReferenceEquals(ownerSession, _session))
+            {
+                _generationStatusPoller.Resume(
+                    Tripo.HostUi.GenerationStatusPoller.GetPendingTaskId(
+                        ownerSession.State,
+                        ownerSession.Recovery));
+            }
+        }
+        catch (OperationCanceledException) when (_closing)
+        {
+        }
+        catch (ObjectDisposedException) when (_closing)
+        {
         }
         catch (Exception exception)
         {
             ShowError(exception);
         }
+    }
+
+    private async Task RefreshGenerationStatusAutomaticallyAsync(
+        string expectedTaskId,
+        CancellationToken cancellationToken)
+    {
+        Tripo.HostUi.TripoPanelSession ownerSession = _session;
+        long ownerGeneration = _sessionGeneration;
+        if (_closing || ownerSession.State.Busy)
+        {
+            return;
+        }
+
+        string? pendingTaskId =
+            Tripo.HostUi.GenerationStatusPoller.GetPendingTaskId(
+                ownerSession.State,
+                ownerSession.Recovery);
+        if (!string.Equals(
+                pendingTaskId,
+                expectedTaskId,
+                StringComparison.Ordinal))
+        {
+            return;
+        }
+
+        await ownerSession.RefreshGenerationStatusAsync(cancellationToken);
+        if (_closing ||
+            ownerGeneration != _sessionGeneration ||
+            !ReferenceEquals(ownerSession, _session))
+        {
+            return;
+        }
+    }
+
+    private void ReportAutomaticGenerationRefreshFailure(
+        string expectedTaskId,
+        Exception exception)
+    {
+        if (_closing)
+        {
+            return;
+        }
+
+        string? pendingTaskId =
+            Tripo.HostUi.GenerationStatusPoller.GetPendingTaskId(
+                _session.State,
+                _session.Recovery);
+        if (!string.Equals(
+                pendingTaskId,
+                expectedTaskId,
+                StringComparison.Ordinal))
+        {
+            return;
+        }
+
+        ShowError(
+            new InvalidOperationException(
+                "Automatic generation refresh stopped. Click Refresh " +
+                $"generation to retry.\n\n{exception.Message}",
+                exception));
     }
 
     private async void OnConvert(object? sender, EventArgs args)
@@ -1365,6 +1450,10 @@ public sealed class TripoRhinoPanel : Panel, IPanel
         _name.Enabled = presentation.NameEnabled;
         _importMode.Enabled = presentation.ImportModeEnabled;
         _applyMaterials.Enabled = presentation.ApplyMaterialsEnabled;
+        _generationStatusPoller.Reconcile(
+            Tripo.HostUi.GenerationStatusPoller.GetPendingTaskId(
+                state,
+                recovery));
     }
 
     private static void SetProgress(ProgressBar control, int? progress)
@@ -1413,6 +1502,7 @@ public sealed class TripoRhinoPanel : Panel, IPanel
         }
 
         _closing = true;
+        _generationStatusPoller.Dispose();
         _renderQueue.Dispose();
         _panelLifetime.Cancel();
         _session.StateChanged -= OnStateChanged;
