@@ -420,18 +420,51 @@ public sealed class TripoImageTaskComponent : TripoCanvasComponent
                 _dispatchAttempted = true;
             }
             handedToSidecar = true;
-            Tripo.Bridge.HostControlImageTaskCreationReceipt receipt =
-                await client.CreateImageTaskAsync(
-                        new Tripo.Bridge.HostControlCreateImageTaskRequest(
-                            transfer,
-                            input.FaceLimit,
-                            input.WithMaterials,
-                            context.DocumentSessionId,
-                            operationId,
-                            ConfirmExternalCost: true,
-                            RequireExistingOperation: retry),
-                        LifetimeToken)
-                    .ConfigureAwait(false);
+            Tripo.Bridge.HostControlImageTaskCreationReceipt receipt;
+            try
+            {
+                receipt =
+                    await client.CreateImageTaskAsync(
+                            new Tripo.Bridge.HostControlCreateImageTaskRequest(
+                                transfer,
+                                input.FaceLimit,
+                                input.WithMaterials,
+                                context.DocumentSessionId,
+                                operationId,
+                                ConfirmExternalCost: true,
+                                RequireExistingOperation: retry),
+                            LifetimeToken)
+                        .ConfigureAwait(false);
+            }
+            catch (Tripo.Bridge.HostControlCallException exception)
+                when (string.Equals(
+                    exception.Code,
+                    Tripo.Bridge.HostControlConstants.CredentialRejectedError,
+                    StringComparison.Ordinal))
+            {
+                // This code is returned only after the sidecar durably records
+                // that no remote task was created. Delete this component's
+                // recovery hint before releasing its local operation identity.
+                SaveGenerationRecovery(
+                    context,
+                    operationId,
+                    dispatchAttempted: false,
+                    taskId: null,
+                    model: string.Empty);
+                lock (_stateGate)
+                {
+                    _transfer = null;
+                    _operationId = null;
+                    _requestFingerprint = null;
+                    _dispatchAttempted = false;
+                    _status = "credential_rejected";
+                    _message =
+                        "Tripo rejected the API key before creating this image " +
+                        "task. Update the key, then choose the image again.";
+                }
+                Tripo.Bridge.ImageTransferStore.TryDelete(transfer);
+                return;
+            }
             SaveGenerationRecovery(
                 context,
                 receipt.OperationId,

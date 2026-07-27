@@ -562,27 +562,51 @@ public sealed partial class TripoV3Client : ITripoApiClient
         }
         catch (Exception operationException)
         {
+            bool requestRejected = false;
             if (dispatching && !validFileTokenReceived)
             {
+                requestRejected =
+                    IsDefinitiveCredentialRejection(operationException);
                 try
                 {
-                    await checkpoint.ImageOutcomeUnknownAsync(
-                            "upload",
-                            OperationFailureCode(operationException),
-                            operationException.Message)
-                        .ConfigureAwait(false);
+                    if (requestRejected)
+                    {
+                        await checkpoint.RequestRejectedAsync(
+                                "credential_rejected",
+                                operationException.Message)
+                            .ConfigureAwait(false);
+                    }
+                    else
+                    {
+                        await checkpoint.ImageOutcomeUnknownAsync(
+                                "upload",
+                                OperationFailureCode(operationException),
+                                operationException.Message)
+                            .ConfigureAwait(false);
+                    }
+
                     Tripo.Bridge.ImageTransferStore.TryDelete(options.Image);
                 }
                 catch (Exception checkpointException)
                 {
                     throw new TripoApiException(
-                        "The Tripo image upload failed and its local ambiguous " +
-                        "checkpoint could not be persisted. Do not retry this " +
-                        "operationId.",
+                        requestRejected
+                            ? "Tripo rejected the image-upload credential, but " +
+                              "the local request-rejected checkpoint could not " +
+                              "be persisted. Do not retry with a new operationId."
+                            : "The Tripo image upload failed and its local " +
+                              "ambiguous checkpoint could not be persisted. Do " +
+                              "not retry this operationId.",
                         innerException: new AggregateException(
                             operationException,
                             checkpointException));
                 }
+            }
+
+            if (requestRejected &&
+                operationException is TripoApiException rejection)
+            {
+                throw new TripoPaidRequestRejectedException(rejection);
             }
 
             throw;
@@ -645,26 +669,51 @@ public sealed partial class TripoV3Client : ITripoApiClient
         }
         catch (Exception operationException)
         {
+            bool requestRejected = false;
             if (dispatching && !validTaskIdReceived)
             {
+                requestRejected =
+                    IsDefinitiveCredentialRejection(operationException);
                 try
                 {
-                    await checkpoint.ImageOutcomeUnknownAsync(
-                            "generation",
-                            OperationFailureCode(operationException),
-                            operationException.Message)
-                        .ConfigureAwait(false);
+                    if (requestRejected)
+                    {
+                        await checkpoint.RequestRejectedAsync(
+                                "credential_rejected",
+                                operationException.Message)
+                            .ConfigureAwait(false);
+                    }
+                    else
+                    {
+                        await checkpoint.ImageOutcomeUnknownAsync(
+                                "generation",
+                                OperationFailureCode(operationException),
+                                operationException.Message)
+                            .ConfigureAwait(false);
+                    }
                 }
                 catch (Exception checkpointException)
                 {
                     throw new TripoApiException(
-                        "The paid Tripo image generation request failed and its " +
-                        "local outcome-unknown checkpoint could not be persisted. " +
-                        "Do not retry with a new operationId.",
+                        requestRejected
+                            ? "Tripo rejected the image-generation credential, " +
+                              "but the local request-rejected checkpoint could " +
+                              "not be persisted. Do not retry with a new " +
+                              "operationId."
+                            : "The paid Tripo image generation request failed " +
+                              "and its local outcome-unknown checkpoint could " +
+                              "not be persisted. Do not retry with a new " +
+                              "operationId.",
                         innerException: new AggregateException(
                             operationException,
                             checkpointException));
                 }
+            }
+
+            if (requestRejected &&
+                operationException is TripoApiException rejection)
+            {
+                throw new TripoPaidRequestRejectedException(rejection);
             }
 
             throw;
@@ -825,6 +874,15 @@ public sealed partial class TripoV3Client : ITripoApiClient
                     HttpCompletionOption.ResponseHeadersRead,
                     requestDeadline.Token)
                 .ConfigureAwait(false);
+            if (IsDefinitiveCredentialRejection(response.StatusCode))
+            {
+                throw new TripoApiException(
+                    $"Tripo rejected the API credential with HTTP " +
+                    $"{(int)response.StatusCode}.",
+                    response.StatusCode,
+                    retryAfter: ReadRetryAfter(response));
+            }
+
             string unknownMutationWarning =
                 UnknownMutationWarning(request);
             byte[] payload = await ReadBoundedResponseAsync(

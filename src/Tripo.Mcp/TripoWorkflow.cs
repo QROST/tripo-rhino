@@ -284,12 +284,26 @@ public sealed class TripoWorkflow : ITripoWorkflow
         DocumentCheckingImageCheckpoint checkpoint = new(
             operation,
             token => EnsureDocumentSessionAsync(documentSessionId, token));
-        string taskId = await _apiClient.CreateImageModelAsync(
-                generationOptions,
-                documentSessionId,
-                checkpoint,
-                cancellationToken)
-            .ConfigureAwait(false);
+        string taskId;
+        try
+        {
+            taskId = await _apiClient.CreateImageModelAsync(
+                    generationOptions,
+                    documentSessionId,
+                    checkpoint,
+                    cancellationToken)
+                .ConfigureAwait(false);
+        }
+        catch (TripoApiException exception)
+            when (IsCredentialFailureBeforePaidDispatch(operation, exception))
+        {
+            await RecordCredentialFailureBeforePaidDispatchAsync(
+                    operation,
+                    exception)
+                .ConfigureAwait(false);
+            throw new TripoPaidRequestRejectedException(exception);
+        }
+
         return new ImageTaskCreationReceipt(
             descriptor.OperationId,
             taskId,

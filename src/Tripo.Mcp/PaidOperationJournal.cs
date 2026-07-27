@@ -764,6 +764,9 @@ internal sealed class PaidOperationJournal : IPaidOperationJournal
                 PaidOperationStates.ImageUploadDispatching,
                 PaidOperationStates.OutcomeUnknown) => true,
             (
+                PaidOperationStates.ImageUploadDispatching,
+                PaidOperationStates.RequestRejected) => true,
+            (
                 PaidOperationStates.ImageFileTokenPersisted,
                 PaidOperationStates.ImageGenerationDispatching) => true,
             (
@@ -772,6 +775,9 @@ internal sealed class PaidOperationJournal : IPaidOperationJournal
             (
                 PaidOperationStates.ImageGenerationDispatching,
                 PaidOperationStates.OutcomeUnknown) => true,
+            (
+                PaidOperationStates.ImageGenerationDispatching,
+                PaidOperationStates.RequestRejected) => true,
             _ => false,
         };
 
@@ -817,12 +823,17 @@ internal sealed class PaidOperationJournal : IPaidOperationJournal
                 noFailure &&
                 (isImage ? imageProgress : noImageProgress),
             PaidOperationStates.RequestRejected =>
-                !isImage &&
                 entry.CreatedTaskId is null &&
                 !string.IsNullOrWhiteSpace(entry.FailureCode) &&
                 !string.IsNullOrWhiteSpace(entry.FailureMessage) &&
-                entry.FailureStage is null &&
-                noImageProgress,
+                (isImage
+                    ? entry.FailureStage switch
+                    {
+                        "upload" => noImageProgress,
+                        "generation" => imageProgress,
+                        _ => false,
+                    }
+                    : entry.FailureStage is null && noImageProgress),
             PaidOperationStates.OutcomeUnknown =>
                 entry.CreatedTaskId is null &&
                 !string.IsNullOrWhiteSpace(entry.FailureCode) &&
@@ -1224,14 +1235,31 @@ internal sealed class PaidOperationJournal : IPaidOperationJournal
             string message)
         {
             ThrowIfDisposed();
-            if (_descriptor.Kind == PaidOperationKinds.ImageTaskCreation)
+            bool isImage =
+                _descriptor.Kind == PaidOperationKinds.ImageTaskCreation;
+            string? failureStage = null;
+            string? fileToken = null;
+            string? generationRequestFingerprint = null;
+            if (isImage)
             {
-                throw new TripoWorkflowException(
-                    "Image operations must record the rejected stage explicitly.");
+                switch (_entry.State)
+                {
+                    case PaidOperationStates.Prepared:
+                    case PaidOperationStates.ImageUploadDispatching:
+                        failureStage = "upload";
+                        break;
+                    case PaidOperationStates.ImageGenerationDispatching:
+                        failureStage = "generation";
+                        fileToken = _entry.FileToken;
+                        generationRequestFingerprint =
+                            _entry.GenerationRequestFingerprint;
+                        break;
+                    default:
+                        return;
+                }
             }
-
-            if (_entry.State is not PaidOperationStates.Prepared and
-                not PaidOperationStates.Dispatching)
+            else if (_entry.State is not PaidOperationStates.Prepared and
+                     not PaidOperationStates.Dispatching)
             {
                 return;
             }
@@ -1243,9 +1271,9 @@ internal sealed class PaidOperationJournal : IPaidOperationJournal
                 createdTaskId: null,
                 _entry.CreatedAtUtc,
                 _timeProvider.GetUtcNow(),
-                fileToken: null,
-                generationRequestFingerprint: null,
-                failureStage: null,
+                fileToken,
+                generationRequestFingerprint,
+                failureStage,
                 RemoteText.Bound(code, 64, "request_rejected"),
                 RemoteText.Bound(
                     message,

@@ -151,6 +151,72 @@ public sealed class PaidOperationJournalTests
         Assert.Contains("new operationId", status.NextAction);
     }
 
+    [Theory]
+    [InlineData("prepared", "upload")]
+    [InlineData("upload", "upload")]
+    [InlineData("generation", "generation")]
+    public async Task ImageCredentialRejectionIsDurableAndStageSpecific(
+        string dispatchStage,
+        string expectedFailureStage)
+    {
+        using TemporaryJournalRoot root = new();
+        string operationId = Guid.NewGuid().ToString("D");
+        Tripo.Mcp.PaidOperationDescriptor descriptor =
+            ImageDescriptor(operationId);
+        await using (Tripo.Mcp.PaidOperationLease lease =
+                     await new Tripo.Mcp.PaidOperationJournal(root.Path)
+                         .AcquireAsync(
+                             descriptor,
+                             CancellationToken.None))
+        {
+            if (dispatchStage is "upload" or "generation")
+            {
+                await lease.BeforeImageUploadAsync(CancellationToken.None);
+            }
+
+            if (dispatchStage == "generation")
+            {
+                await lease.ImageFileTokenReceivedAsync(
+                    "file_resume123",
+                    new string('e', 64));
+                await lease.BeforeImageGenerationAsync(
+                    CancellationToken.None);
+            }
+
+            await lease.RequestRejectedAsync(
+                "credential_rejected",
+                "The credential was rejected.");
+        }
+
+        Tripo.Mcp.PaidOperationJournal reopened =
+            new(root.Path);
+        Tripo.Mcp.PaidOperationStatusReceipt status =
+            await reopened.GetStatusAsync(
+                operationId,
+                CancellationToken.None);
+        await using Tripo.Mcp.PaidOperationLease recovered =
+            await reopened.AcquireAsync(
+                descriptor,
+                CancellationToken.None);
+
+        Assert.Equal("request_rejected", status.State);
+        Assert.Equal(expectedFailureStage, status.FailureStage);
+        Assert.False(status.TaskIdDurable);
+        Assert.False(status.MayHaveCreatedRemoteTask);
+        Assert.False(status.CanResumeCreation);
+        Assert.Equal("credential_rejected", status.FailureCode);
+        Assert.Contains("new operationId", status.NextAction);
+        Assert.Equal(status.State, recovered.Status.State);
+        Assert.Equal(status.FailureStage, recovered.Status.FailureStage);
+        if (dispatchStage == "generation")
+        {
+            Assert.Equal("file_resume123", recovered.FileToken);
+            Assert.Equal(
+                new string('e', 64),
+                recovered.GenerationRequestFingerprint);
+        }
+    }
+
     [Fact]
     public async Task PersistedImageFileTokenResumesAcrossJournalInstances()
     {

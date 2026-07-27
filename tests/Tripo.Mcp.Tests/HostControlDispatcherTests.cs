@@ -212,6 +212,41 @@ public sealed class HostControlDispatcherTests
     }
 
     [Fact]
+    public async Task ImagePaidRejectionHasARecoverableErrorCode()
+    {
+        FakeWorkflow workflow = new()
+        {
+            ThrowPaidCredentialRejectionOnImage = true,
+        };
+        Tripo.Mcp.HostControlDispatcher dispatcher = CreateDispatcher(
+            new FakeCredentialService(),
+            workflow);
+        Tripo.Bridge.HostControlCreateImageTaskRequest request = new(
+            new Tripo.Bridge.StagedImageTransfer(
+                "11111111-1111-1111-1111-111111111111",
+                new string('a', 64),
+                10,
+                "image/png"),
+            10_000,
+            WithMaterials: false,
+            Guid.NewGuid().ToString("D"),
+            Guid.NewGuid().ToString("D"),
+            ConfirmExternalCost: true,
+            RequireExistingOperation: false);
+
+        Tripo.Bridge.HostControlCallException exception =
+            await Assert.ThrowsAsync<Tripo.Bridge.HostControlCallException>(
+                () => dispatcher.DispatchAsync(
+                    Tripo.Bridge.HostControlConstants.CreateImageTaskMethod,
+                    Tripo.Bridge.BridgeJson.ToElement(request),
+                    CancellationToken.None));
+
+        Assert.Equal(
+            Tripo.Bridge.HostControlConstants.CredentialRejectedError,
+            exception.Code);
+    }
+
+    [Fact]
     public void HostControlCommandLineRequiresAnExactPositivePid()
     {
         Assert.False(
@@ -291,6 +326,8 @@ public sealed class HostControlDispatcherTests
         public bool ThrowCredentialOnText { get; init; }
 
         public bool ThrowPaidCredentialRejectionOnText { get; init; }
+
+        public bool ThrowPaidCredentialRejectionOnImage { get; init; }
 
         public Tripo.Bridge.HostControlCreateTextTaskRequest? LastTextRequest
         {
@@ -425,6 +462,14 @@ public sealed class HostControlDispatcherTests
             CancellationToken cancellationToken,
             bool requireExistingOperation = false)
         {
+            if (ThrowPaidCredentialRejectionOnImage)
+            {
+                throw new Tripo.Mcp.TripoPaidRequestRejectedException(
+                    new Tripo.Mcp.TripoApiException(
+                        "The provider rejected the image credential.",
+                        System.Net.HttpStatusCode.Unauthorized));
+            }
+
             LastImageRequest =
                 new Tripo.Bridge.HostControlCreateImageTaskRequest(
                     image,

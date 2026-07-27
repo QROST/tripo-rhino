@@ -117,6 +117,45 @@ public sealed class TripoWorkflowTests : IDisposable
     }
 
     [Fact]
+    public async Task ImageCredentialLossBeforeUploadIsDurablyRejected()
+    {
+        string requestedSession = Guid.NewGuid().ToString("D");
+        string operationId = Guid.NewGuid().ToString("D");
+        FakeApiClient api = new()
+        {
+            FailImageCredentialBeforeSend = true,
+        };
+        FakeHostConnection host = new();
+        host.Contexts.Enqueue(Context(requestedSession));
+        Tripo.Mcp.TripoWorkflow workflow = CreateWorkflow(
+            api,
+            new FakeArtifactStager(),
+            host);
+
+        await Assert.ThrowsAsync<
+            Tripo.Mcp.TripoPaidRequestRejectedException>(
+            () => workflow.CreateImageTaskAsync(
+                ImageTransfer(),
+                10_000,
+                withMaterials: false,
+                requestedSession,
+                operationId,
+                confirmExternalCost: true,
+                CancellationToken.None));
+        Tripo.Mcp.PaidOperationStatusReceipt status =
+            await workflow.GetPaidOperationStatusAsync(
+                operationId,
+                CancellationToken.None);
+
+        Assert.Equal("request_rejected", status.State);
+        Assert.Equal("upload", status.FailureStage);
+        Assert.False(status.MayHaveCreatedRemoteTask);
+        Assert.Equal(0, api.CreateImageCalls);
+        Assert.Equal(0, api.ImageUploadCalls);
+        Assert.Equal(1, host.ContextCalls);
+    }
+
+    [Fact]
     public async Task TextCreationReturnsPaidTaskIdWithoutPolling()
     {
         string requestedSession = Guid.NewGuid().ToString("D");
@@ -1254,6 +1293,8 @@ public sealed class TripoWorkflowTests : IDisposable
 
         public bool FailTextCredentialBeforeSend { get; init; }
 
+        public bool FailImageCredentialBeforeSend { get; init; }
+
         public Tripo.Mcp.TripoApiException? TaskReadException { get; init; }
 
         public string? FailImageStage { get; init; }
@@ -1374,6 +1415,12 @@ public sealed class TripoWorkflowTests : IDisposable
                     options,
                     documentSessionId),
                 checkpoint.RequestFingerprint);
+            if (FailImageCredentialBeforeSend)
+            {
+                throw new Tripo.Mcp.TripoCredentialException(
+                    "The local credential disappeared before image upload.");
+            }
+
             CreateImageCalls++;
             if (checkpoint.FileToken is null)
             {

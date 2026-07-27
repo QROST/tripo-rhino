@@ -382,6 +382,176 @@ public sealed class TripoV3ClientTests
         generationPayload.Dispose();
     }
 
+    [Theory]
+    [InlineData(HttpStatusCode.Unauthorized)]
+    [InlineData(HttpStatusCode.Forbidden)]
+    public async Task ImageUploadCredentialRejectionIsNotOutcomeUnknown(
+        HttpStatusCode statusCode)
+    {
+        using TemporaryDataRoot root = new();
+        Tripo.Mcp.ImageGenerationOptions options =
+            await CreateImageOptionsAsync(
+                Path.Combine(root.Path, "upload-rejected.png"));
+        DelegateHttpMessageHandler handler = new((_, _) =>
+            Task.FromResult(
+                DelegateHttpMessageHandler.Json(
+                    """{"code":1001,"message":"credential rejected"}""",
+                    statusCode)));
+        Tripo.Mcp.TripoV3Client client = CreateClient(handler);
+        RecordingImageCheckpoint checkpoint = CreateImageCheckpoint(
+            client,
+            options);
+
+        Tripo.Mcp.TripoPaidRequestRejectedException exception =
+            await Assert.ThrowsAsync<
+                Tripo.Mcp.TripoPaidRequestRejectedException>(
+                () => client.CreateImageModelAsync(
+                    options,
+                    DocumentSessionId,
+                    checkpoint,
+                    CancellationToken.None));
+
+        Assert.Equal(statusCode, exception.StatusCode);
+        Assert.Equal(1, handler.CallCount);
+        Assert.Equal(1, checkpoint.BeforeImageUploadCalls);
+        Assert.Equal(0, checkpoint.BeforeImageGenerationCalls);
+        Assert.Equal(1, checkpoint.RequestRejectedCalls);
+        Assert.Equal(0, checkpoint.ImageOutcomeUnknownCalls);
+    }
+
+    [Theory]
+    [InlineData(HttpStatusCode.Unauthorized)]
+    [InlineData(HttpStatusCode.Forbidden)]
+    public async Task ImageGenerationCredentialRejectionIsNotOutcomeUnknown(
+        HttpStatusCode statusCode)
+    {
+        using TemporaryDataRoot root = new();
+        Tripo.Mcp.ImageGenerationOptions options =
+            await CreateImageOptionsAsync(
+                Path.Combine(root.Path, "generation-rejected.png"));
+        DelegateHttpMessageHandler handler = new((_, call) =>
+            Task.FromResult(
+                call == 1
+                    ? DelegateHttpMessageHandler.Json(
+                        """{"code":0,"data":{"file_token":"file_known123"}}""")
+                    : DelegateHttpMessageHandler.Json(
+                        """{"code":1001,"message":"credential rejected"}""",
+                        statusCode)));
+        Tripo.Mcp.TripoV3Client client = CreateClient(handler);
+        RecordingImageCheckpoint checkpoint = CreateImageCheckpoint(
+            client,
+            options);
+
+        Tripo.Mcp.TripoPaidRequestRejectedException exception =
+            await Assert.ThrowsAsync<
+                Tripo.Mcp.TripoPaidRequestRejectedException>(
+                () => client.CreateImageModelAsync(
+                    options,
+                    DocumentSessionId,
+                    checkpoint,
+                    CancellationToken.None));
+
+        Assert.Equal(statusCode, exception.StatusCode);
+        Assert.Equal(2, handler.CallCount);
+        Assert.Equal("file_known123", checkpoint.FileToken);
+        Assert.Equal(1, checkpoint.BeforeImageGenerationCalls);
+        Assert.Equal(1, checkpoint.RequestRejectedCalls);
+        Assert.Equal(0, checkpoint.ImageOutcomeUnknownCalls);
+    }
+
+    [Theory]
+    [InlineData("upload", HttpStatusCode.Unauthorized)]
+    [InlineData("upload", HttpStatusCode.Forbidden)]
+    [InlineData("generation", HttpStatusCode.Unauthorized)]
+    [InlineData("generation", HttpStatusCode.Forbidden)]
+    public async Task ImageCredentialRejectionDoesNotReadAFailingBody(
+        string stage,
+        HttpStatusCode statusCode)
+    {
+        using TemporaryDataRoot root = new();
+        Tripo.Mcp.ImageGenerationOptions options =
+            await CreateImageOptionsAsync(
+                Path.Combine(root.Path, "unread-rejection-body.png"));
+        ThrowingReadStream rejectedBody = new();
+        DelegateHttpMessageHandler handler = new((_, call) =>
+        {
+            if (stage == "generation" && call == 1)
+            {
+                return Task.FromResult(
+                    DelegateHttpMessageHandler.Json(
+                        """{"code":0,"data":{"file_token":"file_known123"}}"""));
+            }
+
+            return Task.FromResult(
+                new HttpResponseMessage(statusCode)
+                {
+                    Content = new StreamContent(rejectedBody),
+                });
+        });
+        Tripo.Mcp.TripoV3Client client = CreateClient(handler);
+        RecordingImageCheckpoint checkpoint = CreateImageCheckpoint(
+            client,
+            options);
+
+        Tripo.Mcp.TripoPaidRequestRejectedException exception =
+            await Assert.ThrowsAsync<
+                Tripo.Mcp.TripoPaidRequestRejectedException>(
+                () => client.CreateImageModelAsync(
+                    options,
+                    DocumentSessionId,
+                    checkpoint,
+                    CancellationToken.None));
+
+        Assert.Equal(statusCode, exception.StatusCode);
+        Assert.Equal(stage == "upload" ? 1 : 2, handler.CallCount);
+        Assert.Equal(0, rejectedBody.ReadCalls);
+        Assert.Equal(1, checkpoint.RequestRejectedCalls);
+        Assert.Equal(0, checkpoint.ImageOutcomeUnknownCalls);
+    }
+
+    [Fact]
+    public async Task ImageRejectionCheckpointFailureStaysFailClosed()
+    {
+        using TemporaryDataRoot root = new();
+        Tripo.Mcp.ImageGenerationOptions options =
+            await CreateImageOptionsAsync(
+                Path.Combine(root.Path, "rejection-checkpoint.png"));
+        DelegateHttpMessageHandler handler = new((_, _) =>
+            Task.FromResult(
+                DelegateHttpMessageHandler.Json(
+                    """{"code":1001,"message":"credential rejected"}""",
+                    HttpStatusCode.Unauthorized)));
+        Tripo.Mcp.TripoV3Client client = CreateClient(handler);
+        RecordingImageCheckpoint checkpoint = CreateImageCheckpoint(
+            client,
+            options);
+        checkpoint.RequestRejectedException =
+            new IOException("checkpoint unavailable");
+
+        Tripo.Mcp.TripoApiException exception =
+            await Assert.ThrowsAsync<Tripo.Mcp.TripoApiException>(
+                () => client.CreateImageModelAsync(
+                    options,
+                    DocumentSessionId,
+                    checkpoint,
+                    CancellationToken.None));
+
+        Assert.IsNotType<
+            Tripo.Mcp.TripoPaidRequestRejectedException>(exception);
+        Assert.Contains(
+            "checkpoint could not be persisted",
+            exception.Message,
+            StringComparison.Ordinal);
+        Assert.Equal(1, handler.CallCount);
+        Assert.Equal(1, checkpoint.RequestRejectedCalls);
+        Assert.Equal(0, checkpoint.ImageOutcomeUnknownCalls);
+        await using Stream preserved =
+            await Tripo.Bridge.ImageTransferStore.OpenVerifiedAsync(
+                options.Image,
+                CancellationToken.None);
+        Assert.Equal(TestPngBytes.Length, preserved.Length);
+    }
+
     [Fact]
     public async Task ImageLogicalFingerprintMismatchFailsBeforeCheckpointOrNetwork()
     {
@@ -1245,11 +1415,15 @@ public sealed class TripoV3ClientTests
 
         public int ImageOutcomeUnknownCalls { get; private set; }
 
+        public int RequestRejectedCalls { get; private set; }
+
         public string? LastUnknownStage { get; private set; }
 
         public Exception? BeforeImageGenerationException { get; set; }
 
         public Exception? FileTokenException { get; set; }
+
+        public Exception? RequestRejectedException { get; set; }
 
         public void SeedDurableFileToken(
             string fileToken,
@@ -1267,9 +1441,16 @@ public sealed class TripoV3ClientTests
             throw new InvalidOperationException(
                 "Image operations must record the failed stage.");
 
-        public Task RequestRejectedAsync(string code, string message) =>
-            throw new InvalidOperationException(
-                "Image operations must record the rejected stage.");
+        public Task RequestRejectedAsync(string code, string message)
+        {
+            RequestRejectedCalls++;
+            if (RequestRejectedException is not null)
+            {
+                throw RequestRejectedException;
+            }
+
+            return Task.CompletedTask;
+        }
 
         public Task BeforeImageUploadAsync(
             CancellationToken cancellationToken)
