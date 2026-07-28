@@ -30,6 +30,10 @@ internal sealed class RhinoBridgeDispatcher : Tripo.Bridge.IHostBridgeDispatcher
     private const int MaximumNativeGlbObjects = 4_096;
     private const int MaximumNativeGlbMaterials = 256;
     private const int MaximumNativeGlbTextures = 512;
+    private const int MaximumNativeGlbRenderFields = 65_536;
+    private const int MaximumNativeGlbFieldStringCharacters = 64 * 1024;
+    private const int MaximumNativeGlbFieldCharacters = 4 * 1024 * 1024;
+    private const int MaximumNativeGlbFieldBytes = 4 * 1024 * 1024;
 
     // Instance mode block definitions are named by idempotency key so a crashed
     // half-import (definition created, instance not) is reconcilable by name.
@@ -41,6 +45,26 @@ internal sealed class RhinoBridgeDispatcher : Tripo.Bridge.IHostBridgeDispatcher
         Tripo.Bridge.BridgeConstants.ImportMeshMethod,
         Tripo.Bridge.BridgeConstants.ImportGlbMethod,
     ];
+
+    private static readonly HashSet<string> NonSemanticRenderFieldNames =
+        new(StringComparer.Ordinal)
+        {
+            "rdk-texture-preview-in-3D",
+            "rdk-texture-preview-local-mapping",
+            "rdk-texture-display-in-viewport",
+            "rdk-texture-repeat-locked",
+            "rdk-texture-offset-locked",
+            "pbr-show-ui-basic-metalrough",
+            "pbr-show-ui-subsurface",
+            "pbr-show-ui-specularity",
+            "pbr-show-ui-anisotropy",
+            "pbr-show-ui-sheen",
+            "pbr-show-ui-clearcoat",
+            "pbr-show-ui-opacity",
+            "pbr-show-ui-emission",
+            "pbr-show-ui-bump-displacement",
+            "pbr-show-ui-ambient-occlusion",
+        };
 
     private readonly RhinoDocumentSessions _documentSessions;
     private readonly SemaphoreSlim _mutationGate = new(1, 1);
@@ -398,7 +422,8 @@ internal sealed class RhinoBridgeDispatcher : Tripo.Bridge.IHostBridgeDispatcher
 
     private static GlbPreflightReceipt InspectImportedGlb(
         global::Rhino.RhinoDoc document,
-        IReadOnlyList<RhinoObject>? auditedRoots = null)
+        IReadOnlyList<RhinoObject>? auditedRoots = null,
+        bool includePortableProof = true)
     {
         RhinoObject[] roots = auditedRoots?.ToArray() ??
                               GetAuditedTopLevelObjects(document);
@@ -419,13 +444,28 @@ internal sealed class RhinoBridgeDispatcher : Tripo.Bridge.IHostBridgeDispatcher
                 "The staged GLB contains no importable mesh geometry.");
         }
 
-        GlbContentProof proof = CreateGlbContentProof(document, roots);
+        GlbTextureFileProofCache fileCache = new();
+        GlbContentProof proof = CreateGlbContentProof(
+            document,
+            roots,
+            includeDocumentRenderHash: true,
+            fileCache);
+        GlbContentProof? portableProof = includePortableProof
+            ? CreateGlbContentProof(
+                document,
+                roots,
+                includeDocumentRenderHash: false,
+                fileCache)
+            : null;
+        fileCache.VerifyUnchanged();
         return new GlbPreflightReceipt(
             checked((int)counts.VertexCount),
             checked((int)counts.TriangleCount),
             proof.MaterialCount,
             proof.TextureCount,
-            proof.ContentDigest);
+            proof.ContentDigest,
+            portableProof?.ContentDigest ?? string.Empty,
+            portableProof?.Diagnostics);
     }
 
     private static void InspectGlbObjects(
@@ -534,6 +574,7 @@ internal sealed class RhinoBridgeDispatcher : Tripo.Bridge.IHostBridgeDispatcher
         int definitionIndex = -1;
         List<GeometryBase> definitionGeometry = new();
         GlbDefinitionIdentity? definitionIdentity = null;
+        GlbPreflightReceipt? committedReceipt = null;
         bool nativeImportStarted = false;
         Exception? failure = null;
         try
@@ -575,12 +616,17 @@ internal sealed class RhinoBridgeDispatcher : Tripo.Bridge.IHostBridgeDispatcher
 
             GlbPreflightReceipt activeReceipt =
                 InspectImportedGlb(document, importedObjects);
-            if (activeReceipt != preflight)
+            // Persistent RDK content is owned by its document, so Rhino's
+            // render-content hash is not a cross-document identity. The fixed
+            // snapshot and portable semantic proof must still match the
+            // isolated preflight.
+            if (!HaveEquivalentPortableGlbImport(preflight, activeReceipt))
             {
                 throw new Tripo.Bridge.BridgeCallException(
                     Tripo.Bridge.BridgeConstants
                         .MutationStateUncertainError,
-                    "The active GLB import did not match its isolated preflight.");
+                    "The active GLB import did not match its isolated preflight. " +
+                    DescribeGlbReceiptDifference(preflight, activeReceipt));
             }
 
             List<ObjectAttributes> definitionAttributes = new(importedObjects.Length);
@@ -598,8 +644,7 @@ internal sealed class RhinoBridgeDispatcher : Tripo.Bridge.IHostBridgeDispatcher
 
                 ApplyGlbDefinitionMemberIdentity(
                     attributes,
-                    request,
-                    preflight);
+                    request);
                 definitionGeometry.Add(geometry);
                 definitionAttributes.Add(attributes);
             }
@@ -621,15 +666,31 @@ internal sealed class RhinoBridgeDispatcher : Tripo.Bridge.IHostBridgeDispatcher
                         .MutationStateUncertainError,
                     "Rhino lost the prepared native GLB block definition.");
             VerifyGlbDefinitionFingerprint(definition, request);
+            GlbDefinitionAudit definitionAudit =
+                InspectGlbDefinition(document, definition);
             GlbPreflightReceipt definitionReceipt =
-                InspectImportedGlb(document, definition.GetObjects());
-            if (definitionReceipt != preflight)
+                definitionAudit.Receipt;
+            // ModifyGeometry moves duplicated render content under definition
+            // ownership. Rhino can change its document-owned RDK render hash
+            // during that ownership transition even when every persistent
+            // material, sampler, mapping, texture byte, and mesh value remains
+            // unchanged, so this boundary intentionally uses the explicit
+            // portable proof.
+            if (!HaveEquivalentPortableGlbImport(
+                    activeReceipt,
+                    definitionReceipt))
             {
                 throw new Tripo.Bridge.BridgeCallException(
                     Tripo.Bridge.BridgeConstants
                         .MutationStateUncertainError,
-                    "Rhino did not preserve the imported GLB geometry and PBR content in its block.");
+                    "Rhino did not preserve the imported GLB geometry and PBR " +
+                    "content in its block. " +
+                    DescribeGlbReceiptDifference(
+                        activeReceipt,
+                        definitionReceipt));
             }
+            committedReceipt = definitionReceipt;
+            definitionIdentity = definitionAudit.Identity;
 
             Guid[] importedIds = importedObjects.Select(item => item.Id).ToArray();
             int deleted = document.Objects.Delete(importedIds, quiet: true);
@@ -648,8 +709,6 @@ internal sealed class RhinoBridgeDispatcher : Tripo.Bridge.IHostBridgeDispatcher
                     "Rhino retained unexpected top-level objects after GLB wrapping.");
             }
 
-            definitionIdentity =
-                CreateGlbDefinitionIdentity(document, definition);
             ObjectAttributes instanceAttributes = new()
             {
                 Name = request.Name,
@@ -657,7 +716,7 @@ internal sealed class RhinoBridgeDispatcher : Tripo.Bridge.IHostBridgeDispatcher
             ApplyGlbIdentityUserStrings(
                 instanceAttributes,
                 request,
-                preflight,
+                definitionReceipt,
                 definitionIdentity);
             createdId = document.Objects.AddInstanceObject(
                 definitionIndex,
@@ -686,8 +745,8 @@ internal sealed class RhinoBridgeDispatcher : Tripo.Bridge.IHostBridgeDispatcher
                 document,
                 request,
                 createdId,
-                preflight,
-                definitionIdentity);
+                definitionReceipt,
+                definitionAudit.Identity);
         }
         catch (Exception exception)
         {
@@ -725,18 +784,24 @@ internal sealed class RhinoBridgeDispatcher : Tripo.Bridge.IHostBridgeDispatcher
             definitionIdentity ??
             throw UncertainGlbImport(
                 "Rhino finished the GLB undo record without definition identity.");
+        GlbPreflightReceipt durableReceipt =
+            committedReceipt ??
+            throw UncertainGlbImport(
+                "Rhino finished the GLB undo record without a durable import receipt.");
         try
         {
             journal.RecordCommitted(
                 new Tripo.Bridge.HostImportCommitReceipt(
                     createdId.ToString("D"),
-                    preflight.VertexCount,
-                    preflight.TriangleCount,
-                    preflight.MaterialCount,
-                    preflight.TextureCount,
+                    durableReceipt.VertexCount,
+                    durableReceipt.TriangleCount,
+                    durableReceipt.MaterialCount,
+                    durableReceipt.TextureCount,
                     committedIdentity.MemberCount,
                     committedIdentity.MemberDigest,
-                    preflight.PbrContentDigest));
+                    durableReceipt.PbrContentDigest,
+                    Tripo.Bridge.HostImportJournal
+                        .CurrentPbrProofVersion));
         }
         catch (Exception exception)
         {
@@ -750,7 +815,7 @@ internal sealed class RhinoBridgeDispatcher : Tripo.Bridge.IHostBridgeDispatcher
         return CreateGlbReceipt(
             request,
             createdId.ToString("D"),
-            preflight,
+            durableReceipt,
             "committed");
     }
 
@@ -778,13 +843,15 @@ internal sealed class RhinoBridgeDispatcher : Tripo.Bridge.IHostBridgeDispatcher
         if (nativeImportStarted)
         {
             RecordOutcomeUnknownBestEffort(journal);
+            string originalFailure = DescribeGlbFailure(failure);
             throw new Tripo.Bridge.BridgeCallException(
                 Tripo.Bridge.BridgeConstants.MutationStateUncertainError,
-                restored
+                (restored
                     ? "Rhino rolled back a failed native GLB import, but the " +
-                      "native importer outcome remains unsafe to retry."
+                      "native importer outcome remains unsafe to retry. "
                     : "Rhino could not prove that a failed native GLB import " +
-                      "was fully rolled back.",
+                      "was fully rolled back. ") +
+                originalFailure,
                 failure);
         }
 
@@ -841,6 +908,78 @@ internal sealed class RhinoBridgeDispatcher : Tripo.Bridge.IHostBridgeDispatcher
             "Rhino failed while importing the staged GLB.",
             failure);
     }
+
+    private static string DescribeGlbFailure(Exception failure) =>
+        failure is Tripo.Bridge.BridgeCallException bridge
+            ? $"Original failure [{bridge.Code}]: {bridge.Message}"
+            : $"Original failure type: {failure.GetType().Name}.";
+
+    private static string DescribeGlbReceiptDifference(
+        GlbPreflightReceipt expected,
+        GlbPreflightReceipt actual)
+    {
+        string diagnostics = string.Empty;
+        if (expected.PortableDiagnostics is not null &&
+            actual.PortableDiagnostics is not null)
+        {
+            diagnostics =
+                " Portable unique-category matches: geometry " +
+                $"{string.Equals(expected.PortableDiagnostics.GeometryDigest, actual.PortableDiagnostics.GeometryDigest, StringComparison.Ordinal)}, " +
+                "material bindings " +
+                $"{string.Equals(expected.PortableDiagnostics.MaterialBindingDigest, actual.PortableDiagnostics.MaterialBindingDigest, StringComparison.Ordinal)}, " +
+                "texture mappings " +
+                $"{string.Equals(expected.PortableDiagnostics.TextureMappingDigest, actual.PortableDiagnostics.TextureMappingDigest, StringComparison.Ordinal)}, " +
+                "render content " +
+                $"{string.Equals(expected.PortableDiagnostics.RenderContentDigest, actual.PortableDiagnostics.RenderContentDigest, StringComparison.Ordinal)}, " +
+                "render identity " +
+                $"{string.Equals(expected.PortableDiagnostics.RenderContentIdentityDigest, actual.PortableDiagnostics.RenderContentIdentityDigest, StringComparison.Ordinal)}, " +
+                "render child slots " +
+                $"{string.Equals(expected.PortableDiagnostics.RenderContentChildDigest, actual.PortableDiagnostics.RenderContentChildDigest, StringComparison.Ordinal)}, " +
+                "render fields " +
+                $"{string.Equals(expected.PortableDiagnostics.RenderFieldDigest, actual.PortableDiagnostics.RenderFieldDigest, StringComparison.Ordinal)}, " +
+                "material values " +
+                $"{string.Equals(expected.PortableDiagnostics.MaterialValueDigest, actual.PortableDiagnostics.MaterialValueDigest, StringComparison.Ordinal)}, " +
+                "legacy textures " +
+                $"{string.Equals(expected.PortableDiagnostics.LegacyTextureDigest, actual.PortableDiagnostics.LegacyTextureDigest, StringComparison.Ordinal)}, " +
+                "texture files " +
+                $"{string.Equals(expected.PortableDiagnostics.TextureFileDigest, actual.PortableDiagnostics.TextureFileDigest, StringComparison.Ordinal)}.";
+        }
+
+        return
+            "Expected/actual vertices " +
+            $"{expected.VertexCount}/{actual.VertexCount}, triangles " +
+            $"{expected.TriangleCount}/{actual.TriangleCount}, materials " +
+            $"{expected.MaterialCount}/{actual.MaterialCount}, textures " +
+            $"{expected.TextureCount}/{actual.TextureCount}, portable PBR digest match " +
+            $"{string.Equals(expected.PortablePbrContentDigest, actual.PortablePbrContentDigest, StringComparison.Ordinal)}, " +
+            "and document PBR digest match " +
+            $"{string.Equals(expected.PbrContentDigest, actual.PbrContentDigest, StringComparison.Ordinal)}." +
+            diagnostics;
+    }
+
+    private static bool HaveEquivalentPortableGlbImport(
+        GlbPreflightReceipt expected,
+        GlbPreflightReceipt actual) =>
+        expected.VertexCount == actual.VertexCount &&
+        expected.TriangleCount == actual.TriangleCount &&
+        expected.MaterialCount == actual.MaterialCount &&
+        expected.TextureCount == actual.TextureCount &&
+        string.Equals(
+            expected.PortablePbrContentDigest,
+            actual.PortablePbrContentDigest,
+            StringComparison.Ordinal);
+
+    private static bool HaveEquivalentCommittedGlbReceipt(
+        GlbPreflightReceipt expected,
+        GlbPreflightReceipt actual) =>
+        expected.VertexCount == actual.VertexCount &&
+        expected.TriangleCount == actual.TriangleCount &&
+        expected.MaterialCount == actual.MaterialCount &&
+        expected.TextureCount == actual.TextureCount &&
+        string.Equals(
+            expected.PbrContentDigest,
+            actual.PbrContentDigest,
+            StringComparison.Ordinal);
 
     private static RhinoDocumentState CaptureDocumentState(
         global::Rhino.RhinoDoc document)
@@ -1020,7 +1159,9 @@ internal sealed class RhinoBridgeDispatcher : Tripo.Bridge.IHostBridgeDispatcher
             commit.TriangleCount,
             commit.MaterialCount,
             commit.TextureCount,
-            commit.PbrContentDigest);
+            commit.PbrContentDigest,
+            PortablePbrContentDigest: string.Empty,
+            PortableDiagnostics: null);
         GlbDefinitionIdentity identity = new(
             commit.DefinitionMemberCount,
             commit.DefinitionMemberDigest);
@@ -1077,13 +1218,17 @@ internal sealed class RhinoBridgeDispatcher : Tripo.Bridge.IHostBridgeDispatcher
         }
 
         VerifyGlbDefinitionFingerprint(instance.InstanceDefinition, request);
-        GlbDefinitionIdentity actualDefinition =
-            CreateGlbDefinitionIdentity(document, instance.InstanceDefinition);
-        GlbPreflightReceipt actualReceipt = InspectImportedGlb(
-            document,
-            instance.InstanceDefinition.GetObjects());
+        GlbDefinitionAudit actual =
+            InspectGlbDefinition(
+                document,
+                instance.InstanceDefinition,
+                includePortableProof: false);
+        GlbPreflightReceipt actualReceipt = actual.Receipt;
+        GlbDefinitionIdentity actualDefinition = actual.Identity;
         if (actualDefinition != expectedDefinition ||
-            actualReceipt != expectedCounts ||
+            !HaveEquivalentCommittedGlbReceipt(
+                expectedCounts,
+                actualReceipt) ||
             ReadStoredCount(existing, VertexCountUserString, -1) !=
                 expectedCounts.VertexCount ||
             ReadStoredCount(existing, TriangleCountUserString, -1) !=
@@ -1109,11 +1254,13 @@ internal sealed class RhinoBridgeDispatcher : Tripo.Bridge.IHostBridgeDispatcher
         }
     }
 
-    private static GlbDefinitionIdentity CreateGlbDefinitionIdentity(
+    private static GlbDefinitionAudit InspectGlbDefinition(
         global::Rhino.RhinoDoc document,
-        InstanceDefinition definition)
+        InstanceDefinition definition,
+        bool includePortableProof = true)
     {
-        int memberCount = definition.GetObjects().Length;
+        RhinoObject[] members = definition.GetObjects();
+        int memberCount = members.Length;
         if (memberCount == 0 ||
             memberCount > MaximumNativeGlbObjects)
         {
@@ -1121,16 +1268,26 @@ internal sealed class RhinoBridgeDispatcher : Tripo.Bridge.IHostBridgeDispatcher
                 "The native GLB definition has an invalid member count.");
         }
 
-        GlbContentProof proof =
-            CreateGlbContentProof(document, definition.GetObjects());
-        return new GlbDefinitionIdentity(memberCount, proof.ContentDigest);
+        GlbPreflightReceipt receipt = InspectImportedGlb(
+            document,
+            members,
+            includePortableProof);
+        return new GlbDefinitionAudit(
+            receipt,
+            new GlbDefinitionIdentity(
+                memberCount,
+                receipt.PbrContentDigest));
     }
 
     private static GlbContentProof CreateGlbContentProof(
         global::Rhino.RhinoDoc document,
-        IReadOnlyList<RhinoObject> roots)
+        IReadOnlyList<RhinoObject> roots,
+        bool includeDocumentRenderHash,
+        GlbTextureFileProofCache fileCache)
     {
-        GlbProofContext context = new();
+        GlbProofContext context = new(
+            includeDocumentRenderHash,
+            fileCache);
         string[] rootDigests = roots
             .Select(root =>
                 CreateObjectContentDigest(
@@ -1149,7 +1306,16 @@ internal sealed class RhinoBridgeDispatcher : Tripo.Bridge.IHostBridgeDispatcher
 
         using IncrementalHash hash =
             IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
-        AppendDigestField(hash, "tripo-rhino-glb-content-proof-v1");
+        AppendDigestField(
+            hash,
+            "tripo-rhino-glb-content-proof-v" +
+            Tripo.Bridge.HostImportJournal.CurrentPbrProofVersion
+                .ToString(CultureInfo.InvariantCulture));
+        AppendDigestField(
+            hash,
+            includeDocumentRenderHash
+                ? "document"
+                : "portable");
         AppendDigestInt32(hash, rootDigests.Length);
         foreach (string digest in rootDigests)
         {
@@ -1159,7 +1325,39 @@ internal sealed class RhinoBridgeDispatcher : Tripo.Bridge.IHostBridgeDispatcher
         return new GlbContentProof(
             context.MaterialDigests.Count,
             context.TextureDigests.Count,
-            FinishDigest(hash));
+            FinishDigest(hash),
+            new GlbProofDiagnostics(
+                CreateDigestSet(
+                    "geometry",
+                    context.GeometryDigests),
+                CreateDigestSet(
+                    "material-bindings",
+                    context.ObjectMaterialBindingDigests),
+                CreateDigestSet(
+                    "texture-mappings",
+                    context.TextureMappingDigests),
+                CreateDigestSet(
+                    "render-content",
+                    context.RenderContentDigests),
+                CreateDigestSet(
+                    "render-content-identity",
+                    context.RenderContentIdentityDigests),
+                CreateDigestSet(
+                    "render-content-children",
+                    context.RenderContentChildDigests),
+                CreateDigestSet(
+                    "render-fields",
+                    context.RenderFieldDigests),
+                CreateDigestSet(
+                    "material-values",
+                    context.MaterialValueDigests),
+                CreateDigestSet(
+                    "legacy-textures",
+                    context.LegacyTextureDigests),
+                CreateDigestSet(
+                    "texture-files",
+                    fileCache.FileDigests.Values.Select(
+                        item => item.Digest))));
     }
 
     private static string CreateObjectContentDigest(
@@ -1187,13 +1385,16 @@ internal sealed class RhinoBridgeDispatcher : Tripo.Bridge.IHostBridgeDispatcher
                 document,
                 item,
                 context));
-        AppendDigestField(hash, CreateTextureMappingsDigest(item));
+        string mappingDigest = CreateTextureMappingsDigest(item);
+        context.TextureMappingDigests.Add(mappingDigest);
+        AppendDigestField(hash, mappingDigest);
         switch (item)
         {
             case MeshObject meshObject:
-                AppendDigestField(
-                    hash,
-                    CreateMeshGeometryFingerprint(meshObject.MeshGeometry));
+                string geometryDigest =
+                    CreateMeshGeometryFingerprint(meshObject.MeshGeometry);
+                context.GeometryDigests.Add(geometryDigest);
+                AppendDigestField(hash, geometryDigest);
                 break;
             case InstanceObject instance:
                 AppendDigestTransform(hash, instance.InstanceXform);
@@ -1286,14 +1487,6 @@ internal sealed class RhinoBridgeDispatcher : Tripo.Bridge.IHostBridgeDispatcher
         switch (item.Attributes.MaterialSource)
         {
             case ObjectMaterialSource.MaterialFromObject:
-                AddMaterialBinding(
-                    bindings,
-                    "object-direct",
-                    item.RenderMaterial,
-                    ResolveMaterial(
-                        document,
-                        item.Attributes.MaterialIndex),
-                    context);
                 break;
             case ObjectMaterialSource.MaterialFromLayer:
                 Layer? layer =
@@ -1305,14 +1498,6 @@ internal sealed class RhinoBridgeDispatcher : Tripo.Bridge.IHostBridgeDispatcher
                         "The native GLB has an unresolved material layer.");
                 }
 
-                AddMaterialBinding(
-                    bindings,
-                    "layer",
-                    layer.RenderMaterial,
-                    ResolveMaterial(
-                        document,
-                        layer.RenderMaterialIndex),
-                    context);
                 break;
             case ObjectMaterialSource.MaterialFromParent:
                 throw new Tripo.Bridge.BridgeCallException(
@@ -1433,7 +1618,9 @@ internal sealed class RhinoBridgeDispatcher : Tripo.Bridge.IHostBridgeDispatcher
             AppendDigestField(hash, binding);
         }
 
-        return FinishDigest(hash);
+        string digest = FinishDigest(hash);
+        context.ObjectMaterialBindingDigests.Add(digest);
+        return digest;
     }
 
     private static void AddMaterialBinding(
@@ -1466,6 +1653,9 @@ internal sealed class RhinoBridgeDispatcher : Tripo.Bridge.IHostBridgeDispatcher
         if (renderMaterial is not null)
         {
             AppendDigestField(hash, "render");
+            // Allowed built-in render content is proved from its canonical
+            // persistent fields and child tree. ToMaterial() is a derived
+            // simulation whose lazy defaults can differ across documents.
             AppendDigestField(
                 hash,
                 CreateRenderContentDigest(
@@ -1473,21 +1663,6 @@ internal sealed class RhinoBridgeDispatcher : Tripo.Bridge.IHostBridgeDispatcher
                     context,
                     new HashSet<Guid>(),
                     depth: 0));
-            Material simulated = renderMaterial.ToMaterial(
-                global::Rhino.Render.RenderTexture.TextureGeneration.Disallow);
-            try
-            {
-                AppendDigestField(
-                    hash,
-                    CreateMaterialValueDigest(
-                        simulated,
-                        context,
-                        countTextures: false));
-            }
-            finally
-            {
-                simulated.Dispose();
-            }
         }
         else if (material is not null)
         {
@@ -1523,52 +1698,80 @@ internal sealed class RhinoBridgeDispatcher : Tripo.Bridge.IHostBridgeDispatcher
         HashSet<Guid> activeContentIds,
         int depth)
     {
-        if (depth > 32 || !activeContentIds.Add(content.Id))
+        if (depth > 32 || content.Id == Guid.Empty)
         {
             throw new Tripo.Bridge.BridgeCallException(
                 "glb_invalid",
-                "The native GLB render-content hierarchy is cyclic or too deep.");
+                "The native GLB render-content hierarchy is invalid or too deep.");
+        }
+
+        if (context.CompletedRenderContentDigests.TryGetValue(
+                content.Id,
+                out string? completed))
+        {
+            return completed;
+        }
+
+        if (!activeContentIds.Add(content.Id))
+        {
+            throw new Tripo.Bridge.BridgeCallException(
+                "glb_invalid",
+                "The native GLB render-content hierarchy is cyclic.");
         }
 
         try
         {
+            VerifySupportedGlbRenderContent(content);
             using IncrementalHash hash =
                 IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
             AppendDigestField(hash, "render-content");
-            AppendDigestField(hash, content.TypeId.ToString("D"));
-            global::Rhino.Render.CrcRenderHashFlags flags =
-                global::Rhino.Render.CrcRenderHashFlags
-                    .ExcludeLinearWorkflow |
-                global::Rhino.Render.CrcRenderHashFlags.ExcludeUnits |
-                global::Rhino.Render.CrcRenderHashFlags
-                    .ExcludeDocumentEffects;
-            AppendDigestUInt32(
-                hash,
-                content.RenderHashExclude(flags, "filename"));
-            AppendDigestField(hash, content.ChildSlotName ?? string.Empty);
-            AppendDigestFileReferences(hash, content, context);
-
-            if (content is global::Rhino.Render.RenderTexture texture)
+            using IncrementalHash identityHash =
+                IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
+            AppendDigestField(identityHash, "render-content-identity");
+            AppendDigestField(
+                identityHash,
+                content.TypeId.ToString("D"));
+            AppendDigestField(
+                identityHash,
+                content.ChildSlotName ?? string.Empty);
+            string identityDigest = FinishDigest(identityHash);
+            context.RenderContentIdentityDigests.Add(identityDigest);
+            AppendDigestField(hash, identityDigest);
+            if (context.IncludeDocumentRenderHash)
             {
-                AppendDigestField(hash, "texture");
-                AppendDigestTransform(hash, texture.LocalMappingTransform);
-                (int Width, int Height, int Depth)? size = texture.PixelSize2;
-                AppendDigestBool(hash, size.HasValue);
-                if (size.HasValue)
-                {
-                    AppendDigestInt32(hash, size.Value.Width);
-                    AppendDigestInt32(hash, size.Value.Height);
-                    AppendDigestInt32(hash, size.Value.Depth);
-                }
+                global::Rhino.Render.CrcRenderHashFlags flags =
+                    global::Rhino.Render.CrcRenderHashFlags
+                        .ExcludeLinearWorkflow |
+                    global::Rhino.Render.CrcRenderHashFlags.ExcludeUnits |
+                    global::Rhino.Render.CrcRenderHashFlags
+                        .ExcludeDocumentEffects;
+                AppendDigestUInt32(
+                    hash,
+                    content.RenderHashExclude(flags, "filename"));
             }
+            int fileReferenceCount =
+                AppendDigestFileReferences(hash, content, context);
+            AppendRenderContentFieldsDigest(
+                hash,
+                content,
+                context,
+                fileReferenceCount > 0 &&
+                    !string.IsNullOrWhiteSpace(content.Filename)
+                    ? content.Filename
+                    : null);
+            // For the allowlisted built-in content types, persistent texture
+            // source values live in Fields. RenderTexture getters are derived
+            // RDK runtime views and can differ between headless and active
+            // documents even when the source fields and sampled bytes match.
 
-            int childIndex = 0;
+            List<string> childBindings = [];
+            HashSet<string> childSlots = new(StringComparer.Ordinal);
             for (global::Rhino.Render.RenderContent? child =
                      content.FirstChild;
                  child is not null;
                  child = child.NextSibling)
             {
-                if (++childIndex > MaximumNativeGlbTextures)
+                if (childBindings.Count >= MaximumNativeGlbTextures)
                 {
                     throw new Tripo.Bridge.BridgeCallException(
                         "glb_too_complex",
@@ -1576,27 +1779,53 @@ internal sealed class RhinoBridgeDispatcher : Tripo.Bridge.IHostBridgeDispatcher
                 }
 
                 string slot = child.ChildSlotName ?? string.Empty;
-                AppendDigestInt32(hash, childIndex);
-                AppendDigestField(hash, slot);
-                AppendDigestBool(
-                    hash,
-                    slot.Length > 0 && content.ChildSlotOn(slot));
-                AppendDigestDouble(
-                    hash,
-                    slot.Length > 0
-                        ? content.ChildSlotAmount(slot)
-                        : 0d);
+                if (slot.Length == 0 || !childSlots.Add(slot))
+                {
+                    throw new Tripo.Bridge.BridgeCallException(
+                        "glb_invalid",
+                        "The native GLB render-content hierarchy has invalid child slots.");
+                }
+
+                using IncrementalHash childHash =
+                    IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
+                using IncrementalHash childStructureHash =
+                    IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
                 AppendDigestField(
-                    hash,
+                    childStructureHash,
+                    "render-content-child");
+                AppendDigestField(childStructureHash, slot);
+                AppendDigestBool(
+                    childStructureHash,
+                    content.ChildSlotOn(slot));
+                AppendDigestDouble(
+                    childStructureHash,
+                    content.ChildSlotAmount(slot));
+                string childStructureDigest =
+                    FinishDigest(childStructureHash);
+                context.RenderContentChildDigests.Add(
+                    childStructureDigest);
+                AppendDigestField(
+                    childHash,
+                    childStructureDigest);
+                AppendDigestField(
+                    childHash,
                     CreateRenderContentDigest(
                         child,
                         context,
                         activeContentIds,
                         depth + 1));
+                childBindings.Add(FinishDigest(childHash));
             }
 
-            AppendDigestInt32(hash, childIndex);
+            childBindings.Sort(StringComparer.Ordinal);
+            AppendDigestInt32(hash, childBindings.Count);
+            foreach (string childBinding in childBindings)
+            {
+                AppendDigestField(hash, childBinding);
+            }
+
             string digest = FinishDigest(hash);
+            context.RenderContentDigests.Add(digest);
             if (content is global::Rhino.Render.RenderTexture)
             {
                 context.TextureDigests.Add(digest);
@@ -1609,6 +1838,9 @@ internal sealed class RhinoBridgeDispatcher : Tripo.Bridge.IHostBridgeDispatcher
                     "The native GLB proof exceeds the texture limit.");
             }
 
+            context.CompletedRenderContentDigests.Add(
+                content.Id,
+                digest);
             return digest;
         }
         finally
@@ -1617,7 +1849,256 @@ internal sealed class RhinoBridgeDispatcher : Tripo.Bridge.IHostBridgeDispatcher
         }
     }
 
-    private static void AppendDigestFileReferences(
+    private static void AppendRenderContentFieldsDigest(
+        IncrementalHash hash,
+        global::Rhino.Render.RenderContent content,
+        GlbProofContext context,
+        string? validatedFilename)
+    {
+        List<global::Rhino.Render.Fields.Field> fields = [];
+        foreach (global::Rhino.Render.Fields.Field field in content.Fields)
+        {
+            if (NonSemanticRenderFieldNames.Contains(
+                    field.Name ?? string.Empty))
+            {
+                // These exact built-in RDK fields control editor preview or
+                // UI locks. They do not change the texture sampling result.
+                continue;
+            }
+
+            if (++context.RenderFieldCount >
+                MaximumNativeGlbRenderFields)
+            {
+                throw new Tripo.Bridge.BridgeCallException(
+                    "glb_too_complex",
+                    "The native GLB render content has too many fields.");
+            }
+
+            fields.Add(field);
+        }
+
+        fields.Sort(
+            (left, right) =>
+                string.CompareOrdinal(left.Name, right.Name));
+        AppendDigestInt32(hash, fields.Count);
+        string? previousKey = null;
+        foreach (global::Rhino.Render.Fields.Field field in fields)
+        {
+            string key = field.Name ?? string.Empty;
+            if (key.Length == 0 ||
+                key.Length > MaximumNativeGlbFieldStringCharacters ||
+                string.Equals(key, previousKey, StringComparison.Ordinal))
+            {
+                throw new Tripo.Bridge.BridgeCallException(
+                    "glb_invalid",
+                    "The native GLB render content has invalid fields.");
+            }
+
+            previousKey = key;
+            CountRenderFieldCharacters(context, key.Length);
+            using IncrementalHash fieldHash =
+                IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
+            AppendDigestField(fieldHash, key);
+            AppendRenderContentFieldValue(
+                fieldHash,
+                key,
+                field.ValueAsObject(),
+                context,
+                validatedFilename);
+            string fieldDigest = FinishDigest(fieldHash);
+            context.RenderFieldDigests.Add(fieldDigest);
+            AppendDigestField(hash, fieldDigest);
+        }
+    }
+
+    private static void AppendRenderContentFieldValue(
+        IncrementalHash hash,
+        string key,
+        object? value,
+        GlbProofContext context,
+        string? validatedFilename)
+    {
+        switch (value)
+        {
+            case null:
+                AppendDigestField(hash, "null");
+                return;
+            case string text:
+                AppendDigestField(hash, "string");
+                if (text.Length >
+                    MaximumNativeGlbFieldStringCharacters)
+                {
+                    throw new Tripo.Bridge.BridgeCallException(
+                        "glb_too_complex",
+                        "The native GLB render field is too large.");
+                }
+
+                CountRenderFieldCharacters(context, text.Length);
+                if (string.Equals(
+                        key,
+                        "filename",
+                        StringComparison.Ordinal))
+                {
+                    if (validatedFilename is null ||
+                        !HaveEquivalentTexturePath(
+                            text,
+                            validatedFilename))
+                    {
+                        throw new Tripo.Bridge.BridgeCallException(
+                            "glb_invalid",
+                            "The native GLB render content has an unverified file reference.");
+                    }
+
+                    // File identity is the validated byte digest above, not a
+                    // document-owned extraction path.
+                    AppendDigestField(hash, "file-reference-covered");
+                    return;
+                }
+
+                AppendDigestField(hash, text);
+                return;
+            case bool boolean:
+                AppendDigestField(hash, "bool");
+                AppendDigestBool(hash, boolean);
+                return;
+            case int integer:
+                AppendDigestField(hash, "int32");
+                AppendDigestInt32(hash, integer);
+                return;
+            case float single:
+                AppendDigestField(hash, "single");
+                AppendDigestSingle(hash, single);
+                return;
+            case double number:
+                AppendDigestField(hash, "double");
+                AppendDigestDouble(hash, number);
+                return;
+            case global::Rhino.Display.Color4f color:
+                AppendDigestField(hash, "color4f");
+                AppendDigestColor4f(hash, color);
+                return;
+            case System.Drawing.Color systemColor:
+                AppendDigestField(hash, "color");
+                AppendDigestColor(hash, systemColor);
+                return;
+            case Vector2d vector2:
+                AppendDigestField(hash, "vector2d");
+                AppendDigestVector2d(hash, vector2);
+                return;
+            case Vector3d vector3:
+                AppendDigestField(hash, "vector3d");
+                AppendDigestVector3d(hash, vector3);
+                return;
+            case Point2d point2:
+                AppendDigestField(hash, "point2d");
+                AppendDigestPoint2d(hash, point2);
+                return;
+            case Point3d point3:
+                AppendDigestField(hash, "point3d");
+                AppendDigestPoint3d(hash, point3);
+                return;
+            case Point4d point4:
+                AppendDigestField(hash, "point4d");
+                AppendDigestPoint4d(hash, point4);
+                return;
+            case Guid guid:
+                AppendDigestField(hash, "guid");
+                AppendDigestField(hash, guid.ToString("D"));
+                return;
+            case Transform transform:
+                AppendDigestField(hash, "transform");
+                AppendDigestTransform(hash, transform);
+                return;
+            case DateTime dateTime:
+                AppendDigestField(hash, "datetime");
+                AppendDigestInt64(hash, dateTime.ToBinary());
+                return;
+            case byte[] bytes:
+                if (context.RenderFieldBytes + bytes.Length >
+                    MaximumNativeGlbFieldBytes)
+                {
+                    throw new Tripo.Bridge.BridgeCallException(
+                        "glb_too_complex",
+                        "The native GLB render fields exceed the byte limit.");
+                }
+
+                context.RenderFieldBytes += bytes.Length;
+                AppendDigestField(hash, "bytes");
+                AppendDigestInt32(hash, bytes.Length);
+                hash.AppendData(SHA256.HashData(bytes));
+                return;
+            default:
+                throw new Tripo.Bridge.BridgeCallException(
+                    "glb_invalid",
+                    "The native GLB render content uses an unsupported field type.");
+        }
+    }
+
+    private static bool HaveEquivalentTexturePath(
+        string left,
+        string right)
+    {
+        try
+        {
+            StringComparison comparison = OperatingSystem.IsWindows()
+                ? StringComparison.OrdinalIgnoreCase
+                : StringComparison.Ordinal;
+            return string.Equals(
+                Path.GetFullPath(left),
+                Path.GetFullPath(right),
+                comparison);
+        }
+        catch (Exception exception)
+            when (exception is ArgumentException or
+                  NotSupportedException or
+                  PathTooLongException)
+        {
+            return false;
+        }
+    }
+
+    private static void VerifySupportedGlbRenderContent(
+        global::Rhino.Render.RenderContent content)
+    {
+        Guid typeId = content.TypeId;
+        bool supported = content switch
+        {
+            global::Rhino.Render.RenderMaterial =>
+                typeId == global::Rhino.Render.ContentUuids
+                    .PhysicallyBasedMaterialType ||
+                typeId == global::Rhino.Render.ContentUuids
+                    .BasicMaterialType,
+            global::Rhino.Render.RenderTexture =>
+                typeId == global::Rhino.Render.ContentUuids
+                    .BitmapTextureType ||
+                typeId == global::Rhino.Render.ContentUuids
+                    .SimpleBitmapTextureType,
+            _ => false,
+        };
+        if (!supported)
+        {
+            throw new Tripo.Bridge.BridgeCallException(
+                "glb_invalid",
+                "The native GLB uses unsupported custom or procedural render content.");
+        }
+    }
+
+    private static void CountRenderFieldCharacters(
+        GlbProofContext context,
+        int characters)
+    {
+        if (context.RenderFieldCharacters + characters >
+            MaximumNativeGlbFieldCharacters)
+        {
+            throw new Tripo.Bridge.BridgeCallException(
+                "glb_too_complex",
+                "The native GLB render fields exceed the text limit.");
+        }
+
+        context.RenderFieldCharacters += characters;
+    }
+
+    private static int AppendDigestFileReferences(
         IncrementalHash hash,
         global::Rhino.Render.RenderContent content,
         GlbProofContext context)
@@ -1645,6 +2126,8 @@ internal sealed class RhinoBridgeDispatcher : Tripo.Bridge.IHostBridgeDispatcher
         {
             AppendDigestField(hash, digest);
         }
+
+        return fileDigests.Length;
     }
 
     private static string CreateMaterialValueDigest(
@@ -1721,7 +2204,9 @@ internal sealed class RhinoBridgeDispatcher : Tripo.Bridge.IHostBridgeDispatcher
             AppendDigestField(hash, textureDigest);
         }
 
-        return FinishDigest(hash);
+        string digest = FinishDigest(hash);
+        context.MaterialValueDigests.Add(digest);
+        return digest;
     }
 
     private static string CreateLegacyTextureDigest(
@@ -1764,6 +2249,7 @@ internal sealed class RhinoBridgeDispatcher : Tripo.Bridge.IHostBridgeDispatcher
         }
 
         string digest = FinishDigest(hash);
+        context.LegacyTextureDigests.Add(digest);
         if (countTexture)
         {
             context.TextureDigests.Add(digest);
@@ -1804,29 +2290,161 @@ internal sealed class RhinoBridgeDispatcher : Tripo.Bridge.IHostBridgeDispatcher
             AppendDigestInt32(hash, (int)mapping.MappingType);
             AppendDigestBool(hash, mapping.Capped);
             AppendDigestInt32(hash, (int)mapping.TextureSpace);
-            AppendDigestTransform(hash, mapping.UvwTransform);
-            AppendDigestTransform(hash, mapping.PrimitiveTransform);
-            AppendDigestTransform(hash, mapping.NormalTransform);
-            AppendDigestTransform(hash, objectTransform);
-            global::Rhino.Render.CachedTextureCoordinates? cached =
-                item.Geometry is Mesh mesh
-                    ? mesh.GetCachedTextureCoordinates(mapping.Id)
-                    : null;
-            AppendDigestBool(hash, cached is not null);
-            if (cached is not null)
+            AppendDigestInt32(hash, (int)mapping.Projection);
+            if (!mapping.UvwTransform.IsValid ||
+                !objectTransform.IsValid)
             {
-                AppendDigestInt32(hash, cached.Dim);
-                AppendDigestInt32(hash, cached.Count);
-                foreach (Point3d coordinate in cached)
-                {
-                    AppendDigestDouble(hash, coordinate.X);
-                    AppendDigestDouble(hash, coordinate.Y);
-                    AppendDigestDouble(hash, coordinate.Z);
-                }
+                throw new Tripo.Bridge.BridgeCallException(
+                    "glb_invalid",
+                    "The native GLB has an invalid texture-mapping transform.");
             }
+
+            AppendDigestTransform(hash, mapping.UvwTransform);
+            AppendTextureMappingPrimitiveDigest(hash, mapping);
+            AppendDigestTransform(hash, objectTransform);
+            // CachedTextureCoordinates are a derived runtime cache. Rhino can
+            // discard or rebuild them while preserving the mesh's exact UVs
+            // and every persistent mapping definition hashed above.
         }
 
         return FinishDigest(hash);
+    }
+
+    private static void AppendTextureMappingPrimitiveDigest(
+        IncrementalHash hash,
+        global::Rhino.Render.TextureMapping mapping)
+    {
+        switch (mapping.MappingType)
+        {
+            case global::Rhino.Render.TextureMappingType.None:
+            case global::Rhino.Render.TextureMappingType.SurfaceParameters:
+                AppendDigestField(hash, "no-mapping-primitive");
+                return;
+            case global::Rhino.Render.TextureMappingType.PlaneMapping:
+            case global::Rhino.Render.TextureMappingType.BoxMapping:
+            case global::Rhino.Render.TextureMappingType.OcsMapping:
+            {
+                bool isBox = mapping.MappingType ==
+                    global::Rhino.Render.TextureMappingType.BoxMapping;
+                bool found = isBox
+                    ? mapping.TryGetMappingBox(
+                        out Plane plane,
+                        out Interval dx,
+                        out Interval dy,
+                        out Interval dz,
+                        out bool capped)
+                    : mapping.TryGetMappingPlane(
+                        out plane,
+                        out dx,
+                        out dy,
+                        out dz,
+                        out capped);
+                if (!found ||
+                    capped != mapping.Capped ||
+                    !plane.IsValid ||
+                    !dx.IsValid ||
+                    !dy.IsValid ||
+                    !dz.IsValid)
+                {
+                    throw new Tripo.Bridge.BridgeCallException(
+                        "glb_invalid",
+                        "The native GLB has an unresolved texture-mapping primitive.");
+                }
+
+                AppendDigestField(hash, mapping.MappingType switch
+                {
+                    global::Rhino.Render.TextureMappingType.PlaneMapping =>
+                        "plane-mapping",
+                    global::Rhino.Render.TextureMappingType.BoxMapping =>
+                        "box-mapping",
+                    _ => "ocs-mapping",
+                });
+                AppendDigestPlane(hash, plane);
+                AppendDigestInterval(hash, dx);
+                AppendDigestInterval(hash, dy);
+                AppendDigestInterval(hash, dz);
+                return;
+            }
+            case global::Rhino.Render.TextureMappingType.CylinderMapping:
+                if (!mapping.TryGetMappingCylinder(
+                        out Cylinder cylinder,
+                        out bool cappedCylinder) ||
+                    cappedCylinder != mapping.Capped ||
+                    !cylinder.IsValid)
+                {
+                    throw new Tripo.Bridge.BridgeCallException(
+                        "glb_invalid",
+                        "The native GLB has an unresolved cylinder mapping.");
+                }
+
+                AppendDigestField(hash, "cylinder-mapping");
+                AppendDigestPlane(hash, cylinder.BasePlane);
+                AppendDigestDouble(hash, cylinder.Radius);
+                AppendDigestDouble(hash, cylinder.Height1);
+                AppendDigestDouble(hash, cylinder.Height2);
+                return;
+            case global::Rhino.Render.TextureMappingType.SphereMapping:
+                if (!mapping.TryGetMappingSphere(out Sphere sphere) ||
+                    !sphere.IsValid)
+                {
+                    throw new Tripo.Bridge.BridgeCallException(
+                        "glb_invalid",
+                        "The native GLB has an unresolved sphere mapping.");
+                }
+
+                AppendDigestField(hash, "sphere-mapping");
+                AppendDigestPlane(hash, sphere.EquatorialPlane);
+                AppendDigestDouble(hash, sphere.Radius);
+                return;
+            case global::Rhino.Render.TextureMappingType.MeshMappingPrimitive:
+                if (!mapping.TryGetMappingMesh(out Mesh mappingMesh) ||
+                    mappingMesh is null)
+                {
+                    throw new Tripo.Bridge.BridgeCallException(
+                        "glb_invalid",
+                        "The native GLB has an unresolved mesh mapping.");
+                }
+
+                try
+                {
+                    long triangleCount = 0;
+                    for (int index = 0;
+                         index < mappingMesh.Faces.Count;
+                         index++)
+                    {
+                        triangleCount += mappingMesh.Faces[index].IsQuad
+                            ? 2
+                            : 1;
+                    }
+
+                    if (!mappingMesh.IsValid ||
+                        mappingMesh.Vertices.Count >
+                            Tripo.Bridge.BridgeConstants.MaximumVertices ||
+                        triangleCount >
+                            Tripo.Bridge.BridgeConstants.MaximumTriangles ||
+                        !mappingMesh.GetBoundingBox(accurate: true).IsValid)
+                    {
+                        throw new Tripo.Bridge.BridgeCallException(
+                            "glb_too_complex",
+                            "The native GLB mesh mapping is invalid or too large.");
+                    }
+
+                    AppendDigestField(hash, "mesh-mapping");
+                    AppendDigestField(
+                        hash,
+                        CreateMeshGeometryFingerprint(mappingMesh));
+                }
+                finally
+                {
+                    mappingMesh.Dispose();
+                }
+
+                return;
+            default:
+                throw new Tripo.Bridge.BridgeCallException(
+                    "glb_invalid",
+                    "The native GLB uses an unsupported texture-mapping primitive.");
+        }
     }
 
     private static string CreateMeshGeometryFingerprint(Mesh mesh)
@@ -1913,13 +2531,6 @@ internal sealed class RhinoBridgeDispatcher : Tripo.Bridge.IHostBridgeDispatcher
                 exception);
         }
 
-        if (context.FileDigests.TryGetValue(
-                fullPath,
-                out string? existing))
-        {
-            return existing;
-        }
-
         FileInfo before = new(fullPath);
         before.Refresh();
         const long maximumTextureFileBytes = 64L * 1024 * 1024;
@@ -1930,9 +2541,7 @@ internal sealed class RhinoBridgeDispatcher : Tripo.Bridge.IHostBridgeDispatcher
               FileAttributes.Device |
               FileAttributes.ReparsePoint)) != 0 ||
             before.Length <= 0 ||
-            before.Length > maximumTextureFileBytes ||
-            context.HashedFileBytes + before.Length >
-                Tripo.Bridge.BridgeConstants.MaximumArtifactBytes)
+            before.Length > maximumTextureFileBytes)
         {
             throw new Tripo.Bridge.BridgeCallException(
                 "glb_invalid",
@@ -1941,6 +2550,29 @@ internal sealed class RhinoBridgeDispatcher : Tripo.Bridge.IHostBridgeDispatcher
 
         long expectedLength = before.Length;
         DateTime expectedWriteTime = before.LastWriteTimeUtc;
+        if (context.FileCache.FileDigests.TryGetValue(
+                fullPath,
+                out GlbTextureFileProof? existing))
+        {
+            if (existing.Length != expectedLength ||
+                existing.LastWriteTimeUtc != expectedWriteTime)
+            {
+                throw new Tripo.Bridge.BridgeCallException(
+                    "glb_invalid",
+                    "The native GLB texture changed while it was inspected.");
+            }
+
+            return existing.Digest;
+        }
+
+        if (context.FileCache.HashedFileBytes + expectedLength >
+            Tripo.Bridge.BridgeConstants.MaximumArtifactBytes)
+        {
+            throw new Tripo.Bridge.BridgeCallException(
+                "glb_invalid",
+                "The native GLB texture files exceed the proof byte limit.");
+        }
+
         string digest;
         using (FileStream stream = new(
                    fullPath,
@@ -1977,8 +2609,13 @@ internal sealed class RhinoBridgeDispatcher : Tripo.Bridge.IHostBridgeDispatcher
                 "The native GLB texture changed while it was inspected.");
         }
 
-        context.HashedFileBytes += expectedLength;
-        context.FileDigests.Add(fullPath, digest);
+        context.FileCache.HashedFileBytes += expectedLength;
+        context.FileCache.FileDigests.Add(
+            fullPath,
+            new GlbTextureFileProof(
+                digest,
+                expectedLength,
+                expectedWriteTime));
         return digest;
     }
 
@@ -2014,19 +2651,50 @@ internal sealed class RhinoBridgeDispatcher : Tripo.Bridge.IHostBridgeDispatcher
         hash.AppendData(bytes);
     }
 
+    private static void AppendDigestInt64(
+        IncrementalHash hash,
+        long value)
+    {
+        Span<byte> bytes = stackalloc byte[sizeof(long)];
+        BinaryPrimitives.WriteInt64LittleEndian(bytes, value);
+        hash.AppendData(bytes);
+    }
+
     private static void AppendDigestSingle(
         IncrementalHash hash,
-        float value) =>
-        AppendDigestInt32(hash, BitConverter.SingleToInt32Bits(value));
+        float value)
+    {
+        if (!float.IsFinite(value))
+        {
+            throw new Tripo.Bridge.BridgeCallException(
+                "glb_invalid",
+                "The native GLB proof encountered a non-finite numeric value.");
+        }
+
+        AppendDigestInt32(
+            hash,
+            value == 0f
+                ? 0
+                : BitConverter.SingleToInt32Bits(value));
+    }
 
     private static void AppendDigestDouble(
         IncrementalHash hash,
         double value)
     {
+        if (!double.IsFinite(value))
+        {
+            throw new Tripo.Bridge.BridgeCallException(
+                "glb_invalid",
+                "The native GLB proof encountered a non-finite numeric value.");
+        }
+
         Span<byte> bytes = stackalloc byte[sizeof(long)];
         BinaryPrimitives.WriteInt64LittleEndian(
             bytes,
-            BitConverter.DoubleToInt64Bits(value));
+            value == 0d
+                ? 0L
+                : BitConverter.DoubleToInt64Bits(value));
         hash.AppendData(bytes);
     }
 
@@ -2046,6 +2714,68 @@ internal sealed class RhinoBridgeDispatcher : Tripo.Bridge.IHostBridgeDispatcher
         AppendDigestSingle(hash, value.X);
         AppendDigestSingle(hash, value.Y);
         AppendDigestSingle(hash, value.Z);
+    }
+
+    private static void AppendDigestVector3d(
+        IncrementalHash hash,
+        Vector3d value)
+    {
+        AppendDigestDouble(hash, value.X);
+        AppendDigestDouble(hash, value.Y);
+        AppendDigestDouble(hash, value.Z);
+    }
+
+    private static void AppendDigestVector2d(
+        IncrementalHash hash,
+        Vector2d value)
+    {
+        AppendDigestDouble(hash, value.X);
+        AppendDigestDouble(hash, value.Y);
+    }
+
+    private static void AppendDigestPoint3d(
+        IncrementalHash hash,
+        Point3d value)
+    {
+        AppendDigestDouble(hash, value.X);
+        AppendDigestDouble(hash, value.Y);
+        AppendDigestDouble(hash, value.Z);
+    }
+
+    private static void AppendDigestPoint2d(
+        IncrementalHash hash,
+        Point2d value)
+    {
+        AppendDigestDouble(hash, value.X);
+        AppendDigestDouble(hash, value.Y);
+    }
+
+    private static void AppendDigestPoint4d(
+        IncrementalHash hash,
+        Point4d value)
+    {
+        AppendDigestDouble(hash, value.X);
+        AppendDigestDouble(hash, value.Y);
+        AppendDigestDouble(hash, value.Z);
+        AppendDigestDouble(hash, value.W);
+    }
+
+    private static void AppendDigestPlane(
+        IncrementalHash hash,
+        Plane value)
+    {
+        AppendDigestPoint3d(hash, value.Origin);
+        AppendDigestVector3d(hash, value.XAxis);
+        AppendDigestVector3d(hash, value.YAxis);
+        AppendDigestVector3d(hash, value.ZAxis);
+    }
+
+    private static void AppendDigestInterval(
+        IncrementalHash hash,
+        Interval value)
+    {
+        AppendDigestDouble(hash, value.T0);
+        AppendDigestDouble(hash, value.T1);
     }
 
     private static void AppendDigestColor(
@@ -2082,6 +2812,25 @@ internal sealed class RhinoBridgeDispatcher : Tripo.Bridge.IHostBridgeDispatcher
 
     private static string FinishDigest(IncrementalHash hash) =>
         Convert.ToHexString(hash.GetHashAndReset()).ToLowerInvariant();
+
+    private static string CreateDigestSet(
+        string domain,
+        IEnumerable<string> values)
+    {
+        string[] ordered = values
+            .OrderBy(value => value, StringComparer.Ordinal)
+            .ToArray();
+        using IncrementalHash hash =
+            IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
+        AppendDigestField(hash, domain);
+        AppendDigestInt32(hash, ordered.Length);
+        foreach (string value in ordered)
+        {
+            AppendDigestField(hash, value);
+        }
+
+        return FinishDigest(hash);
+    }
 
     private static Tripo.Bridge.BridgeCallException UncertainGlbImport(
         string message) =>
@@ -2145,11 +2894,30 @@ internal sealed class RhinoBridgeDispatcher : Tripo.Bridge.IHostBridgeDispatcher
 
     private static void ApplyGlbDefinitionMemberIdentity(
         ObjectAttributes attributes,
-        Tripo.Bridge.ImportGlbRequest request,
-        GlbPreflightReceipt counts)
+        Tripo.Bridge.ImportGlbRequest request)
     {
-        ApplyGlbIdentityUserStrings(attributes, request, counts);
+        if (!attributes.SetUserString(
+                IdempotencyUserString,
+                request.IdempotencyKey) ||
+            !attributes.SetUserString(
+                RequestFingerprintUserString,
+                CreateGlbRequestFingerprint(request)))
+        {
+            throw new Tripo.Bridge.BridgeCallException(
+                "host_metadata_failed",
+                "Rhino could not attach the native GLB definition identity.");
+        }
+
         attributes.DeleteUserString(DocumentSessionUserString);
+        attributes.DeleteUserString(VertexCountUserString);
+        attributes.DeleteUserString(TriangleCountUserString);
+        attributes.DeleteUserString(RejectedCountUserString);
+        attributes.DeleteUserString(MaterialCountUserString);
+        attributes.DeleteUserString(TextureCountUserString);
+        attributes.DeleteUserString(PbrContentDigestUserString);
+        attributes.DeleteUserString(DefinitionMemberCountUserString);
+        attributes.DeleteUserString(DefinitionMemberDigestUserString);
+        attributes.DeleteUserString(GlbMarkerStateUserString);
     }
 
     private static void VerifyGlbDefinitionFingerprint(
@@ -2174,9 +2942,15 @@ internal sealed class RhinoBridgeDispatcher : Tripo.Bridge.IHostBridgeDispatcher
                     "The native GLB definition is still a prepared marker.");
             }
 
+            string? idempotencyKey =
+                member.Attributes.GetUserString(IdempotencyUserString);
             string? fingerprint =
                 member.Attributes.GetUserString(RequestFingerprintUserString);
             if (!string.Equals(
+                    request.IdempotencyKey,
+                    idempotencyKey,
+                    StringComparison.Ordinal) ||
+                !string.Equals(
                     expectedFingerprint,
                     fingerprint,
                     StringComparison.Ordinal))
@@ -2232,34 +3006,135 @@ internal sealed class RhinoBridgeDispatcher : Tripo.Bridge.IHostBridgeDispatcher
         int TriangleCount,
         int MaterialCount,
         int TextureCount,
-        string PbrContentDigest);
+        string PbrContentDigest,
+        string PortablePbrContentDigest,
+        GlbProofDiagnostics? PortableDiagnostics);
 
     private sealed record GlbContentProof(
         int MaterialCount,
         int TextureCount,
-        string ContentDigest);
+        string ContentDigest,
+        GlbProofDiagnostics Diagnostics);
+
+    private sealed record GlbProofDiagnostics(
+        string GeometryDigest,
+        string MaterialBindingDigest,
+        string TextureMappingDigest,
+        string RenderContentDigest,
+        string RenderContentIdentityDigest,
+        string RenderContentChildDigest,
+        string RenderFieldDigest,
+        string MaterialValueDigest,
+        string LegacyTextureDigest,
+        string TextureFileDigest);
+
+    private sealed record GlbTextureFileProof(
+        string Digest,
+        long Length,
+        DateTime LastWriteTimeUtc);
+
+    private sealed class GlbTextureFileProofCache
+    {
+        public Dictionary<string, GlbTextureFileProof> FileDigests { get; } =
+            new(StringComparer.Ordinal);
+
+        public long HashedFileBytes { get; set; }
+
+        public void VerifyUnchanged()
+        {
+            foreach (KeyValuePair<string, GlbTextureFileProof> item in
+                     FileDigests)
+            {
+                FileInfo current = new(item.Key);
+                current.Refresh();
+                if (!current.Exists ||
+                    current.LinkTarget is not null ||
+                    (current.Attributes &
+                     (FileAttributes.Directory |
+                      FileAttributes.Device |
+                      FileAttributes.ReparsePoint)) != 0 ||
+                    current.Length != item.Value.Length ||
+                    current.LastWriteTimeUtc !=
+                        item.Value.LastWriteTimeUtc)
+                {
+                    throw new Tripo.Bridge.BridgeCallException(
+                        "glb_invalid",
+                        "The native GLB texture changed while it was inspected.");
+                }
+            }
+        }
+    }
 
     private sealed class GlbProofContext
     {
+        public GlbProofContext(
+            bool includeDocumentRenderHash,
+            GlbTextureFileProofCache fileCache)
+        {
+            IncludeDocumentRenderHash = includeDocumentRenderHash;
+            FileCache = fileCache;
+        }
+
         public HashSet<Guid> ActiveDefinitionIds { get; } = [];
 
+        public Dictionary<Guid, string> CompletedRenderContentDigests
+        {
+            get;
+        } = [];
+
+        public HashSet<string> GeometryDigests { get; } =
+            new(StringComparer.Ordinal);
+
+        public HashSet<string> LegacyTextureDigests { get; } =
+            new(StringComparer.Ordinal);
+
         public HashSet<string> MaterialDigests { get; } =
+            new(StringComparer.Ordinal);
+
+        public HashSet<string> MaterialValueDigests { get; } =
+            new(StringComparer.Ordinal);
+
+        public HashSet<string> ObjectMaterialBindingDigests { get; } =
+            new(StringComparer.Ordinal);
+
+        public HashSet<string> RenderContentDigests { get; } =
+            new(StringComparer.Ordinal);
+
+        public HashSet<string> RenderContentIdentityDigests { get; } =
+            new(StringComparer.Ordinal);
+
+        public HashSet<string> RenderContentChildDigests { get; } =
+            new(StringComparer.Ordinal);
+
+        public HashSet<string> RenderFieldDigests { get; } =
             new(StringComparer.Ordinal);
 
         public HashSet<string> TextureDigests { get; } =
             new(StringComparer.Ordinal);
 
-        public Dictionary<string, string> FileDigests { get; } =
+        public HashSet<string> TextureMappingDigests { get; } =
             new(StringComparer.Ordinal);
 
-        public int VisitedObjectCount { get; set; }
+        public bool IncludeDocumentRenderHash { get; }
 
-        public long HashedFileBytes { get; set; }
+        public GlbTextureFileProofCache FileCache { get; }
+
+        public int RenderFieldBytes { get; set; }
+
+        public int RenderFieldCharacters { get; set; }
+
+        public int RenderFieldCount { get; set; }
+
+        public int VisitedObjectCount { get; set; }
     }
 
     private sealed record GlbDefinitionIdentity(
         int MemberCount,
         string MemberDigest);
+
+    private sealed record GlbDefinitionAudit(
+        GlbPreflightReceipt Receipt,
+        GlbDefinitionIdentity Identity);
 
     private sealed record RhinoDocumentState(
         HashSet<Guid> ObjectIds,

@@ -24,7 +24,8 @@ public sealed record HostImportCommitReceipt(
     int TextureCount,
     int DefinitionMemberCount,
     string DefinitionMemberDigest,
-    string PbrContentDigest);
+    string PbrContentDigest,
+    int PbrProofVersion);
 
 public sealed record HostImportJournalStatus(
     string State,
@@ -37,7 +38,8 @@ public sealed partial class HostImportJournal : IDisposable
     public const string AbortedBeforeImportState = "aborted_before_import";
     public const string CommittedState = "committed";
 
-    private const int SchemaVersion = 2;
+    public const int CurrentSchemaVersion = 3;
+    public const int CurrentPbrProofVersion = 5;
     private const int MaximumJournalBytes = 64 * 1024;
     private const int MaximumRecords = 32;
     private static readonly ConcurrentDictionary<string, byte> ActiveLeases =
@@ -271,7 +273,7 @@ public sealed partial class HostImportJournal : IDisposable
         HostImportCommitReceipt? commit)
     {
         JournalRecord unsigned = new(
-            SchemaVersion,
+            CurrentSchemaVersion,
             _identity,
             state,
             commit,
@@ -401,11 +403,15 @@ public sealed partial class HostImportJournal : IDisposable
                 throw CorruptJournal();
             }
 
+            if (record.SchemaVersion != CurrentSchemaVersion)
+            {
+                throw UnsupportedJournalVersion();
+            }
+
             if (!string.Equals(
                     JsonSerializer.Serialize(record, BridgeJson.Options),
                     line,
                     StringComparison.Ordinal) ||
-                record.SchemaVersion != SchemaVersion ||
                 !string.Equals(
                     record.Checksum,
                     ComputeChecksum(record with { Checksum = string.Empty }),
@@ -536,7 +542,8 @@ public sealed partial class HostImportJournal : IDisposable
             commit.DefinitionMemberDigest is null ||
             !HashRegex().IsMatch(commit.DefinitionMemberDigest) ||
             commit.PbrContentDigest is null ||
-            !HashRegex().IsMatch(commit.PbrContentDigest))
+            !HashRegex().IsMatch(commit.PbrContentDigest) ||
+            commit.PbrProofVersion != CurrentPbrProofVersion)
         {
             throw new BridgeCallException(
                 "invalid_request",
@@ -599,6 +606,12 @@ public sealed partial class HostImportJournal : IDisposable
         new(
             BridgeConstants.MutationStateUncertainError,
             "The host import journal was incomplete or corrupt; manual review is required.");
+
+    private static BridgeCallException UnsupportedJournalVersion() =>
+        new(
+            BridgeConstants.MutationStateUncertainError,
+            "The host import journal uses an older or unsupported proof schema; " +
+            "it cannot be replayed automatically and requires manual review.");
 
     private sealed record JournalRecord(
         int SchemaVersion,

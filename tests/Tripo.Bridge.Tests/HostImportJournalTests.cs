@@ -63,7 +63,9 @@ public sealed class HostImportJournalTests
             TextureCount: 3,
             DefinitionMemberCount: 2,
             DefinitionMemberDigest: new string('d', 64),
-            PbrContentDigest: new string('e', 64));
+            PbrContentDigest: new string('e', 64),
+            PbrProofVersion:
+                Tripo.Bridge.HostImportJournal.CurrentPbrProofVersion);
         using (Tripo.Bridge.HostImportJournal journal =
                Tripo.Bridge.HostImportJournal.Open(identity))
         {
@@ -112,12 +114,82 @@ public sealed class HostImportJournalTests
                         TextureCount: 1,
                         DefinitionMemberCount: 1,
                         DefinitionMemberDigest: new string('a', 64),
-                        PbrContentDigest: null!)));
+                        PbrContentDigest: null!,
+                        PbrProofVersion:
+                            Tripo.Bridge.HostImportJournal
+                                .CurrentPbrProofVersion)));
 
         Assert.Equal("invalid_request", exception.Code);
         Assert.Equal(
             Tripo.Bridge.HostImportJournal.PreparedState,
             journal.Current?.State);
+    }
+
+    [Fact]
+    public void CommitRejectsUnsupportedPbrProofVersion()
+    {
+        using TemporaryDataRoot root = new();
+        using Tripo.Bridge.HostImportJournal journal =
+            Tripo.Bridge.HostImportJournal.Open(Identity());
+        journal.RecordPrepared();
+
+        Tripo.Bridge.BridgeCallException exception =
+            Assert.Throws<Tripo.Bridge.BridgeCallException>(
+                () => journal.RecordCommitted(
+                    new Tripo.Bridge.HostImportCommitReceipt(
+                        Guid.NewGuid().ToString("D"),
+                        VertexCount: 3,
+                        TriangleCount: 1,
+                        MaterialCount: 1,
+                        TextureCount: 1,
+                        DefinitionMemberCount: 1,
+                        DefinitionMemberDigest: new string('a', 64),
+                        PbrContentDigest: new string('b', 64),
+                        PbrProofVersion:
+                            Tripo.Bridge.HostImportJournal
+                                .CurrentPbrProofVersion - 1)));
+
+        Assert.Equal("invalid_request", exception.Code);
+        Assert.Equal(
+            Tripo.Bridge.HostImportJournal.PreparedState,
+            journal.Current?.State);
+    }
+
+    [Fact]
+    public void OlderJournalSchemaRequiresExplicitManualReview()
+    {
+        using TemporaryDataRoot root = new();
+        Tripo.Bridge.HostImportJournalIdentity identity = Identity();
+        using (Tripo.Bridge.HostImportJournal journal =
+               Tripo.Bridge.HostImportJournal.Open(identity))
+        {
+            journal.RecordPrepared();
+        }
+
+        string path = JournalPath(root.Path, identity);
+        string currentSchema = "\"schemaVersion\":" +
+            Tripo.Bridge.HostImportJournal.CurrentSchemaVersion;
+        string olderSchema = "\"schemaVersion\":" +
+            (Tripo.Bridge.HostImportJournal.CurrentSchemaVersion - 1);
+        string text = File.ReadAllText(path);
+        Assert.Contains(currentSchema, text, StringComparison.Ordinal);
+        File.WriteAllText(
+            path,
+            text.Replace(
+                currentSchema,
+                olderSchema,
+                StringComparison.Ordinal));
+
+        Tripo.Bridge.BridgeCallException exception =
+            Assert.Throws<Tripo.Bridge.BridgeCallException>(
+                () => Tripo.Bridge.HostImportJournal.Open(identity));
+        Assert.Equal(
+            Tripo.Bridge.BridgeConstants.MutationStateUncertainError,
+            exception.Code);
+        Assert.Contains(
+            "older or unsupported proof schema",
+            exception.Message,
+            StringComparison.Ordinal);
     }
 
     [Fact]
@@ -278,7 +350,10 @@ public sealed class HostImportJournalTests
                 TextureCount: 1,
                 DefinitionMemberCount: 1,
                 DefinitionMemberDigest: new string('a', 64),
-                PbrContentDigest: new string('b', 64)));
+                PbrContentDigest: new string('b', 64),
+                PbrProofVersion:
+                    Tripo.Bridge.HostImportJournal
+                        .CurrentPbrProofVersion));
         }
 
         File.AppendAllText(
