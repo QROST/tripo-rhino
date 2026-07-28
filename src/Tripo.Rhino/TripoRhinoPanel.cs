@@ -134,6 +134,8 @@ public sealed class TripoRhinoPanel : Panel, IPanel
     private string? _recoveryInspection;
     private string? _recoveryInspectionToken;
     private string? _displayedPreparedOperationId;
+    private string _lastValidObjectName =
+        Tripo.HostUi.RhinoPanelUserSettings.DefaultObjectName;
     private bool _recoveryWasBlocked;
     private bool _recoveryReviewInProgress;
     private bool _closing;
@@ -152,6 +154,7 @@ public sealed class TripoRhinoPanel : Panel, IPanel
             TimeSpan.FromSeconds(2),
             RefreshGenerationStatusAutomaticallyAsync,
             ReportAutomaticGenerationRefreshFailure);
+        ApplyUserSettings(Tripo.HostUi.RhinoPanelUserSettings.Load());
         _generationDiagnosticBlock = FieldBlock(
             "Generation diagnostic",
             _generationDiagnostic);
@@ -195,8 +198,10 @@ public sealed class TripoRhinoPanel : Panel, IPanel
         _import.Click += OnImport;
         _reset.Click += OnReset;
         _prompt.TextChanged += OnFormInputChanged;
-        _name.TextChanged += OnFormInputChanged;
+        _name.TextChanged += OnObjectNameChanged;
         _importSource.SelectedIndexChanged += OnFormInputChanged;
+        _faceLimit.ValueChanged += OnSettingsChanged;
+        _withMaterials.CheckedChanged += OnSettingsChanged;
         Load += OnLoaded;
         ApplyControls(_session.State, _session.Recovery);
     }
@@ -463,6 +468,25 @@ public sealed class TripoRhinoPanel : Panel, IPanel
 
     private void OnFormInputChanged(object? sender, EventArgs args) =>
         RequestRender();
+
+    private void OnSettingsChanged(object? sender, EventArgs args)
+    {
+        PersistUserSettings();
+        RequestRender();
+    }
+
+    private void OnObjectNameChanged(object? sender, EventArgs args)
+    {
+        if (Tripo.HostUi.RhinoPanelUserSettings.TryNormalizeObjectName(
+                _name.Text,
+                out string normalized))
+        {
+            _lastValidObjectName = normalized;
+            PersistUserSettings();
+        }
+
+        RequestRender();
+    }
 
     private async void OnConnect(object? sender, EventArgs args) =>
         await ConnectSafelyAsync();
@@ -1114,6 +1138,7 @@ public sealed class TripoRhinoPanel : Panel, IPanel
                     _prompt.Text,
                     checked((int)_faceLimit.Value),
                     _withMaterials.Checked == true);
+            PersistUserSettings();
             RequestRender();
             if (!ConfirmPaidDispatch(
                     retry
@@ -1277,6 +1302,7 @@ public sealed class TripoRhinoPanel : Panel, IPanel
                         _name.Text,
                         _importMode.SelectedValue?.ToString() ?? "native",
                         _applyMaterials.Checked == true);
+                PersistUserSettings();
             }
 
             RequestRender();
@@ -1520,6 +1546,35 @@ public sealed class TripoRhinoPanel : Panel, IPanel
 
     private bool IsDirectGlbSelected() =>
         _importSource.SelectedIndex != 1;
+
+    private void ApplyUserSettings(
+        Tripo.HostUi.RhinoPanelUserSettings settings)
+    {
+        _faceLimit.Value = settings.FaceLimit;
+        _withMaterials.Checked = settings.WithMaterials;
+        _name.Text = settings.ObjectName;
+        _lastValidObjectName = settings.ObjectName;
+
+        // Direct GLB is intentionally the fresh-panel default. Choosing the
+        // compatibility route never makes a later panel spend conversion
+        // credits by surprise.
+        _importSource.SelectedIndex = 0;
+    }
+
+    private void PersistUserSettings()
+    {
+        try
+        {
+            new Tripo.HostUi.RhinoPanelUserSettings(
+                checked((int)_faceLimit.Value),
+                _withMaterials.Checked == true,
+                _lastValidObjectName).Save();
+        }
+        catch
+        {
+            // Preferences are best-effort and never block a workflow.
+        }
+    }
 
     private static void SetProgress(ProgressBar control, int? progress)
     {

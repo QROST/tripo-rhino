@@ -284,7 +284,9 @@ roots，无法建立正确的 bridge 连接。
    有效，并会禁用 panel credential actions；需在 Rhino 外修改后重启 Rhino。
 4. 输入 prompt、face limit 与材质选项，然后点击 **Generate**。panel 会先显示
    可选择复制的 durable operation UUID，再显示 credit confirmation；拒绝确认不会
-   发送付费请求。
+   发送付费请求。Rhino 会在私有本地 `ui-settings/rhino-panel.json` preference
+   file 中记住最后一次合法的 face limit、材质偏好与 object name；不会保存
+   prompt、API key、task/operation ID、document path 或 import source。
 5. generation 在 `queued` 或 `running` 时会约每两秒自动刷新；也可点击
    **Refresh generation** 立即刷新，直到 task 为 `success`。
 6. 保持 **Direct GLB (recommended)**，输入 block name，再点击
@@ -293,6 +295,10 @@ roots，无法建立正确的 bridge 连接。
 7. 只有 direct GLB 不可用，或明确需要 OBJ/GH mesh 时才选择 **OBJ
    compatibility**：点击 **Convert to OBJ**、确认独立的可能费用、刷新至成功，再选择
    `native`/`mesh`/`instance` 与 baked-diffuse material 选项后导入。
+
+每个新建 panel 都会从 **Direct GLB (recommended)** 开始，即使上一个 panel
+曾使用 OBJ compatibility。compatibility 路由只在当前 session 生效，不会在重启后
+意外成为 conversion charge。
 
 panel 仅对已有 durable task ID 的 generation status 自动进行 single-flight
 只读轮询；不会自动发送付费请求，也不声称能取消远端 task。响应丢失后，该阶段必须

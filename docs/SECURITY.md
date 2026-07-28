@@ -42,6 +42,31 @@
   MCP paid UUID before key rotation; otherwise a same-UUID recovery fails
   closed on the credential mismatch.
 
+## Panel preferences
+
+- Rhino stores only the last valid face limit, generated-material preference,
+  and object name under
+  `<TRIPO_LOCAL_DATA_DIR>/ui-settings/rhino-panel.json`. The file never contains
+  the prompt, API key, document path, task/operation UUID, signed URL, import
+  source, or OBJ conversion choice.
+- The file is schema-versioned and limited to 16 KiB. Missing, corrupt,
+  oversized, symlink/reparse, or unknown-schema input falls back to defaults
+  without a read-time delete or rewrite. A later valid user preference change
+  may atomically replace that stale file.
+- Writes use a private same-directory temporary file and atomic replace.
+  Directories/files use `0700`/`0600` on Unix; Windows relies on current-user
+  LocalApplicationData ACLs. Preference writes reject a custom root or settings
+  directory containing a symlink/reparse point.
+- Every newly constructed panel selects direct GLB. OBJ compatibility remains a
+  deliberate per-session choice and cannot silently become the next panel's
+  default paid conversion route.
+- Panels share one complete preference snapshot. Atomic replacement prevents
+  torn JSON; when multiple panels save valid preferences, the last complete
+  snapshot wins rather than merging individual fields.
+- This preference file is not workflow or recovery evidence. Deleting it only
+  restores defaults and does not authorize a resend, retry, import, or remote
+  cancellation.
+
 ## Paid-operation journal
 
 - Each text creation, image creation, and conversion uses its own canonical

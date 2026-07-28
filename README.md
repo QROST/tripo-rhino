@@ -313,7 +313,10 @@ recovery.
    restarted.
 4. Enter the prompt, face limit, and material preference. Click **Generate**.
    The panel displays a selectable durable operation UUID before showing a
-   credit confirmation. Declining sends no paid request.
+   credit confirmation. Declining sends no paid request. Rhino remembers the
+   last valid face limit, material preference, and object name in the private
+   local `ui-settings/rhino-panel.json` preference file. It does not store the
+   prompt, API key, task/operation IDs, document path, or import source.
 5. The panel refreshes a durable generation task every two seconds while it is
    `queued` or `running`. **Refresh generation** remains available for an
    immediate refresh or to resume polling after a status error.
@@ -326,6 +329,10 @@ recovery.
    separate possible charge, refresh it to `success`, then choose
    `native`/`mesh`/`instance` and the baked-diffuse material option before
    importing.
+
+Each newly constructed panel starts on **Direct GLB (recommended)** even if an
+earlier panel used OBJ compatibility. The compatibility route is deliberately
+session-only so it cannot become a surprise conversion charge after restart.
 
 The panel's only automatic polling is the read-only generation status query
 for a durable task ID. It is single-flight, stops on terminal status, recovery
