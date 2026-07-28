@@ -99,6 +99,8 @@ public sealed class TripoRhinoPanel : Panel, IPanel
     private readonly Expander _detailsExpander = new();
     private readonly Button _connect = new() { Text = "Connect / Refresh" };
     private readonly Button _apiKey = new() { Text = "API key…" };
+    private readonly Button _clearApiKey =
+        new() { Text = "Remove saved key…" };
     private readonly Button _checkRecovery = new()
     {
         Text = "Refresh recovery status",
@@ -183,6 +185,7 @@ public sealed class TripoRhinoPanel : Panel, IPanel
         };
         _connect.Click += OnConnect;
         _apiKey.Click += OnApiKey;
+        _clearApiKey.Click += OnClearApiKey;
         _checkRecovery.Click += OnCheckRecovery;
         _reviewRecovery.Click += OnReviewRecovery;
         _generate.Click += OnGenerate;
@@ -307,7 +310,7 @@ public sealed class TripoRhinoPanel : Panel, IPanel
                         _documentStatus,
                         _credentialStatus,
                         _resultStatus,
-                        ActionColumn(_connect, _apiKey),
+                        ActionColumn(_connect, _apiKey, _clearApiKey),
                     },
                 },
                 _recoveryExpander,
@@ -522,6 +525,40 @@ public sealed class TripoRhinoPanel : Panel, IPanel
             {
                 await PromptForCurrentWorkflowApiKeyAsync();
             }
+        }
+        catch (OperationCanceledException) when (_closing)
+        {
+        }
+        catch (ObjectDisposedException) when (_closing)
+        {
+        }
+        catch (Exception exception)
+        {
+            ShowError(exception);
+        }
+    }
+
+    private async void OnClearApiKey(object? sender, EventArgs args)
+    {
+        try
+        {
+            if (_closing ||
+                MessageBox.Show(
+                    this,
+                    "Remove the Tripo API key saved for this user? This also " +
+                    "clears any session-only key. A TRIPO_API_KEY environment " +
+                    "override, if configured outside Rhino, remains effective." +
+                    "\n\nThis does not change the .3dm document or cancel a " +
+                    "remote Tripo task.",
+                    "Remove saved Tripo API key?",
+                    MessageBoxButtons.YesNo,
+                    MessageBoxType.Warning,
+                    MessageBoxDefaultButton.No) != DialogResult.Yes)
+            {
+                return;
+            }
+
+            await _session.ClearApiKeyAsync(_panelLifetime.Token);
         }
         catch (OperationCanceledException) when (_closing)
         {
@@ -1441,17 +1478,13 @@ public sealed class TripoRhinoPanel : Panel, IPanel
             presentation.ConnectEnabled &&
             !_recoveryReviewInProgress;
         _apiKey.Text = presentation.ApiKeyText;
-        _apiKey.ToolTip = state.RequiresCredentialRecovery
-            ? state.HasUnresolvedPaidDispatch
-                ? "Restore the exact original API key for this workflow. " +
-                  "The recovery key remains session-only."
-                : "Use a key for the same Tripo account. The recovery key " +
-                  "remains session-only until reset."
-            : presentation.RecoveryHasBlock
-            ? "Review the previous request before setting or changing the key."
-            : "Set or replace the Tripo v3 API key.";
+        _apiKey.ToolTip = presentation.ApiKeyHelp;
         _apiKey.Enabled =
             presentation.ApiKeyEnabled &&
+            !_recoveryReviewInProgress;
+        _clearApiKey.ToolTip = presentation.ClearApiKeyHelp;
+        _clearApiKey.Enabled =
+            presentation.ClearApiKeyEnabled &&
             !_recoveryReviewInProgress;
         _reviewRecovery.Text = presentation.RecoveryActionText;
         _reviewRecovery.Enabled =

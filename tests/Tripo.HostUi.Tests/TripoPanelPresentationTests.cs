@@ -112,6 +112,11 @@ public sealed class TripoPanelPresentationTests
         Assert.Equal("Not connected", presentation.DocumentSessionId);
         Assert.Equal("API key: unknown", presentation.CredentialStatus);
         Assert.Equal("API key…", presentation.ApiKeyText);
+        Assert.False(presentation.ApiKeyEnabled);
+        Assert.Contains(
+            "Connect",
+            presentation.ApiKeyHelp,
+            StringComparison.OrdinalIgnoreCase);
         Assert.Equal("Recovery · Clear", presentation.RecoveryHeader);
         Assert.Equal(
             "Review recovery…",
@@ -126,6 +131,145 @@ public sealed class TripoPanelPresentationTests
         Assert.False(presentation.ConversionDiagnosticVisible);
         Assert.False(presentation.ImportReceiptDetailsVisible);
         Assert.False(presentation.ResultVisible);
+        Assert.False(presentation.ClearApiKeyEnabled);
+        Assert.Contains(
+            "Connect",
+            presentation.ClearApiKeyHelp,
+            StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void SavedApiKeyRemovalRequiresKnownClearableStoredKey()
+    {
+        Tripo.HostUi.TripoPanelPresentation available =
+            Present(ReadyState());
+        Tripo.HostUi.TripoPanelPresentation unknownPresence =
+            Present(
+                ReadyState() with
+                {
+                    CredentialStatus =
+                        new Tripo.Bridge.HostControlCredentialStatusReceipt(
+                            true,
+                            "store",
+                            true,
+                            true,
+                            "keychain",
+                            false,
+                            StoredKeyPresenceKnown: false),
+                });
+        Tripo.HostUi.TripoPanelPresentation noStoredKey =
+            Present(
+                ReadyState() with
+                {
+                    CredentialStatus =
+                        new Tripo.Bridge.HostControlCredentialStatusReceipt(
+                            false,
+                            "none",
+                            false,
+                            false,
+                            "keychain",
+                            false),
+                });
+        Tripo.HostUi.TripoPanelPresentation cannotClear =
+            Present(
+                ReadyState() with
+                {
+                    CredentialStatus =
+                        new Tripo.Bridge.HostControlCredentialStatusReceipt(
+                            true,
+                            "store",
+                            true,
+                            false,
+                            "unsupported",
+                            false),
+                });
+        Tripo.HostUi.TripoPanelPresentation environmentOverride =
+            Present(
+                ReadyState() with
+                {
+                    CredentialStatus =
+                        new Tripo.Bridge.HostControlCredentialStatusReceipt(
+                            true,
+                            "environment",
+                            false,
+                            false,
+                            "keychain",
+                            false,
+                            StoredKeyPresenceKnown: false),
+                });
+
+        Assert.True(available.ClearApiKeyEnabled);
+        Assert.True(available.ApiKeyEnabled);
+        Assert.Contains(
+            "Remove",
+            available.ClearApiKeyHelp,
+            StringComparison.OrdinalIgnoreCase);
+        Assert.False(unknownPresence.ClearApiKeyEnabled);
+        Assert.Contains(
+            "unknown",
+            unknownPresence.ClearApiKeyHelp,
+            StringComparison.OrdinalIgnoreCase);
+        Assert.False(noStoredKey.ClearApiKeyEnabled);
+        Assert.Contains(
+            "No OS-stored",
+            noStoredKey.ClearApiKeyHelp,
+            StringComparison.OrdinalIgnoreCase);
+        Assert.False(cannotClear.ClearApiKeyEnabled);
+        Assert.Contains(
+            "cannot clear",
+            cannotClear.ClearApiKeyHelp,
+            StringComparison.OrdinalIgnoreCase);
+        Assert.False(environmentOverride.ApiKeyEnabled);
+        Assert.Contains(
+            "TRIPO_API_KEY",
+            environmentOverride.ApiKeyHelp,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "restart Rhino",
+            environmentOverride.ApiKeyHelp,
+            StringComparison.OrdinalIgnoreCase);
+        Assert.False(environmentOverride.ClearApiKeyEnabled);
+        Assert.Contains(
+            "TRIPO_API_KEY",
+            environmentOverride.ClearApiKeyHelp,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "restart Rhino",
+            environmentOverride.ClearApiKeyHelp,
+            StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void SavedApiKeyRemovalStaysBlockedDuringUnsafeWorkflowStates()
+    {
+        Tripo.HostUi.TripoPanelPresentation busy =
+            Present(ReadyState() with { Busy = true });
+        Tripo.HostUi.TripoPanelPresentation accountBound =
+            Present(
+                ReadyState() with
+                {
+                    GenerationDispatchAttempted = true,
+                });
+        Tripo.HostUi.TripoPanelPresentation recoveryBlocked =
+            Present(
+                ReadyState(),
+                BlockingGenerationRecovery());
+
+        Assert.False(busy.ClearApiKeyEnabled);
+        Assert.Contains(
+            "Wait",
+            busy.ClearApiKeyHelp,
+            StringComparison.OrdinalIgnoreCase);
+        Assert.False(accountBound.ClearApiKeyEnabled);
+        Assert.Contains(
+            "account-bound workflow",
+            accountBound.ClearApiKeyHelp,
+            StringComparison.OrdinalIgnoreCase);
+        Assert.False(recoveryBlocked.ClearApiKeyEnabled);
+        Assert.Contains(
+            "Reconcile",
+            recoveryBlocked.ClearApiKeyHelp,
+            StringComparison.OrdinalIgnoreCase);
     }
 
     [Fact]

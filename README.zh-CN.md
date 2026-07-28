@@ -278,7 +278,10 @@ roots，无法建立正确的 bridge 连接。
    storage。可在 [Tripo Platform](https://platform.tripo3d.ai/api-keys) 创建 key。
    active account-bound recovery 中该 action 仍可用，但会强制 session-only：
    ambiguous paid UUID 必须恢复精确原 key；accepted task/import 必须使用同一
-   Tripo account 的 key。
+   Tripo account 的 key。workflow 已解决并显式 reset 后，只有 sidecar 能明确证明
+   OS-stored key 存在且可删除时，**Remove saved key…** 才会启用。其默认选择 No
+   的确认框会同时清除 session key 与 stored key。`TRIPO_API_KEY` 环境覆盖仍然
+   有效，并会禁用 panel credential actions；需在 Rhino 外修改后重启 Rhino。
 4. 输入 prompt、face limit 与材质选项，然后点击 **Generate**。panel 会先显示
    可选择复制的 durable operation UUID，再显示 credit confirmation；拒绝确认不会
    发送付费请求。

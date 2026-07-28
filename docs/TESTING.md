@@ -27,8 +27,8 @@ The automated suite covers:
 - authenticated, bounded bridge and host-control transports;
 - exact host PID and document-session binding;
 - credential precedence and redaction, macOS/Windows native-store selection
-  without file fallback, and an opt-in isolated Windows native
-  write/read/delete canary;
+  without file fallback, source-aware panel set/remove gating, and an opt-in
+  isolated Windows native write/read/delete canary;
 - paid-operation write-ahead journal, replay, conflict, lock, and
   `outcome_unknown` refusal to resend;
 - explicit successful-response `code` validation plus exact round-trip of
@@ -93,7 +93,10 @@ exercised macOS panel/credential/generation checks after each deployed revision:
 2. Verify the optional GHA loads and all three **Tripo → Generate** components
    appear.
 3. Exercise session and persistent credentials without saving a key into
-   `.3dm` or `.gh`.
+   `.3dm` or `.gh`. Verify **Remove saved key…** is available only for a known,
+   clearable stored key; Cancel performs no mutation; confirmation clears the
+   session and stored keys; and an environment override remains effective
+   while disabling panel credential actions until Rhino restarts without it.
 4. Run text generation/status, then use the recommended direct GLB import and
    verify one PBR block is created without a conversion task or second charge.
    Separately run OBJ conversion and both `mesh` and `instance` compatibility

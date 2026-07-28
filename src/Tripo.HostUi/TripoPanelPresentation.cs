@@ -214,6 +214,8 @@ public sealed class TripoPanelPresentation
 
     public string ApiKeyText { get; private init; } = "API key…";
 
+    public string ApiKeyHelp { get; private init; } = string.Empty;
+
     public string RecoveryHeader { get; private init; } = string.Empty;
 
     public string RecoveryDetails { get; private init; } = string.Empty;
@@ -266,6 +268,10 @@ public sealed class TripoPanelPresentation
     public bool ConnectEnabled { get; private init; }
 
     public bool ApiKeyEnabled { get; private init; }
+
+    public bool ClearApiKeyEnabled { get; private init; }
+
+    public string ClearApiKeyHelp { get; private init; } = string.Empty;
 
     public bool CheckRecoveryEnabled { get; private init; }
 
@@ -344,6 +350,12 @@ public sealed class TripoPanelPresentation
                 ? generationSucceeded && directGlbSupported
                 : conversionSucceeded;
         bool recoveryBlocked = recovery.HasBlock;
+        bool environmentOverridesPanelKey =
+            state.CredentialStatus is
+            {
+                HasApiKey: true,
+                Source: "environment",
+            };
         bool hasPrompt = !string.IsNullOrWhiteSpace(prompt);
         bool hasObjectName = !string.IsNullOrWhiteSpace(objectName);
         string? generationTaskId =
@@ -372,6 +384,7 @@ public sealed class TripoPanelPresentation
                 state.Context?.DocumentSessionId ?? "Not connected",
             CredentialStatus = FormatCredentialStatus(state),
             ApiKeyText = RecoveryApiKeyText(state, recovery),
+            ApiKeyHelp = BuildApiKeyHelp(state, recoveryBlocked),
             RecoveryHeader = recoveryBlocked
                 ? recovery.Issues.Count > 0
                     ? "Recovery · Manual attention required"
@@ -435,9 +448,20 @@ public sealed class TripoPanelPresentation
             ConnectEnabled = !state.Busy,
             ApiKeyEnabled =
                 ready &&
+                !environmentOverridesPanelKey &&
                 (!recoveryBlocked ||
                  (recovery.Hints.Count > 0 &&
                   recovery.Issues.Count == 0)),
+            ClearApiKeyEnabled =
+                ready &&
+                !recoveryBlocked &&
+                !environmentOverridesPanelKey &&
+                !state.RequiresCredentialRecovery &&
+                state.CredentialStatus?.StoredKeyPresenceKnown == true &&
+                state.CredentialStatus.StoredKeyPresent &&
+                state.CredentialStatus.CanClearStoredKey,
+            ClearApiKeyHelp =
+                BuildClearApiKeyHelp(state, recoveryBlocked),
             CheckRecoveryEnabled =
                 !state.Busy &&
                 recovery.HasBlock,
@@ -538,6 +562,114 @@ public sealed class TripoPanelPresentation
                 ready &&
                 state.PreparedImport is null &&
                 !directGlbRoute,
+        };
+    }
+
+    private static string BuildApiKeyHelp(
+        TripoPanelState state,
+        bool recoveryBlocked)
+    {
+        if (state.Busy)
+        {
+            return "Wait for the current panel operation to finish.";
+        }
+
+        if (!state.Connected)
+        {
+            return "Connect to the active Rhino document first.";
+        }
+
+        if (state.CredentialStatus is
+            {
+                HasApiKey: true,
+                Source: "environment",
+            })
+        {
+            return "TRIPO_API_KEY from the environment overrides panel keys. " +
+                   "Change it outside Rhino, then restart Rhino.";
+        }
+
+        if (state.RequiresCredentialRecovery)
+        {
+            return state.HasUnresolvedPaidDispatch
+                ? "Restore the exact original API key for this workflow. The " +
+                  "recovery key remains session-only."
+                : "Use a key for the same Tripo account. The recovery key " +
+                  "remains session-only until reset.";
+        }
+
+        if (recoveryBlocked)
+        {
+            return "Review the previous request before setting or changing " +
+                   "the key.";
+        }
+
+        return "Set or replace the Tripo v3 API key.";
+    }
+
+    private static string BuildClearApiKeyHelp(
+        TripoPanelState state,
+        bool recoveryBlocked)
+    {
+        if (state.Busy)
+        {
+            return "Wait for the current panel operation to finish.";
+        }
+
+        if (!state.Connected)
+        {
+            return "Connect to the active Rhino document first.";
+        }
+
+        if (recoveryBlocked)
+        {
+            return "Reconcile the recovered operation IDs before removing keys.";
+        }
+
+        if (state.HasCredentialBoundWorkflow)
+        {
+            return "Finish or reconcile this account-bound workflow and " +
+                   "explicitly reset it before removing the saved key.";
+        }
+
+        if (state.CredentialStatus is
+            {
+                HasApiKey: true,
+                Source: "environment",
+            })
+        {
+            return "TRIPO_API_KEY is active. Change it outside Rhino and " +
+                   "restart Rhino before managing saved keys.";
+        }
+
+        Tripo.Bridge.HostControlCredentialStatusReceipt? credentials =
+            state.CredentialStatus;
+        if (credentials is null ||
+            !credentials.StoredKeyPresenceKnown)
+        {
+            return "Saved-key presence is unknown; refresh the connection first.";
+        }
+
+        if (!credentials.StoredKeyPresent)
+        {
+            return "No OS-stored Tripo API key is present.";
+        }
+
+        if (!credentials.CanClearStoredKey)
+        {
+            return "The current credential backend cannot clear the saved key.";
+        }
+
+        return credentials.Source switch
+        {
+            "environment" =>
+                "Remove the OS-stored and session Tripo API keys. The " +
+                "environment key remains effective.",
+            "session" =>
+                "Remove the current session key and OS-stored Tripo API key.",
+            _ =>
+                "Remove the known OS-stored Tripo API key. The same operation " +
+                "also clears any active session override.",
         };
     }
 

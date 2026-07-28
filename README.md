@@ -304,7 +304,13 @@ recovery.
    [Tripo Platform](https://platform.tripo3d.ai/api-keys). During an active
    account-bound recovery, the same action remains available but is forced to
    session-only: restore the exact original key for an ambiguous paid UUID, or
-   a key for the same Tripo account for an accepted task/import.
+   a key for the same Tripo account for an accepted task/import. After a
+   workflow is resolved and explicitly reset, **Remove saved key…** is enabled
+   only when the sidecar can prove that an OS-stored key exists and can be
+   deleted. Its default-No confirmation clears both the session key and stored
+   key. A `TRIPO_API_KEY` environment override remains effective and disables
+   panel credential actions until it is changed outside Rhino and Rhino is
+   restarted.
 4. Enter the prompt, face limit, and material preference. Click **Generate**.
    The panel displays a selectable durable operation UUID before showing a
    credit confirmation. Declining sends no paid request.

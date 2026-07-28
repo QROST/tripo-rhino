@@ -163,6 +163,26 @@ public sealed class TripoPanelSessionTests
     }
 
     [Fact]
+    public async Task ClearApiKeyAdoptsReceiptAndReleasesBusyState()
+    {
+        FakeHostControlClient client = new();
+        await using Tripo.HostUi.TripoPanelSession session =
+            CreateSession(client);
+        await session.ConnectAsync();
+        await session.SetApiKeyAsync("stored-key", persist: true);
+
+        await session.ClearApiKeyAsync();
+
+        Assert.Equal(1, client.ClearApiKeyCalls);
+        Assert.NotNull(session.State.CredentialStatus);
+        Assert.False(session.State.CredentialStatus.HasApiKey);
+        Assert.False(session.State.CredentialStatus.StoredKeyPresent);
+        Assert.False(session.State.CredentialStatus.CanClearStoredKey);
+        Assert.False(session.State.Busy);
+        Assert.Null(session.State.LastError);
+    }
+
+    [Fact]
     public async Task LocalCredentialFailureClearsFalsePaidDispatchRecovery()
     {
         string root = CreateTemporaryRoot();
