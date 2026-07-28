@@ -408,6 +408,15 @@ public sealed partial class HostImportJournal : IDisposable
                 throw UnsupportedJournalVersion();
             }
 
+            if (record.Commit is not null &&
+                record.Commit.PbrProofVersion != CurrentPbrProofVersion)
+            {
+                // Never let an older proof receipt fall through as a
+                // retry-authorizing invalid_request. Check this before the
+                // canonical/checksum gate; either outcome remains fail-closed.
+                throw UnsupportedJournalVersion();
+            }
+
             if (!string.Equals(
                     JsonSerializer.Serialize(record, BridgeJson.Options),
                     line,
@@ -421,7 +430,19 @@ public sealed partial class HostImportJournal : IDisposable
             }
 
             ValidateRecordIdentity(record.Identity, expectedIdentity);
-            ValidateTransition(current, record.State, record.Commit);
+            try
+            {
+                ValidateTransition(current, record.State, record.Commit);
+            }
+            catch (BridgeCallException exception)
+                when (string.Equals(
+                    exception.Code,
+                    "invalid_request",
+                    StringComparison.Ordinal))
+            {
+                throw CorruptJournal();
+            }
+
             current = new HostImportJournalStatus(
                 record.State,
                 record.Commit);
@@ -610,7 +631,8 @@ public sealed partial class HostImportJournal : IDisposable
     private static BridgeCallException UnsupportedJournalVersion() =>
         new(
             BridgeConstants.MutationStateUncertainError,
-            "The host import journal uses an older or unsupported proof schema; " +
+            "The host import journal uses an older or unsupported proof schema " +
+            "or PBR proof version; " +
             "it cannot be replayed automatically and requires manual review.");
 
     private sealed record JournalRecord(

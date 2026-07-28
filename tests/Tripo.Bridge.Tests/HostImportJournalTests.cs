@@ -1,3 +1,6 @@
+using System.Security.Cryptography;
+using System.Text;
+using System.Text.Json.Nodes;
 using Xunit;
 
 namespace Tripo.Bridge.Tests;
@@ -188,6 +191,62 @@ public sealed class HostImportJournalTests
             exception.Code);
         Assert.Contains(
             "older or unsupported proof schema",
+            exception.Message,
+            StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void OlderPbrProofVersionRequiresExplicitManualReview()
+    {
+        using TemporaryDataRoot root = new();
+        Tripo.Bridge.HostImportJournalIdentity identity = Identity();
+        using (Tripo.Bridge.HostImportJournal journal =
+               Tripo.Bridge.HostImportJournal.Open(identity))
+        {
+            journal.RecordPrepared();
+            journal.RecordCommitted(
+                new Tripo.Bridge.HostImportCommitReceipt(
+                    Guid.NewGuid().ToString("D"),
+                    VertexCount: 3,
+                    TriangleCount: 1,
+                    MaterialCount: 1,
+                    TextureCount: 1,
+                    DefinitionMemberCount: 1,
+                    DefinitionMemberDigest: new string('a', 64),
+                    PbrContentDigest: new string('b', 64),
+                    PbrProofVersion:
+                        Tripo.Bridge.HostImportJournal
+                            .CurrentPbrProofVersion));
+        }
+
+        string path = JournalPath(root.Path, identity);
+        string[] lines = File.ReadAllLines(path);
+        JsonObject record = JsonNode.Parse(lines[^1])!.AsObject();
+        JsonObject commit = record["commit"]!.AsObject();
+        commit["pbrProofVersion"] =
+            Tripo.Bridge.HostImportJournal.CurrentPbrProofVersion - 1;
+        record["checksum"] = string.Empty;
+        string unsigned =
+            record.ToJsonString(Tripo.Bridge.BridgeJson.Options);
+        record["checksum"] = Convert.ToHexString(
+                SHA256.HashData(Encoding.UTF8.GetBytes(unsigned)))
+            .ToLowerInvariant();
+        lines[^1] =
+            record.ToJsonString(Tripo.Bridge.BridgeJson.Options);
+        File.WriteAllText(
+            path,
+            string.Join("\n", lines) + "\n",
+            new UTF8Encoding(
+                encoderShouldEmitUTF8Identifier: false));
+
+        Tripo.Bridge.BridgeCallException exception =
+            Assert.Throws<Tripo.Bridge.BridgeCallException>(
+                () => Tripo.Bridge.HostImportJournal.Open(identity));
+        Assert.Equal(
+            Tripo.Bridge.BridgeConstants.MutationStateUncertainError,
+            exception.Code);
+        Assert.Contains(
+            "older or unsupported proof schema or PBR proof version",
             exception.Message,
             StringComparison.Ordinal);
     }
