@@ -127,15 +127,32 @@ public sealed class TripoPanelPresentationTests
         Assert.True(presentation.ConnectEnabled);
         Assert.False(presentation.GenerateEnabled);
         Assert.False(presentation.GenerationProgress.HasValue);
+        Assert.False(presentation.WorkflowStatusVisible);
         Assert.False(presentation.GenerationDiagnosticVisible);
         Assert.False(presentation.ConversionDiagnosticVisible);
         Assert.False(presentation.ImportReceiptDetailsVisible);
         Assert.False(presentation.ResultVisible);
         Assert.False(presentation.ClearApiKeyEnabled);
+        Assert.False(presentation.ResetVisible);
         Assert.Contains(
             "Connect",
             presentation.ClearApiKeyHelp,
             StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void AutomaticOutcomeWithoutWorkflowStillOffersReset()
+    {
+        Tripo.HostUi.TripoPanelPresentation presentation =
+            Present(
+                ReadyState(),
+                importSource: "glb",
+                directGlbCreateStage:
+                    Tripo.HostUi.DirectGlbCreateUiStage.Refused);
+
+        Assert.True(presentation.ResetVisible);
+        Assert.True(presentation.ResetEnabled);
+        Assert.False(presentation.WorkflowStatusVisible);
     }
 
     [Fact]
@@ -326,6 +343,390 @@ public sealed class TripoPanelPresentationTests
             presentation.LatestPreparedOperationId);
         Assert.False(presentation.GenerateEnabled);
         Assert.True(presentation.RefreshGenerationEnabled);
+        Assert.True(presentation.WorkflowStatusVisible);
+        Assert.False(presentation.ResetEnabled);
+        Assert.False(presentation.ResetVisible);
+    }
+
+    [Theory]
+    [InlineData(null, false)]
+    [InlineData("queued", false)]
+    [InlineData("running", false)]
+    [InlineData("success", true)]
+    [InlineData("failed", true)]
+    [InlineData("cancelled", true)]
+    [InlineData("banned", true)]
+    [InlineData("expired", true)]
+    [InlineData("future-state", false)]
+    public void ResetRequiresConfirmedTerminalPaidTask(
+        string? status,
+        bool expectedEnabled)
+    {
+        const string operationId =
+            "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb";
+        const string taskId = "task_source123";
+        Tripo.HostUi.TripoPanelState state =
+            ReadyState() with
+            {
+                PreparedGeneration =
+                    new Tripo.HostUi.PreparedTextGeneration(
+                        "a chair",
+                        10_000,
+                        false,
+                        DocumentSessionId,
+                        operationId),
+                GenerationDispatchAttempted = true,
+                GenerationReceipt =
+                    new Tripo.Bridge.HostControlTextTaskCreationReceipt(
+                        operationId,
+                        taskId,
+                        "v3"),
+                GenerationStatus = status is null
+                    ? null
+                    : TaskStatus(
+                        taskId,
+                        "text_to_model",
+                        status),
+            };
+
+        Tripo.HostUi.TripoPanelPresentation presentation =
+            Present(state);
+
+        Assert.Equal(expectedEnabled, state.CanResetWorkflow);
+        Assert.Equal(expectedEnabled, presentation.ResetEnabled);
+        Assert.Equal(expectedEnabled, presentation.ResetVisible);
+    }
+
+    [Fact]
+    public void ResetRejectsConflictingTaskIdentityEvidence()
+    {
+        const string generationOperationId =
+            "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb";
+        const string conversionOperationId =
+            "cccccccc-cccc-4ccc-8ccc-cccccccccccc";
+        const string importOperationId =
+            "dddddddd-dddd-4ddd-8ddd-dddddddddddd";
+        Tripo.HostUi.TripoPanelState terminalGeneration =
+            ReadyState() with
+            {
+                PreparedGeneration =
+                    new Tripo.HostUi.PreparedTextGeneration(
+                        "a chair",
+                        10_000,
+                        false,
+                        DocumentSessionId,
+                        generationOperationId),
+                GenerationDispatchAttempted = true,
+                GenerationReceipt =
+                    new Tripo.Bridge.HostControlTextTaskCreationReceipt(
+                        generationOperationId,
+                        "task_source123",
+                        "v3"),
+                GenerationStatus = TaskStatus(
+                    "task_source123",
+                    "text_to_model",
+                    "success"),
+            };
+        Tripo.HostUi.TripoPanelState terminalConversion =
+            terminalGeneration with
+            {
+                PreparedConversion =
+                    new Tripo.HostUi.PreparedObjConversion(
+                        "task_source123",
+                        10_000,
+                        false,
+                        DocumentSessionId,
+                        conversionOperationId),
+                ConversionDispatchAttempted = true,
+                ConversionReceipt =
+                    new Tripo.Bridge
+                        .HostControlObjConversionCreationReceipt(
+                            conversionOperationId,
+                            "task_source123",
+                            "task_conversion123",
+                            "OBJ"),
+                ConversionStatus = TaskStatus(
+                    "task_conversion123",
+                    "convert_model",
+                    "success"),
+            };
+        Tripo.HostUi.PreparedObjImport preparedImport = new(
+            "task_conversion123",
+            "Chair",
+            DocumentSessionId,
+            importOperationId,
+            "native",
+            true,
+            "obj");
+        Tripo.HostUi.TripoPanelImportReceipt validImportReceipt = new(
+            importOperationId,
+            "task_conversion123",
+            "obj",
+            null,
+            new Tripo.Bridge.HostImportReceipt(
+                "rhino",
+                DocumentSessionId,
+                importOperationId,
+                RhinoObjectId,
+                12,
+                10,
+                0,
+                "committed",
+                "instance",
+                1,
+                1,
+                null));
+        Tripo.HostUi.TripoPanelState terminalImport =
+            terminalConversion with
+            {
+                PreparedImport = preparedImport,
+                ImportDispatchAttempted = true,
+                ImportReceipt = validImportReceipt,
+            };
+        Tripo.HostUi.PreparedObjImport preparedDirectImport = new(
+            "task_source123",
+            "Chair",
+            DocumentSessionId,
+            importOperationId,
+            "glb_instance",
+            true,
+            "glb");
+        Tripo.HostUi.TripoPanelImportReceipt validDirectImportReceipt =
+            DirectGlbImportReceipt(
+                importOperationId,
+                "task_source123",
+                "committed");
+        Tripo.HostUi.TripoPanelState terminalDirectImport =
+            terminalGeneration with
+            {
+                PreparedImport = preparedDirectImport,
+                ImportDispatchAttempted = true,
+                ImportReceipt = validDirectImportReceipt,
+            };
+
+        Tripo.HostUi.TripoPanelState wrongStatusId =
+            terminalGeneration with
+            {
+                GenerationStatus = TaskStatus(
+                    "task_other",
+                    "text_to_model",
+                    "success"),
+            };
+        Tripo.HostUi.TripoPanelState paddedStatusId =
+            terminalGeneration with
+            {
+                GenerationStatus = TaskStatus(
+                    " task_source123 ",
+                    "text_to_model",
+                    "success"),
+            };
+        Tripo.HostUi.TripoPanelState generationEvidenceConflict =
+            terminalGeneration with
+            {
+                GenerationOperationStatus = DurableOperation(
+                    generationOperationId,
+                    "text_task_creation",
+                    "task_other"),
+            };
+        Tripo.HostUi.TripoPanelState conversionEvidenceConflict =
+            terminalConversion with
+            {
+                ConversionOperationStatus = DurableOperation(
+                    conversionOperationId,
+                    "obj_conversion_creation",
+                    "task_other",
+                    "task_source123"),
+            };
+        Tripo.HostUi.TripoPanelState conversionReceiptOperationConflict =
+            terminalConversion with
+            {
+                ConversionReceipt =
+                    terminalConversion.ConversionReceipt! with
+                    {
+                        OperationId = generationOperationId,
+                    },
+            };
+        Tripo.HostUi.TripoPanelState conversionReceiptSourceConflict =
+            terminalConversion with
+            {
+                ConversionReceipt =
+                    terminalConversion.ConversionReceipt! with
+                    {
+                        SourceTaskId = "task_other",
+                    },
+            };
+        Tripo.HostUi.TripoPanelState conversionReceiptFormatConflict =
+            terminalConversion with
+            {
+                ConversionReceipt =
+                    terminalConversion.ConversionReceipt! with
+                    {
+                        Format = "obj",
+                    },
+            };
+        Tripo.HostUi.TripoPanelState importReceiptOperationConflict =
+            terminalImport with
+            {
+                ImportReceipt = validImportReceipt with
+                {
+                    OperationId = generationOperationId,
+                },
+            };
+        Tripo.HostUi.TripoPanelState importReceiptSourceConflict =
+            terminalImport with
+            {
+                ImportReceipt = validImportReceipt with
+                {
+                    SourceTaskId = "task_other",
+                },
+            };
+        Tripo.HostUi.TripoPanelState importReceiptFormatConflict =
+            terminalImport with
+            {
+                ImportReceipt = validImportReceipt with
+                {
+                    ArtifactFormat = "glb",
+                },
+            };
+        Tripo.HostUi.TripoPanelState importHostOperationConflict =
+            terminalImport with
+            {
+                ImportReceipt = validImportReceipt with
+                {
+                    HostReceipt = validImportReceipt.HostReceipt with
+                    {
+                        IdempotencyKey = generationOperationId,
+                    },
+                },
+            };
+        Tripo.HostUi.TripoPanelState importHostDocumentConflict =
+            terminalImport with
+            {
+                ImportReceipt = validImportReceipt with
+                {
+                    HostReceipt = validImportReceipt.HostReceipt with
+                    {
+                        DocumentSessionId = "rhino:other",
+                    },
+                },
+            };
+        Tripo.HostUi.TripoPanelState importHostConflict =
+            terminalImport with
+            {
+                ImportReceipt = validImportReceipt with
+                {
+                    HostReceipt = validImportReceipt.HostReceipt with
+                    {
+                        Host = "revit",
+                    },
+                },
+            };
+        Tripo.HostUi.TripoPanelState importCreatedIdConflict =
+            terminalImport with
+            {
+                ImportReceipt = validImportReceipt with
+                {
+                    HostReceipt = validImportReceipt.HostReceipt with
+                    {
+                        CreatedId = "not-a-rhino-guid",
+                    },
+                },
+            };
+        Tripo.HostUi.TripoPanelState importModeConflict =
+            terminalImport with
+            {
+                ImportReceipt = validImportReceipt with
+                {
+                    HostReceipt = validImportReceipt.HostReceipt with
+                    {
+                        ImportMode = "mesh",
+                    },
+                },
+            };
+        Tripo.HostUi.TripoPanelState conversionUpstreamConflict =
+            terminalConversion with
+            {
+                PreparedConversion =
+                    terminalConversion.PreparedConversion! with
+                    {
+                        SourceTaskId = "task_other",
+                    },
+                ConversionReceipt =
+                    terminalConversion.ConversionReceipt! with
+                    {
+                        SourceTaskId = "task_other",
+                    },
+            };
+        Tripo.HostUi.TripoPanelState objImportUpstreamConflict =
+            terminalImport with
+            {
+                PreparedImport = preparedImport with
+                {
+                    ConversionTaskId = "task_other",
+                },
+                ImportReceipt = validImportReceipt with
+                {
+                    SourceTaskId = "task_other",
+                },
+            };
+        Tripo.HostUi.TripoPanelState directImportUpstreamConflict =
+            terminalDirectImport with
+            {
+                PreparedImport = preparedDirectImport with
+                {
+                    ConversionTaskId = "task_other",
+                },
+                ImportReceipt = validDirectImportReceipt with
+                {
+                    SourceTaskId = "task_other",
+                },
+            };
+        Tripo.HostUi.TripoPanelState importFutureTransaction =
+            terminalImport with
+            {
+                ImportReceipt = validImportReceipt with
+                {
+                    HostReceipt = validImportReceipt.HostReceipt with
+                    {
+                        TransactionStatus = "future_status",
+                    },
+                },
+            };
+        Tripo.HostUi.TripoPanelState importAlreadyExists =
+            terminalImport with
+            {
+                ImportReceipt = validImportReceipt with
+                {
+                    HostReceipt = validImportReceipt.HostReceipt with
+                    {
+                        TransactionStatus = "already_exists",
+                    },
+                },
+            };
+
+        Assert.True(terminalImport.CanResetWorkflow);
+        Assert.True(terminalDirectImport.CanResetWorkflow);
+        Assert.True(importAlreadyExists.CanResetWorkflow);
+        Assert.False(wrongStatusId.CanResetWorkflow);
+        Assert.False(paddedStatusId.CanResetWorkflow);
+        Assert.False(generationEvidenceConflict.CanResetWorkflow);
+        Assert.False(conversionEvidenceConflict.CanResetWorkflow);
+        Assert.False(conversionReceiptOperationConflict.CanResetWorkflow);
+        Assert.False(conversionReceiptSourceConflict.CanResetWorkflow);
+        Assert.False(conversionReceiptFormatConflict.CanResetWorkflow);
+        Assert.False(importReceiptOperationConflict.CanResetWorkflow);
+        Assert.False(importReceiptSourceConflict.CanResetWorkflow);
+        Assert.False(importReceiptFormatConflict.CanResetWorkflow);
+        Assert.False(importHostOperationConflict.CanResetWorkflow);
+        Assert.False(importHostDocumentConflict.CanResetWorkflow);
+        Assert.False(importHostConflict.CanResetWorkflow);
+        Assert.False(importCreatedIdConflict.CanResetWorkflow);
+        Assert.False(importModeConflict.CanResetWorkflow);
+        Assert.False(conversionUpstreamConflict.CanResetWorkflow);
+        Assert.False(objImportUpstreamConflict.CanResetWorkflow);
+        Assert.False(directImportUpstreamConflict.CanResetWorkflow);
+        Assert.False(importFutureTransaction.CanResetWorkflow);
+        Assert.True(importFutureTransaction.HasUnresolvedImport);
     }
 
     [Fact]
@@ -373,7 +774,7 @@ public sealed class TripoPanelPresentationTests
             presentation.RecoveryDetails);
         Assert.True(presentation.ApiKeyEnabled);
         Assert.Equal(
-            "Review recovery to set API key…",
+            "Review, then set key…",
             presentation.ApiKeyText);
         Assert.Equal(
             "Review recovery…",
@@ -406,7 +807,7 @@ public sealed class TripoPanelPresentationTests
             "Reload and review all work…",
             presentation.RecoveryActionText);
         Assert.Contains(
-            "recovery",
+            "restore key",
             presentation.ApiKeyText,
             StringComparison.OrdinalIgnoreCase);
         Assert.Contains(
@@ -582,10 +983,47 @@ public sealed class TripoPanelPresentationTests
                 objectName: "Chair");
 
         Assert.Equal(
-            "API key: not configured · Source: none " +
-            "(private-file fallback)",
+            "API key: not configured · private-file fallback",
             presentation.CredentialStatus);
         Assert.False(presentation.GenerateEnabled);
+    }
+
+    [Theory]
+    [InlineData("store", false, "API key: saved")]
+    [InlineData("session", false, "API key: session only")]
+    [InlineData(
+        "environment",
+        false,
+        "API key: environment override")]
+    [InlineData(
+        "macOS Keychain",
+        false,
+        "API key: saved in macOS Keychain")]
+    [InlineData(
+        "store",
+        true,
+        "API key: saved · private-file fallback")]
+    [InlineData("managed vault", false, "API key: managed vault")]
+    public void CredentialStatusUsesHumanReadableSources(
+        string source,
+        bool usesWeakerFileFallback,
+        string expected)
+    {
+        Tripo.HostUi.TripoPanelPresentation presentation =
+            Present(
+                ReadyState() with
+                {
+                    CredentialStatus =
+                        new Tripo.Bridge.HostControlCredentialStatusReceipt(
+                            true,
+                            source,
+                            true,
+                            true,
+                            "keychain",
+                            usesWeakerFileFallback),
+                });
+
+        Assert.Equal(expected, presentation.CredentialStatus);
     }
 
     [Fact]
@@ -845,31 +1283,22 @@ public sealed class TripoPanelPresentationTests
     [Fact]
     public void ResultVisibilityUsesStateAndCurrentEvidenceWins()
     {
-        Tripo.Bridge.HostControlObjTaskImportReceipt importReceipt =
-            ImportReceipt();
+        Tripo.HostUi.TripoPanelState importedState =
+            CompletedDirectGlbImportState();
         Tripo.HostUi.TripoPanelPresentation busy =
             Present(ReadyState() with { Busy = true });
         Tripo.HostUi.TripoPanelPresentation literalReadyError =
             Present(ReadyState() with { LastError = "Ready." });
         Tripo.HostUi.TripoPanelPresentation imported =
-            Present(ReadyState() with { ImportReceipt = importReceipt });
+            Present(importedState);
         Tripo.HostUi.TripoPanelPresentation alreadyImported =
-            Present(
-                ReadyState() with
-                {
-                    ImportReceipt = ImportReceipt("already_exists"),
-                });
+            Present(CompletedDirectGlbImportState("already_exists"));
         Tripo.HostUi.TripoPanelPresentation unknownReceipt =
-            Present(
-                ReadyState() with
-                {
-                    ImportReceipt = ImportReceipt("future_status"),
-                });
+            Present(CompletedDirectGlbImportState("future_status"));
         Tripo.HostUi.TripoPanelPresentation errorAfterImport =
             Present(
-                ReadyState() with
+                importedState with
                 {
-                    ImportReceipt = importReceipt,
                     LastError = "Refresh failed.",
                 });
 
@@ -880,7 +1309,7 @@ public sealed class TripoPanelPresentationTests
         Assert.True(imported.ResultVisible);
         Assert.Equal("Imported into Rhino", imported.ResultStatus);
         Assert.Equal(
-            "rhino-object-1",
+            RhinoObjectId,
             imported.ImportCreatedObjectId);
         Assert.Equal(
             "committed",
@@ -893,7 +1322,8 @@ public sealed class TripoPanelPresentationTests
             "already_exists",
             alreadyImported.ImportTransactionStatus);
         Assert.Equal(
-            "Import receipt available · See details",
+            "Import receipt conflicts with this Rhino workflow · " +
+            "Review details",
             unknownReceipt.ResultStatus);
         Assert.Equal(
             "future_status",
@@ -1212,6 +1642,8 @@ public sealed class TripoPanelPresentationTests
         Assert.False(presentation.ConvertEnabled);
         Assert.False(presentation.ImportEnabled);
         Assert.False(presentation.ResetEnabled);
+        Assert.False(presentation.ResetVisible);
+        Assert.True(presentation.WorkflowStatusVisible);
         Assert.False(presentation.PromptEnabled);
         Assert.False(presentation.FaceLimitEnabled);
         Assert.False(presentation.WithMaterialsEnabled);
@@ -1327,6 +1759,8 @@ public sealed class TripoPanelPresentationTests
         Assert.False(paused.ConvertEnabled);
         Assert.False(paused.ImportEnabled);
         Assert.False(paused.ResetEnabled);
+        Assert.False(paused.ResetVisible);
+        Assert.True(paused.WorkflowStatusVisible);
 
         Assert.Contains(
             "Generation is ready",
@@ -1509,6 +1943,10 @@ public sealed class TripoPanelPresentationTests
     [Fact]
     public void DirectGlbCreateImportAndRefusalHaveExplicitOutcomes()
     {
+        const string generationOperationId =
+            "11111111-1111-4111-8111-111111111111";
+        const string importOperationId =
+            "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaab";
         Tripo.HostUi.TripoPanelState succeeded =
             ReadyState() with
             {
@@ -1520,6 +1958,19 @@ public sealed class TripoPanelPresentationTests
                         Tripo.Bridge.BridgeConstants.ImportGlbMethod,
                     ],
                 },
+                PreparedGeneration =
+                    new Tripo.HostUi.PreparedTextGeneration(
+                        "a chair",
+                        10_000,
+                        false,
+                        DocumentSessionId,
+                        generationOperationId),
+                GenerationDispatchAttempted = true,
+                GenerationReceipt =
+                    new Tripo.Bridge.HostControlTextTaskCreationReceipt(
+                        generationOperationId,
+                        "task_source123",
+                        "v3"),
                 GenerationStatus = TaskStatus(
                     "task_source123",
                     "text_to_model",
@@ -1573,7 +2024,7 @@ public sealed class TripoPanelPresentationTests
                         "task_source123",
                         "Chair",
                         DocumentSessionId,
-                        "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaab",
+                        importOperationId,
                         "glb_instance",
                         ApplyMaterials: true,
                         ArtifactFormat: "glb"),
@@ -1600,27 +2051,36 @@ public sealed class TripoPanelPresentationTests
                         .ManualReviewRequired);
         Tripo.HostUi.TripoPanelPresentation committed =
             Present(
-                succeeded with
+                dispatchedWithoutReceipt with
                 {
-                    ImportReceipt = ImportReceipt("committed"),
+                    ImportReceipt = DirectGlbImportReceipt(
+                        importOperationId,
+                        "task_source123",
+                        "committed"),
                 },
                 importSource: "glb",
                 directGlbCreateStage:
                     Tripo.HostUi.DirectGlbCreateUiStage.Completed);
         Tripo.HostUi.TripoPanelPresentation alreadyExists =
             Present(
-                succeeded with
+                dispatchedWithoutReceipt with
                 {
-                    ImportReceipt = ImportReceipt("already_exists"),
+                    ImportReceipt = DirectGlbImportReceipt(
+                        importOperationId,
+                        "task_source123",
+                        "already_exists"),
                 },
                 importSource: "glb",
                 directGlbCreateStage:
                     Tripo.HostUi.DirectGlbCreateUiStage.Completed);
         Tripo.HostUi.TripoPanelPresentation unknownReceipt =
             Present(
-                succeeded with
+                dispatchedWithoutReceipt with
                 {
-                    ImportReceipt = ImportReceipt("future_status"),
+                    ImportReceipt = DirectGlbImportReceipt(
+                        importOperationId,
+                        "task_source123",
+                        "future_status"),
                 },
                 importSource: "glb",
                 directGlbCreateStage:
@@ -1838,6 +2298,9 @@ public sealed class TripoPanelPresentationTests
     private const string DocumentSessionId =
         "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
 
+    private const string RhinoObjectId =
+        "44444444-4444-4444-8444-444444444444";
+
     private static Tripo.HostUi.TripoPanelPresentation Present(
         Tripo.HostUi.TripoPanelState state,
         Tripo.HostUi.TripoPanelRecoveryLoadResult? recovery = null,
@@ -1916,25 +2379,94 @@ public sealed class TripoPanelPresentationTests
             "Retry the same operation.",
             DateTimeOffset.UnixEpoch);
 
-    private static Tripo.Bridge.HostControlObjTaskImportReceipt
-        ImportReceipt(string transactionStatus = "committed") =>
+    private static Tripo.Bridge.HostControlOperationStatusReceipt
+        DurableOperation(
+            string operationId,
+            string kind,
+            string taskId,
+            string? sourceTaskId = null) =>
         new(
-            "33333333-3333-4333-8333-333333333333",
-            "task_convert123",
+            operationId,
+            kind,
+            "task_id_persisted",
+            sourceTaskId,
+            taskId,
+            null,
+            null,
+            true,
+            true,
+            true,
+            "Query the durable task ID.",
+            DateTimeOffset.UnixEpoch);
+
+    private static Tripo.HostUi.TripoPanelImportReceipt
+        DirectGlbImportReceipt(
+            string operationId,
+            string sourceTaskId,
+            string transactionStatus) =>
+        new(
+            operationId,
+            sourceTaskId,
+            "glb",
             null,
             new Tripo.Bridge.HostImportReceipt(
                 "rhino",
                 DocumentSessionId,
-                "33333333-3333-4333-8333-333333333333",
-                "rhino-object-1",
+                operationId,
+                RhinoObjectId,
                 12,
                 10,
                 0,
                 transactionStatus,
-                "native",
+                "glb_instance",
                 1,
                 1,
                 null));
+
+    private static Tripo.HostUi.TripoPanelState
+        CompletedDirectGlbImportState(
+            string transactionStatus = "committed")
+    {
+        const string generationOperationId =
+            "11111111-1111-4111-8111-111111111111";
+        const string importOperationId =
+            "33333333-3333-4333-8333-333333333333";
+        const string generationTaskId = "task_source123";
+        return ReadyState() with
+        {
+            PreparedGeneration =
+                new Tripo.HostUi.PreparedTextGeneration(
+                    "a chair",
+                    10_000,
+                    false,
+                    DocumentSessionId,
+                    generationOperationId),
+            GenerationDispatchAttempted = true,
+            GenerationReceipt =
+                new Tripo.Bridge.HostControlTextTaskCreationReceipt(
+                    generationOperationId,
+                    generationTaskId,
+                    "v3"),
+            GenerationStatus = TaskStatus(
+                generationTaskId,
+                "text_to_model",
+                "success"),
+            PreparedImport =
+                new Tripo.HostUi.PreparedObjImport(
+                    generationTaskId,
+                    "Chair",
+                    DocumentSessionId,
+                    importOperationId,
+                    "glb_instance",
+                    ApplyMaterials: true,
+                    ArtifactFormat: "glb"),
+            ImportDispatchAttempted = true,
+            ImportReceipt = DirectGlbImportReceipt(
+                importOperationId,
+                generationTaskId,
+                transactionStatus),
+        };
+    }
 
     private static Tripo.HostUi.TripoPanelState ReadyState() =>
         Tripo.HostUi.TripoPanelState.Initial with

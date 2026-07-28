@@ -197,7 +197,7 @@ public sealed class TripoRhinoPanel : Panel, IPanel
         Content = new Scrollable
         {
             Border = BorderType.None,
-            ExpandContentHeight = false,
+            ExpandContentHeight = true,
             ExpandContentWidth = true,
             Content = BuildContent(),
         };
@@ -370,38 +370,37 @@ public sealed class TripoRhinoPanel : Panel, IPanel
             HorizontalContentAlignment = HorizontalAlignment.Stretch,
             Items =
             {
-                new StackLayout
-                {
-                    AlignLabels = false,
-                    Spacing = 5,
-                    HorizontalContentAlignment =
-                        HorizontalAlignment.Stretch,
-                    Items =
+                Stretch(
+                    new StackLayout
                     {
-                        new StackLayoutItem(
-                            new Label
-                            {
-                                Text = "Tripo 3D",
-                                Font = Eto.Drawing.SystemFonts.Bold(),
-                                TextAlignment = TextAlignment.Left,
-                            },
-                            HorizontalAlignment.Left),
-                        _documentStatus,
-                        _credentialStatus,
-                        _resultStatus,
-                    },
-                },
+                        AlignLabels = false,
+                        Spacing = 5,
+                        HorizontalContentAlignment =
+                            HorizontalAlignment.Stretch,
+                        Items =
+                        {
+                            Stretch(
+                                new Label
+                                {
+                                    Text = "Tripo 3D",
+                                    Font = Eto.Drawing.SystemFonts.Bold(),
+                                    TextAlignment = TextAlignment.Left,
+                                }),
+                            Stretch(_documentStatus),
+                            Stretch(_credentialStatus),
+                        },
+                    }),
+                Stretch(_recoveryExpander),
                 FieldBlock("Describe the model", _prompt),
-                new StackLayoutItem(
-                    _createInRhino,
-                    HorizontalAlignment.Stretch),
-                _createGuidance,
-                _generationTask,
-                _generationProgress,
-                ActionColumn(_directGlbWaitAction, _reset),
-                _settingsExpander,
-                _recoveryExpander,
-                _advancedExpander,
+                Stretch(_createInRhino),
+                Stretch(_createGuidance),
+                Stretch(_resultStatus),
+                Stretch(_generationTask),
+                Stretch(_generationProgress),
+                Stretch(ActionColumn(_directGlbWaitAction, _reset)),
+                Stretch(_settingsExpander),
+                Stretch(_advancedExpander),
+                new StackLayoutItem(new Panel(), expand: true),
             },
         };
     }
@@ -417,7 +416,7 @@ public sealed class TripoRhinoPanel : Panel, IPanel
         };
         foreach (Control control in controls)
         {
-            content.Items.Add(control);
+            content.Items.Add(Stretch(control));
         }
 
         return new GroupBox
@@ -438,7 +437,7 @@ public sealed class TripoRhinoPanel : Panel, IPanel
             HorizontalContentAlignment = HorizontalAlignment.Stretch,
             Items =
             {
-                LeftLabel(label),
+                Stretch(LeftLabel(label)),
                 new StackLayoutItem(
                     control,
                     stretchControl
@@ -446,6 +445,9 @@ public sealed class TripoRhinoPanel : Panel, IPanel
                         : HorizontalAlignment.Left),
             },
         };
+
+    private static StackLayoutItem Stretch(Control control) =>
+        new(control, HorizontalAlignment.Stretch);
 
     private static StackLayout ActionColumn(params Button[] buttons)
     {
@@ -1878,7 +1880,7 @@ public sealed class TripoRhinoPanel : Panel, IPanel
             {
                 HasApiKey: true,
                 Source: "environment",
-        };
+            };
         if (_directGlbAutoImportIntent is not null &&
             (_directGlbCreateUiStage is
                 Tripo.HostUi.DirectGlbCreateUiStage.WaitingForGeneration or
@@ -2100,6 +2102,7 @@ public sealed class TripoRhinoPanel : Panel, IPanel
         _credentialStatus.Text = presentation.CredentialStatus;
         _recoveryHeader.Text = presentation.RecoveryHeader;
         _recoveryStatus.Text = presentation.RecoveryDetails;
+        _recoveryExpander.Visible = presentation.RecoveryHasBlock;
         if (presentation.RecoveryHasBlock)
         {
             _recoveryExpander.Expanded = true;
@@ -2136,6 +2139,7 @@ public sealed class TripoRhinoPanel : Panel, IPanel
         _generationOperation.Text = presentation.GenerationOperationId;
         _generationTaskId.Text = presentation.GenerationTaskId;
         _generationTask.Text = presentation.GenerationStatus;
+        _generationTask.Visible = presentation.WorkflowStatusVisible;
         _generationDiagnostic.Text =
             presentation.GenerationDiagnostic;
         _generationDiagnosticBlock.Visible =
@@ -2213,6 +2217,7 @@ public sealed class TripoRhinoPanel : Panel, IPanel
         _importSource.Enabled = presentation.ImportSourceEnabled;
         _importGuidance.Text = presentation.ImportGuidance;
         _reset.Enabled = presentation.ResetEnabled;
+        _reset.Visible = presentation.ResetVisible;
         _prompt.Enabled = presentation.PromptEnabled;
         _faceLimit.Enabled = presentation.FaceLimitEnabled;
         _withMaterials.Enabled = presentation.WithMaterialsEnabled;

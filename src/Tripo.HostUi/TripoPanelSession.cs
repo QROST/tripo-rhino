@@ -208,7 +208,23 @@ public sealed record TripoPanelState(
 
     public bool HasUnresolvedDispatch =>
         HasUnresolvedPaidDispatch ||
-        (ImportDispatchAttempted && ImportReceipt is null);
+        HasUnresolvedImport;
+
+    public bool HasUnresolvedImport =>
+        ImportDispatchAttempted
+            ? !HasVerifiedTerminalImportReceipt
+            : ImportReceipt is not null;
+
+    public bool HasVerifiedTerminalImportReceipt =>
+        IsVerifiedTerminalImportReceipt();
+
+    public bool HasUnconfirmedTerminalPaidTask =>
+        IsGenerationResetBlocked() ||
+        IsConversionResetBlocked();
+
+    public bool CanResetWorkflow =>
+        !HasUnresolvedDispatch &&
+        !HasUnconfirmedTerminalPaidTask;
 
     public bool HasCredentialBoundWorkflow =>
         GenerationDispatchAttempted ||
@@ -281,6 +297,253 @@ public sealed record TripoPanelState(
             OperationInProgress: false,
             FailureStage: null,
         };
+
+    private bool IsGenerationResetBlocked()
+    {
+        PreparedTextGeneration? prepared = PreparedGeneration;
+        Tripo.Bridge.HostControlTextTaskCreationReceipt? receipt =
+            GenerationReceipt;
+        Tripo.Bridge.HostControlOperationStatusReceipt? operation =
+            GenerationOperationStatus;
+        if (receipt is not null &&
+            (prepared is null ||
+             !string.Equals(
+                 receipt.OperationId,
+                 prepared.OperationId,
+                 StringComparison.Ordinal) ||
+             !Tripo.Bridge.TripoTaskId.IsValid(receipt.TaskId)))
+        {
+            return true;
+        }
+
+        string? operationTaskId =
+            operation?.TaskIdDurable == true
+                ? operation.CreatedTaskId
+                : null;
+        if (operation is not null &&
+            (prepared is null ||
+             !string.Equals(
+                 operation.OperationId,
+                 prepared.OperationId,
+                 StringComparison.Ordinal) ||
+             !string.Equals(
+                 operation.Kind,
+                 "text_task_creation",
+                 StringComparison.Ordinal) ||
+             operation.SourceTaskId is not null ||
+             (operation.TaskIdDurable &&
+             !Tripo.Bridge.TripoTaskId.IsValid(operationTaskId)) ||
+             (receipt?.TaskId is not null &&
+             operationTaskId is not null &&
+             !string.Equals(
+                 receipt.TaskId,
+                 operationTaskId,
+                 StringComparison.Ordinal))))
+        {
+            return true;
+        }
+
+        string? expectedTaskId = receipt?.TaskId ?? operationTaskId;
+        return IsTaskTerminalUnconfirmed(
+            expectedTaskId,
+            GenerationStatus,
+            "text_to_model");
+    }
+
+    private bool IsConversionResetBlocked()
+    {
+        PreparedObjConversion? prepared = PreparedConversion;
+        Tripo.Bridge.HostControlObjConversionCreationReceipt? receipt =
+            ConversionReceipt;
+        Tripo.Bridge.HostControlOperationStatusReceipt? operation =
+            ConversionOperationStatus;
+        string? generationTaskId = GetDurableGenerationTaskId();
+        if (prepared is not null &&
+            (!Tripo.Bridge.TripoTaskId.IsValid(generationTaskId) ||
+             !string.Equals(
+                 prepared.SourceTaskId,
+                 generationTaskId,
+                 StringComparison.Ordinal)))
+        {
+            return true;
+        }
+
+        if (receipt is not null &&
+            (prepared is null ||
+             !string.Equals(
+                 receipt.OperationId,
+                 prepared.OperationId,
+                 StringComparison.Ordinal) ||
+             !Tripo.Bridge.TripoTaskId.IsValid(
+                 prepared.SourceTaskId) ||
+             !string.Equals(
+                 receipt.SourceTaskId,
+                 prepared.SourceTaskId,
+                 StringComparison.Ordinal) ||
+             !Tripo.Bridge.TripoTaskId.IsValid(
+                 receipt.ConversionTaskId) ||
+             !string.Equals(
+                 receipt.Format,
+                 "OBJ",
+                 StringComparison.Ordinal)))
+        {
+            return true;
+        }
+
+        string? operationTaskId =
+            operation?.TaskIdDurable == true
+                ? operation.CreatedTaskId
+                : null;
+        if (operation is not null &&
+            (prepared is null ||
+             !string.Equals(
+                 operation.OperationId,
+                 prepared.OperationId,
+                 StringComparison.Ordinal) ||
+             !string.Equals(
+                 operation.Kind,
+                 "obj_conversion_creation",
+                 StringComparison.Ordinal) ||
+             !string.Equals(
+                 operation.SourceTaskId,
+                 prepared.SourceTaskId,
+                 StringComparison.Ordinal) ||
+             (operation.TaskIdDurable &&
+              !Tripo.Bridge.TripoTaskId.IsValid(operationTaskId)) ||
+             (receipt?.ConversionTaskId is not null &&
+              operationTaskId is not null &&
+              !string.Equals(
+                  receipt.ConversionTaskId,
+                  operationTaskId,
+                  StringComparison.Ordinal))))
+        {
+            return true;
+        }
+
+        string? expectedTaskId =
+            receipt?.ConversionTaskId ?? operationTaskId;
+        return IsTaskTerminalUnconfirmed(
+            expectedTaskId,
+            ConversionStatus,
+            "convert_model");
+    }
+
+    private static bool IsTaskTerminalUnconfirmed(
+        string? expectedTaskId,
+        Tripo.Bridge.HostControlTaskStatusReceipt? status,
+        string expectedTaskType)
+    {
+        if (expectedTaskId is null)
+        {
+            return status is not null;
+        }
+
+        return !Tripo.Bridge.TripoTaskId.IsValid(expectedTaskId) ||
+               status is null ||
+               !Tripo.Bridge.TripoTaskId.IsValid(status.TaskId) ||
+               !string.Equals(
+                   expectedTaskId,
+                   status.TaskId,
+                   StringComparison.Ordinal) ||
+               !string.Equals(
+                   status.Type,
+                   expectedTaskType,
+                   StringComparison.Ordinal) ||
+               !IsKnownTerminalTaskStatus(status.Status);
+    }
+
+    private bool IsVerifiedTerminalImportReceipt()
+    {
+        PreparedObjImport? prepared = PreparedImport;
+        TripoPanelImportReceipt? receipt = ImportReceipt;
+        string? expectedSourceTaskId = prepared?.IsDirectGlb == true
+            ? GetDurableGenerationTaskId()
+            : GetDurableConversionTaskId();
+        string? expectedImportMode = prepared?.ImportMode == "native"
+            ? "instance"
+            : prepared?.ImportMode;
+        if (prepared is null ||
+            receipt is null ||
+            Context is null ||
+            !string.Equals(
+                Context.Host,
+                "rhino",
+                StringComparison.Ordinal) ||
+            !string.Equals(
+                receipt.HostReceipt.Host,
+                Context.Host,
+                StringComparison.Ordinal) ||
+            !Tripo.Bridge.TripoTaskId.IsValid(
+                prepared.ConversionTaskId) ||
+            !Tripo.Bridge.TripoTaskId.IsValid(
+                expectedSourceTaskId) ||
+            !string.Equals(
+                prepared.ConversionTaskId,
+                expectedSourceTaskId,
+                StringComparison.Ordinal) ||
+            !string.Equals(
+                receipt.OperationId,
+                prepared.OperationId,
+                StringComparison.Ordinal) ||
+            !string.Equals(
+                receipt.SourceTaskId,
+                prepared.ConversionTaskId,
+                StringComparison.Ordinal) ||
+            !string.Equals(
+                receipt.ArtifactFormat,
+                prepared.ArtifactFormat,
+                StringComparison.Ordinal) ||
+            !string.Equals(
+                receipt.HostReceipt.IdempotencyKey,
+                prepared.OperationId,
+                StringComparison.Ordinal) ||
+            !string.Equals(
+                receipt.HostReceipt.DocumentSessionId,
+                prepared.DocumentSessionId,
+                StringComparison.Ordinal) ||
+            !string.Equals(
+                receipt.HostReceipt.ImportMode,
+                expectedImportMode,
+                StringComparison.Ordinal) ||
+            !Guid.TryParseExact(
+                receipt.HostReceipt.CreatedId,
+                "D",
+                out Guid createdId) ||
+            !string.Equals(
+                receipt.HostReceipt.CreatedId,
+                createdId.ToString("D"),
+                StringComparison.Ordinal) ||
+            (prepared.IsDirectGlb
+                ? IsGenerationResetBlocked()
+                : IsGenerationResetBlocked() ||
+                  IsConversionResetBlocked()))
+        {
+            return false;
+        }
+
+        return receipt.HostReceipt.TransactionStatus is
+            "committed" or "already_exists";
+    }
+
+    private string? GetDurableGenerationTaskId() =>
+        GenerationReceipt?.TaskId ??
+        (GenerationOperationStatus?.TaskIdDurable == true
+            ? GenerationOperationStatus.CreatedTaskId
+            : null);
+
+    private string? GetDurableConversionTaskId() =>
+        ConversionReceipt?.ConversionTaskId ??
+        (ConversionOperationStatus?.TaskIdDurable == true
+            ? ConversionOperationStatus.CreatedTaskId
+            : null);
+
+    private static bool IsKnownTerminalTaskStatus(string? status) =>
+        status?.Trim().ToLowerInvariant() is
+            "success" or
+            "failed" or
+            "cancelled" or
+            "banned" or
+            "expired";
 
     public bool CanDispatchPreparedImport =>
         PreparedImport is not null &&
@@ -1062,6 +1325,28 @@ public sealed class TripoPanelSession : IAsyncDisposable
                     throw;
                 }
 
+                TripoPanelState receiptCandidate = State with
+                {
+                    ImportReceipt = receipt,
+                };
+                if (!receiptCandidate.HasVerifiedTerminalImportReceipt)
+                {
+                    UpdateState(state => state with
+                    {
+                        ImportReceipt = null,
+                        ImportFailureCode =
+                            Tripo.Bridge.BridgeConstants
+                                .MutationStateUncertainError,
+                    });
+                    throw new Tripo.Bridge.HostControlCallException(
+                        Tripo.Bridge.BridgeConstants
+                            .MutationStateUncertainError,
+                        "Rhino returned an import receipt that did not match " +
+                        "this host, document, operation, source task, format, " +
+                        "mode, or created-object identity. Inspect the document " +
+                        "and recovery operation before retrying.");
+                }
+
                 UpdateState(state => state with
                 {
                     ImportReceipt = receipt,
@@ -1084,6 +1369,15 @@ public sealed class TripoPanelSession : IAsyncDisposable
                     "This panel has an unresolved dispatched operation. Keep its " +
                     "displayed operation ID and use Refresh or retry the same stage; " +
                     "a new workflow cannot discard that recovery identity.");
+            }
+
+            if (State.HasUnconfirmedTerminalPaidTask)
+            {
+                throw new InvalidOperationException(
+                    "This panel has a durable paid task without a confirmed " +
+                    "terminal status. Refresh that task until it reports success " +
+                    "or a terminal failure; a new workflow cannot discard its " +
+                    "recovery identity.");
             }
 
             UpdateState(state => state with

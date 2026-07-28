@@ -359,6 +359,8 @@ public sealed class TripoPanelPresentation
 
     public string GenerationStatus { get; private init; } = string.Empty;
 
+    public bool WorkflowStatusVisible { get; private init; }
+
     public string GenerationDiagnostic { get; private init; } = string.Empty;
 
     public bool GenerationDiagnosticVisible { get; private init; }
@@ -444,6 +446,8 @@ public sealed class TripoPanelPresentation
 
     public bool ResetEnabled { get; private init; }
 
+    public bool ResetVisible { get; private init; }
+
     public bool PromptEnabled { get; private init; }
 
     public bool FaceLimitEnabled { get; private init; }
@@ -519,6 +523,10 @@ public sealed class TripoPanelPresentation
                 ? generationSucceeded && directGlbSupported
                 : conversionSucceeded;
         bool recoveryBlocked = recovery.HasBlock;
+        bool resetEnabled =
+            controlsReady &&
+            !recoveryBlocked &&
+            state.CanResetWorkflow;
         bool directGlbCredentialRecoveryReady =
             ready &&
             !recoveryBlocked &&
@@ -563,6 +571,8 @@ public sealed class TripoPanelPresentation
         string? conversionTaskId =
             state.ConversionReceipt?.ConversionTaskId ??
             state.ConversionOperationStatus?.CreatedTaskId;
+        bool importReceiptVerified =
+            state.HasVerifiedTerminalImportReceipt;
         string resultStatus = directGlbCreateStage switch
         {
             DirectGlbCreateUiStage.Preflighting =>
@@ -590,9 +600,13 @@ public sealed class TripoPanelPresentation
             DirectGlbCreateUiStage.Importing =>
                 "Generation complete. Importing GLB into Rhino…",
             DirectGlbCreateUiStage.Completed
-                when state.ImportReceipt is not null =>
+                when importReceiptVerified =>
                 FriendlyImportResult(
-                    state.ImportReceipt.HostReceipt.TransactionStatus),
+                    state.ImportReceipt!.HostReceipt.TransactionStatus),
+            DirectGlbCreateUiStage.Completed
+                when state.ImportReceipt is not null =>
+                "Import receipt conflicts with this Rhino workflow · " +
+                "Review details",
             DirectGlbCreateUiStage.RecoveryBlocked =>
                 "Automatic import stopped before Rhino mutation because " +
                 "recovery evidence requires review. Nothing was imported; " +
@@ -620,9 +634,12 @@ public sealed class TripoPanelPresentation
                 "this import; inspect the document and recovery operation ID.",
             _ when state.LastError is not null => state.LastError,
             _ when state.Busy => "Working…",
-            _ when state.ImportReceipt is not null =>
+            _ when importReceiptVerified =>
                 FriendlyImportResult(
-                    state.ImportReceipt.HostReceipt.TransactionStatus),
+                    state.ImportReceipt!.HostReceipt.TransactionStatus),
+            _ when state.ImportReceipt is not null =>
+                "Import receipt conflicts with this Rhino workflow · " +
+                "Review details",
             _ => "Ready.",
         };
 
@@ -662,6 +679,7 @@ public sealed class TripoPanelPresentation
                 generationTaskId,
                 state.GenerationOperationStatus,
                 state.GenerationStatus),
+            WorkflowStatusVisible = state.HasWorkflowState,
             GenerationDiagnostic = StageDiagnostic(
                 state.GenerationOperationStatus,
                 state.GenerationStatus),
@@ -738,12 +756,14 @@ public sealed class TripoPanelPresentation
                 DirectGlbCreateUiStage.Importing =>
                     "Importing GLB…",
                 DirectGlbCreateUiStage.Completed =>
-                    state.ImportReceipt?.HostReceipt.TransactionStatus switch
-                    {
-                        "committed" => "Created in Rhino",
-                        "already_exists" => "Already in Rhino",
-                        _ => "Review required",
-                    },
+                    !importReceiptVerified
+                        ? "Review required"
+                        : state.ImportReceipt?.HostReceipt.TransactionStatus switch
+                        {
+                            "committed" => "Created in Rhino",
+                            "already_exists" => "Already in Rhino",
+                            _ => "Review required",
+                        },
                 DirectGlbCreateUiStage.TerminalWithoutImport or
                 DirectGlbCreateUiStage.RecoveryBlocked or
                 DirectGlbCreateUiStage.Refused or
@@ -876,10 +896,11 @@ public sealed class TripoPanelPresentation
                       "Install the matching build or select OBJ compatibility."
                 : "Compatibility path: create and finish a separate OBJ " +
                   "conversion before importing.",
-            ResetEnabled =
-                controlsReady &&
-                !recoveryBlocked &&
-                !state.HasUnresolvedDispatch,
+            ResetEnabled = resetEnabled,
+            ResetVisible =
+                resetEnabled &&
+                (state.HasWorkflowState ||
+                 directGlbCreateStage != DirectGlbCreateUiStage.Inactive),
             PromptEnabled = controlsReady && !generationPrepared,
             FaceLimitEnabled = controlsReady && !generationPrepared,
             WithMaterialsEnabled = controlsReady && !generationPrepared,
@@ -1162,19 +1183,23 @@ public sealed class TripoPanelPresentation
             return "API key: unknown";
         }
 
+        string fallback = state.CredentialStatus.UsesWeakerFileFallback
+            ? " · private-file fallback"
+            : string.Empty;
         if (!state.CredentialStatus.HasApiKey)
         {
-            return "API key: not configured · Source: " +
-                   state.CredentialStatus.Source +
-                   (state.CredentialStatus.UsesWeakerFileFallback
-                       ? " (private-file fallback)"
-                       : string.Empty);
+            return "API key: not configured" + fallback;
         }
 
-        return $"API key: {state.CredentialStatus.Source}" +
-               (state.CredentialStatus.UsesWeakerFileFallback
-                   ? " (private-file fallback)"
-                   : string.Empty);
+        string source = state.CredentialStatus.Source switch
+        {
+            "store" => "saved",
+            "session" => "session only",
+            "environment" => "environment override",
+            "macOS Keychain" => "saved in macOS Keychain",
+            _ => state.CredentialStatus.Source,
+        };
+        return $"API key: {source}{fallback}";
     }
 
     private static string RecoveryApiKeyText(
@@ -1189,8 +1214,8 @@ public sealed class TripoPanelPresentation
         if (state.RequiresCredentialRecovery)
         {
             return recovery.HasBlock
-                ? "Review recovery, then restore API key…"
-                : "Restore workflow API key…";
+                ? "Review, then restore key…"
+                : "Restore API key…";
         }
 
         if (!recovery.HasBlock)
@@ -1199,8 +1224,8 @@ public sealed class TripoPanelPresentation
         }
 
         return state.CredentialStatus?.HasApiKey == true
-            ? "Review recovery before changing API key…"
-            : "Review recovery to set API key…";
+            ? "Review, then change key…"
+            : "Review, then set key…";
     }
 
     private static string BuildRecoveryDetails(
