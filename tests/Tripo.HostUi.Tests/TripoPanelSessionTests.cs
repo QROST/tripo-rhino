@@ -2589,6 +2589,69 @@ public sealed class TripoPanelSessionTests
     }
 
     [Fact]
+    public async Task PausedDirectGlbManualRefreshImportsOnlyAfterResume()
+    {
+        FakeHostControlClient client = new()
+        {
+            TaskStatusValue = "running",
+        };
+        await using Tripo.HostUi.TripoPanelSession session =
+            new(new FakeConnector(client));
+        await session.ConnectAsync();
+        Tripo.HostUi.PreparedTextGeneration generation =
+            session.PrepareGeneration(
+                "a PBR chair",
+                10_000,
+                withMaterials: true);
+        Tripo.HostUi.DirectGlbAutoImportIntent intent = new(
+            sessionGeneration: 1,
+            generation.OperationId,
+            generation.DocumentSessionId,
+            "PBR Chair");
+        await session.DispatchPreparedGenerationAsync(
+            userConfirmedExternalCost: true);
+        await session.RefreshGenerationStatusAsync();
+        string operationId = generation.OperationId;
+        string taskId = session.State.GenerationReceipt!.TaskId;
+
+        Assert.True(intent.TryStopWaiting(1, session.State));
+        Assert.Null(
+            Tripo.HostUi.DirectGlbGenerationPollingPolicy.GetPendingTaskId(
+                session.State,
+                session.Recovery,
+                intent));
+
+        client.TaskStatusValue = "success";
+        await session.RefreshGenerationStatusAsync();
+        Assert.Equal(
+            Tripo.HostUi.DirectGlbAutoImportDecision.Stopped,
+            intent.ObserveState(1, session.State));
+        Assert.Equal(0, client.GlbImportCalls);
+        Assert.Equal(1, client.CreateTextCalls);
+        Assert.Equal(0, client.CreateConversionCalls);
+        Assert.Equal(
+            operationId,
+            session.State.PreparedGeneration?.OperationId);
+        Assert.Equal(taskId, session.State.GenerationReceipt?.TaskId);
+
+        Assert.True(intent.TryResumeWaiting(1, session.State));
+        Assert.Equal(
+            Tripo.HostUi.DirectGlbAutoImportDecision.BeginImport,
+            intent.ObserveState(1, session.State));
+        _ = session.PrepareGlbImport(intent.ObjectName);
+        await session.ImportPreparedAsync();
+        Assert.True(intent.TryFinishImport(1, session.State));
+        Assert.Equal(
+            Tripo.HostUi.DirectGlbAutoImportDecision.NoAction,
+            intent.ObserveState(1, session.State));
+        Assert.Equal(1, client.GlbImportCalls);
+        Assert.Equal(1, client.CreateTextCalls);
+        Assert.Equal(0, client.CreateConversionCalls);
+        Assert.Equal(taskId, client.LastGlbImportRequest?.GenerationTaskId);
+        Assert.Equal(2, client.TaskStatusCalls);
+    }
+
+    [Fact]
     public async Task DirectGlbCredentialRecoveryKeepsTaskAndImportsOnce()
     {
         FakeHostControlClient client = new()
@@ -3429,6 +3492,8 @@ public sealed class TripoPanelSessionTests
 
         public string? TaskStatusFailureCode { get; set; }
 
+        public string TaskStatusValue { get; set; } = "success";
+
         public bool FailFirstConversionResponse { get; set; }
 
         public string FirstConversionFailureCode { get; set; } =
@@ -3474,6 +3539,8 @@ public sealed class TripoPanelSessionTests
         public int CreateTextCalls { get; private set; }
 
         public int CreateConversionCalls { get; private set; }
+
+        public int TaskStatusCalls { get; private set; }
 
         public int ClearApiKeyCalls { get; private set; }
 
@@ -3633,6 +3700,7 @@ public sealed class TripoPanelSessionTests
                 string taskId,
                 CancellationToken cancellationToken)
         {
+            TaskStatusCalls++;
             TaskStatusEntered?.TrySetResult(true);
             if (ContinueTaskStatus is not null)
             {
@@ -3652,8 +3720,13 @@ public sealed class TripoPanelSessionTests
                 taskId == "task_source123"
                     ? "text_to_model"
                     : "convert_model",
-                "success",
-                100,
+                TaskStatusValue,
+                string.Equals(
+                    TaskStatusValue,
+                    "success",
+                    StringComparison.OrdinalIgnoreCase)
+                    ? 100
+                    : 50,
                 null,
                 null,
                 null,

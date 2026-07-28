@@ -12,6 +12,7 @@ internal sealed class GenerationStatusPoller : IDisposable
     private string? _activeTaskId;
     private string? _failedTaskId;
     private string? _resumeRequestedTaskId;
+    private string? _restartRequestedTaskId;
     private bool _disposed;
 
     public GenerationStatusPoller(
@@ -88,7 +89,7 @@ internal sealed class GenerationStatusPoller : IDisposable
             return null;
         }
 
-        string normalized = status.Status.Trim();
+        string normalized = status.Status?.Trim() ?? string.Empty;
         return string.Equals(
                    normalized,
                    "queued",
@@ -123,6 +124,7 @@ internal sealed class GenerationStatusPoller : IDisposable
             _activeTaskId = null;
             _failedTaskId = null;
             _resumeRequestedTaskId = null;
+            _restartRequestedTaskId = null;
             cancellation = _runCancellation;
             _runCancellation = null;
             _runTask = null;
@@ -146,21 +148,28 @@ internal sealed class GenerationStatusPoller : IDisposable
                 return;
             }
 
+            bool runInFlight =
+                _runCancellation is not null &&
+                _runTask is { IsCompleted: false };
             if (taskId is null)
             {
                 cancellation = _runCancellation;
                 _activeTaskId = null;
                 _failedTaskId = null;
                 _resumeRequestedTaskId = null;
-                _runCancellation = null;
-                _runTask = null;
+                _restartRequestedTaskId = null;
+                if (!runInFlight)
+                {
+                    _runCancellation = null;
+                    _runTask = null;
+                }
             }
-            else if (string.Equals(
-                         taskId,
-                         _activeTaskId,
-                         StringComparison.Ordinal))
+            else if (runInFlight)
             {
-                if (_runTask is { IsCompleted: false })
+                if (string.Equals(
+                        taskId,
+                        _activeTaskId,
+                        StringComparison.Ordinal))
                 {
                     if (resumeAfterFailure)
                     {
@@ -170,7 +179,19 @@ internal sealed class GenerationStatusPoller : IDisposable
                     return;
                 }
 
+                cancellation = _runCancellation;
+                _activeTaskId = taskId;
+                _failedTaskId = null;
+                _resumeRequestedTaskId = null;
+                _restartRequestedTaskId = taskId;
+            }
+            else
+            {
                 if (!resumeAfterFailure &&
+                    string.Equals(
+                        taskId,
+                        _activeTaskId,
+                        StringComparison.Ordinal) &&
                     string.Equals(
                         taskId,
                         _failedTaskId,
@@ -179,16 +200,10 @@ internal sealed class GenerationStatusPoller : IDisposable
                     return;
                 }
 
-                _failedTaskId = null;
-                _resumeRequestedTaskId = null;
-                StartRun(taskId);
-            }
-            else
-            {
-                cancellation = _runCancellation;
                 _activeTaskId = taskId;
                 _failedTaskId = null;
                 _resumeRequestedTaskId = null;
+                _restartRequestedTaskId = null;
                 StartRun(taskId);
             }
         }
@@ -260,7 +275,18 @@ internal sealed class GenerationStatusPoller : IDisposable
             {
                 _runCancellation = null;
                 _runTask = null;
-                if (failed &&
+                if (_restartRequestedTaskId is { } restartTaskId &&
+                    string.Equals(
+                        restartTaskId,
+                        _activeTaskId,
+                        StringComparison.Ordinal))
+                {
+                    _failedTaskId = null;
+                    _resumeRequestedTaskId = null;
+                    _restartRequestedTaskId = null;
+                    StartRun(restartTaskId);
+                }
+                else if (failed &&
                     string.Equals(
                         taskId,
                         _activeTaskId,
@@ -279,6 +305,10 @@ internal sealed class GenerationStatusPoller : IDisposable
                     {
                         _failedTaskId = taskId;
                     }
+                }
+                else
+                {
+                    _restartRequestedTaskId = null;
                 }
             }
         }

@@ -58,6 +58,7 @@ public sealed class TripoRhinoPanel : Panel, IPanel
         },
         SelectedIndex = 0,
     };
+    private readonly Label _createGuidance = StatusLabel();
     private readonly Label _importGuidance = StatusLabel();
     private readonly DropDown _importMode = new()
     {
@@ -95,7 +96,9 @@ public sealed class TripoRhinoPanel : Panel, IPanel
     private readonly TextBox _importCreatedObject = OperationStatusBox();
     private readonly TextBox _importTransaction = OperationStatusBox();
     private readonly Label _resultStatus = StatusLabel();
+    private readonly Expander _settingsExpander = new();
     private readonly Expander _recoveryExpander = new();
+    private readonly Expander _advancedExpander = new();
     private readonly Expander _detailsExpander = new();
     private readonly Button _connect = new() { Text = "Connect / Refresh" };
     private readonly Button _apiKey = new() { Text = "API key…" };
@@ -115,6 +118,11 @@ public sealed class TripoRhinoPanel : Panel, IPanel
     };
     private readonly Button _createInRhino =
         new() { Text = "Create in Rhino" };
+    private readonly Button _directGlbWaitAction = new()
+    {
+        Text = "Stop waiting",
+        Visible = false,
+    };
     private readonly Button _generate = new() { Text = "Generate" };
     private readonly Button _refreshGeneration = new()
     {
@@ -199,6 +207,7 @@ public sealed class TripoRhinoPanel : Panel, IPanel
         _checkRecovery.Click += OnCheckRecovery;
         _reviewRecovery.Click += OnReviewRecovery;
         _createInRhino.Click += OnCreateInRhino;
+        _directGlbWaitAction.Click += OnDirectGlbWaitAction;
         _generate.Click += OnGenerate;
         _refreshGeneration.Click += OnRefreshGeneration;
         _convert.Click += OnConvert;
@@ -296,6 +305,63 @@ public sealed class TripoRhinoPanel : Panel, IPanel
             },
         };
 
+        _settingsExpander.Header = LeftLabel("Settings");
+        _settingsExpander.Expanded = false;
+        _settingsExpander.Content = new StackLayout
+        {
+            AlignLabels = false,
+            Padding = new Eto.Drawing.Padding(8, 6, 0, 2),
+            Spacing = 7,
+            HorizontalContentAlignment = HorizontalAlignment.Stretch,
+            Items =
+            {
+                FieldBlock(
+                    "Face limit",
+                    _faceLimit,
+                    stretchControl: false),
+                _withMaterials,
+                FieldBlock("Object name", _name),
+                ActionColumn(_apiKey, _clearApiKey),
+            },
+        };
+
+        _advancedExpander.Header = LeftLabel("Advanced");
+        _advancedExpander.Expanded = false;
+        _advancedExpander.Content = new StackLayout
+        {
+            AlignLabels = false,
+            Padding = new Eto.Drawing.Padding(8, 6, 0, 2),
+            Spacing = 8,
+            HorizontalContentAlignment = HorizontalAlignment.Stretch,
+            Items =
+            {
+                ActionColumn(_connect),
+                Section(
+                    "Manual generation",
+                    ActionColumn(_generate, _refreshGeneration)),
+                Section(
+                    "Optional OBJ compatibility",
+                    _conversionTask,
+                    _conversionProgress,
+                    ActionColumn(_convert, _refreshConversion)),
+                Section(
+                    "Manual import",
+                    FieldBlock(
+                        "Import source",
+                        _importSource,
+                        stretchControl: false),
+                    _importGuidance,
+                    FieldBlock(
+                        "Import mode",
+                        _importMode,
+                        stretchControl: false),
+                    _applyMaterials,
+                    ActionColumn(_import)),
+                _detailsExpander,
+            },
+        };
+
+        _createInRhino.Height = 40;
         return new StackLayout
         {
             AlignLabels = false,
@@ -323,47 +389,19 @@ public sealed class TripoRhinoPanel : Panel, IPanel
                         _documentStatus,
                         _credentialStatus,
                         _resultStatus,
-                        ActionColumn(_connect, _apiKey, _clearApiKey),
                     },
                 },
+                FieldBlock("Describe the model", _prompt),
+                new StackLayoutItem(
+                    _createInRhino,
+                    HorizontalAlignment.Stretch),
+                _createGuidance,
+                _generationTask,
+                _generationProgress,
+                ActionColumn(_directGlbWaitAction, _reset),
+                _settingsExpander,
                 _recoveryExpander,
-                Section(
-                    "1 · Generate model",
-                    FieldBlock("Describe the model", _prompt),
-                    FieldBlock(
-                        "Face limit",
-                        _faceLimit,
-                        stretchControl: false),
-                    _withMaterials,
-                    _generationTask,
-                    _generationProgress,
-                    ActionColumn(
-                        _createInRhino,
-                        _generate,
-                        _refreshGeneration)),
-                Section(
-                    "2 · Optional OBJ fallback",
-                    _conversionTask,
-                    _conversionProgress,
-                    ActionColumn(_convert, _refreshConversion)),
-                Section(
-                    "3 · Import to Rhino",
-                    FieldBlock(
-                        "Object name",
-                        _name),
-                    FieldBlock(
-                        "Import source",
-                        _importSource,
-                        stretchControl: false),
-                    _importGuidance,
-                    FieldBlock(
-                        "Import mode",
-                        _importMode,
-                        stretchControl: false),
-                    _applyMaterials,
-                    ActionColumn(_import)),
-                _detailsExpander,
-                ActionColumn(_reset),
+                _advancedExpander,
             },
         };
     }
@@ -651,15 +689,19 @@ public sealed class TripoRhinoPanel : Panel, IPanel
                 ownerGeneration == _sessionGeneration &&
                 ReferenceEquals(ownerSession, _session) &&
                 _directGlbAutoImportIntent is not null &&
-                _directGlbCreateUiStage ==
+                (_directGlbCreateUiStage is
                     Tripo.HostUi.DirectGlbCreateUiStage
-                        .WaitingForGeneration)
+                        .WaitingForGeneration or
+                    Tripo.HostUi.DirectGlbCreateUiStage.WaitingPaused))
             {
                 string? pendingTaskId =
-                    Tripo.HostUi.GenerationStatusPoller.GetPendingTaskId(
-                        ownerSession.State,
-                        ownerSession.Recovery);
+                    Tripo.HostUi.DirectGlbGenerationPollingPolicy
+                        .GetPendingTaskId(
+                            ownerSession.State,
+                            ownerSession.Recovery,
+                            _directGlbAutoImportIntent);
                 _generationStatusPoller.Resume(pendingTaskId);
+
                 QueueDirectGlbAutoImportContinuation(
                     ownerSession,
                     ownerGeneration);
@@ -1361,6 +1403,138 @@ public sealed class TripoRhinoPanel : Panel, IPanel
         }
     }
 
+    private void OnDirectGlbWaitAction(object? sender, EventArgs args)
+    {
+        try
+        {
+            if (_closing || _session.State.Busy)
+            {
+                throw new InvalidOperationException(
+                    "Wait for the current panel operation to finish before " +
+                    "changing automatic waiting.");
+            }
+
+            if (_session.Recovery.HasBlock)
+            {
+                throw new InvalidOperationException(
+                    "Review recovered operation IDs before changing automatic " +
+                    "waiting.");
+            }
+
+            Tripo.HostUi.DirectGlbAutoImportIntent intent =
+                _directGlbAutoImportIntent ??
+                throw new InvalidOperationException(
+                    "There is no active one-click generation task to pause.");
+            Tripo.HostUi.TripoPanelState state = _session.State;
+            PanelRenderFrame frame = new(
+                _session,
+                _sessionGeneration,
+                state,
+                _session.Recovery);
+            if (_directGlbCreateUiStage ==
+                Tripo.HostUi.DirectGlbCreateUiStage.WaitingForGeneration)
+            {
+                if (!intent.TryStopWaiting(_sessionGeneration, state))
+                {
+                    if (DirectGlbWaitIntentIsIrrecoverable(intent, frame))
+                    {
+                        FinishDirectGlbIntentForReview(
+                            intent,
+                            Tripo.HostUi.DirectGlbCreateUiStage.Refused);
+                        throw new InvalidOperationException(
+                            "Automatic waiting stopped because the durable " +
+                            "generation evidence no longer matches this " +
+                            "workflow.");
+                    }
+
+                    QueueDirectGlbAutoImportContinuation(
+                        _session,
+                        _sessionGeneration);
+                    RequestRender();
+                    return;
+                }
+
+                if (!IntentOwnsState(intent, frame))
+                {
+                    FinishDirectGlbIntentForReview(
+                        intent,
+                        Tripo.HostUi.DirectGlbCreateUiStage.Refused);
+                    throw new InvalidOperationException(
+                        "Automatic waiting stopped because the panel identity " +
+                        "changed while it was being paused.");
+                }
+
+                _directGlbCreateUiStage =
+                    Tripo.HostUi.DirectGlbCreateUiStage.WaitingPaused;
+                _generationStatusPoller.Stop();
+            }
+            else if (_directGlbCreateUiStage ==
+                     Tripo.HostUi.DirectGlbCreateUiStage.WaitingPaused)
+            {
+                if (state.HasCredentialRefreshFailure)
+                {
+                    throw new InvalidOperationException(
+                        "Restore a same-account session-only API key before " +
+                        "resuming automatic waiting.");
+                }
+
+                if (!intent.TryResumeWaiting(_sessionGeneration, state))
+                {
+                    if (DirectGlbWaitIntentIsIrrecoverable(intent, frame))
+                    {
+                        FinishDirectGlbIntentForReview(
+                            intent,
+                            Tripo.HostUi.DirectGlbCreateUiStage.Refused);
+                        throw new InvalidOperationException(
+                            "Automatic waiting could not resume because the " +
+                            "durable generation evidence no longer matches this " +
+                            "workflow.");
+                    }
+
+                    QueueDirectGlbAutoImportContinuation(
+                        _session,
+                        _sessionGeneration);
+                    RequestRender();
+                    return;
+                }
+
+                if (!IntentOwnsState(intent, frame))
+                {
+                    FinishDirectGlbIntentForReview(
+                        intent,
+                        Tripo.HostUi.DirectGlbCreateUiStage.Refused);
+                    throw new InvalidOperationException(
+                        "Automatic waiting stopped because the panel identity " +
+                        "changed while it was being resumed.");
+                }
+
+                _directGlbCreateUiStage =
+                    Tripo.HostUi.DirectGlbCreateUiStage.WaitingForGeneration;
+                _generationStatusPoller.Resume(
+                    Tripo.HostUi.DirectGlbGenerationPollingPolicy
+                        .GetPendingTaskId(
+                            state,
+                            _session.Recovery,
+                            intent));
+                QueueDirectGlbAutoImportContinuation(
+                    _session,
+                    _sessionGeneration);
+            }
+            else
+            {
+                throw new InvalidOperationException(
+                    "Automatic waiting can change only while the confirmed " +
+                    "generation task is waiting.");
+            }
+
+            RequestRender();
+        }
+        catch (Exception exception)
+        {
+            ShowError(exception);
+        }
+    }
+
     private async void OnGenerate(object? sender, EventArgs args)
     {
         try
@@ -1410,9 +1584,12 @@ public sealed class TripoRhinoPanel : Panel, IPanel
                 ReferenceEquals(ownerSession, _session))
             {
                 _generationStatusPoller.Resume(
-                    Tripo.HostUi.GenerationStatusPoller.GetPendingTaskId(
-                        ownerSession.State,
-                        ownerSession.Recovery));
+                    Tripo.HostUi.DirectGlbGenerationPollingPolicy
+                        .GetPendingTaskId(
+                            ownerSession.State,
+                            ownerSession.Recovery,
+                            _directGlbAutoImportIntent));
+
                 QueueDirectGlbAutoImportContinuation(
                     ownerSession,
                     ownerGeneration);
@@ -1460,15 +1637,19 @@ public sealed class TripoRhinoPanel : Panel, IPanel
     {
         Tripo.HostUi.TripoPanelSession ownerSession = _session;
         long ownerGeneration = _sessionGeneration;
-        if (_closing || ownerSession.State.Busy)
+        if (_closing ||
+            ownerSession.State.Busy ||
+            _directGlbAutoImportIntent?.Phase ==
+                Tripo.HostUi.DirectGlbAutoImportPhase.Stopped)
         {
             return;
         }
 
         string? pendingTaskId =
-            Tripo.HostUi.GenerationStatusPoller.GetPendingTaskId(
+            Tripo.HostUi.DirectGlbGenerationPollingPolicy.GetPendingTaskId(
                 ownerSession.State,
-                ownerSession.Recovery);
+                ownerSession.Recovery,
+                _directGlbAutoImportIntent);
         if (!string.Equals(
                 pendingTaskId,
                 expectedTaskId,
@@ -1503,11 +1684,28 @@ public sealed class TripoRhinoPanel : Panel, IPanel
         long ownerGeneration = _sessionGeneration;
         Tripo.HostUi.TripoPanelState state = ownerSession.State;
         string? pendingTaskId =
-            Tripo.HostUi.GenerationStatusPoller.GetPendingTaskId(
+            Tripo.HostUi.DirectGlbGenerationPollingPolicy.GetPendingTaskId(
                 state,
-                ownerSession.Recovery);
+                ownerSession.Recovery,
+                _directGlbAutoImportIntent);
         Tripo.HostUi.DirectGlbAutoImportIntent? intent =
             _directGlbAutoImportIntent;
+        if (intent?.Phase ==
+            Tripo.HostUi.DirectGlbAutoImportPhase.Stopped)
+        {
+            return;
+        }
+
+        if (intent is not null && ownerSession.Recovery.HasBlock)
+        {
+            QueueDirectGlbIntentReviewTransition(
+                ownerSession,
+                ownerGeneration,
+                intent,
+                Tripo.HostUi.DirectGlbCreateUiStage.RecoveryBlocked);
+            return;
+        }
+
         bool automaticIntentOwnsTask =
             intent is not null &&
             intent.TryBindDurableTask(ownerGeneration, state) &&
@@ -1515,6 +1713,23 @@ public sealed class TripoRhinoPanel : Panel, IPanel
                 intent.TaskId,
                 expectedTaskId,
                 StringComparison.Ordinal);
+        if (intent is not null &&
+            DirectGlbWaitIntentIsIrrecoverable(
+                intent,
+                new PanelRenderFrame(
+                    ownerSession,
+                    ownerGeneration,
+                    state,
+                    ownerSession.Recovery)))
+        {
+            QueueDirectGlbIntentReviewTransition(
+                ownerSession,
+                ownerGeneration,
+                intent,
+                Tripo.HostUi.DirectGlbCreateUiStage.Refused);
+            return;
+        }
+
         if (!string.Equals(
                 pendingTaskId,
                 expectedTaskId,
@@ -1634,6 +1849,7 @@ public sealed class TripoRhinoPanel : Panel, IPanel
         _directGlbCreateUiStage is
             Tripo.HostUi.DirectGlbCreateUiStage.Preflighting or
             Tripo.HostUi.DirectGlbCreateUiStage.WaitingForGeneration or
+            Tripo.HostUi.DirectGlbCreateUiStage.WaitingPaused or
             Tripo.HostUi.DirectGlbCreateUiStage.Importing;
 
     private void EnsureNoAutomaticDirectGlbCreateMutation(string action)
@@ -1662,10 +1878,11 @@ public sealed class TripoRhinoPanel : Panel, IPanel
             {
                 HasApiKey: true,
                 Source: "environment",
-            };
+        };
         if (_directGlbAutoImportIntent is not null &&
-            _directGlbCreateUiStage ==
-                Tripo.HostUi.DirectGlbCreateUiStage.WaitingForGeneration &&
+            (_directGlbCreateUiStage is
+                Tripo.HostUi.DirectGlbCreateUiStage.WaitingForGeneration or
+                Tripo.HostUi.DirectGlbCreateUiStage.WaitingPaused) &&
             state.Connected &&
             !state.Busy &&
             state.HasDurableGenerationTask &&
@@ -1691,15 +1908,16 @@ public sealed class TripoRhinoPanel : Panel, IPanel
         }
 
         if (_directGlbAutoImportIntent is not null &&
-            _directGlbCreateUiStage ==
-                Tripo.HostUi.DirectGlbCreateUiStage.WaitingForGeneration)
+            (_directGlbCreateUiStage is
+                Tripo.HostUi.DirectGlbCreateUiStage.WaitingForGeneration or
+                Tripo.HostUi.DirectGlbCreateUiStage.WaitingPaused))
         {
             return;
         }
 
         throw new InvalidOperationException(
             "Generation refresh is available for the one-click workflow only " +
-            "while it is waiting for the confirmed task.");
+            "while it is waiting for or has paused the confirmed task.");
     }
 
     private bool ConfirmPaidDispatch(
@@ -1892,6 +2110,18 @@ public sealed class TripoRhinoPanel : Panel, IPanel
         }
 
         _recoveryWasBlocked = presentation.RecoveryHasBlock;
+        if (!IsDirectGlbSelected() ||
+            _directGlbCreateUiStage is
+                Tripo.HostUi.DirectGlbCreateUiStage
+                    .TerminalWithoutImport or
+                Tripo.HostUi.DirectGlbCreateUiStage.Refused or
+                Tripo.HostUi.DirectGlbCreateUiStage.ImportFailed or
+                Tripo.HostUi.DirectGlbCreateUiStage.ImportRetryRequired or
+                Tripo.HostUi.DirectGlbCreateUiStage.ManualReviewRequired)
+        {
+            _advancedExpander.Expanded = true;
+        }
+
         if (!string.Equals(
                 presentation.LatestPreparedOperationId,
                 _displayedPreparedOperationId,
@@ -1958,6 +2188,18 @@ public sealed class TripoRhinoPanel : Panel, IPanel
             presentation.CreateInRhinoText;
         _createInRhino.ToolTip =
             presentation.CreateInRhinoHelp;
+        _createGuidance.Text =
+            presentation.CreateInRhinoHelp;
+        _createGuidance.Visible =
+            presentation.CreateInRhinoGuidanceVisible;
+        _directGlbWaitAction.Visible =
+            presentation.DirectGlbWaitActionVisible;
+        _directGlbWaitAction.Enabled =
+            presentation.DirectGlbWaitActionEnabled;
+        _directGlbWaitAction.Text =
+            presentation.DirectGlbWaitActionText;
+        _directGlbWaitAction.ToolTip =
+            presentation.DirectGlbWaitActionHelp;
         _generate.Enabled = presentation.GenerateEnabled;
         _generate.Text = presentation.GenerateText;
         _refreshGeneration.Enabled =
@@ -1977,10 +2219,12 @@ public sealed class TripoRhinoPanel : Panel, IPanel
         _name.Enabled = presentation.NameEnabled;
         _importMode.Enabled = presentation.ImportModeEnabled;
         _applyMaterials.Enabled = presentation.ApplyMaterialsEnabled;
-        _generationStatusPoller.Reconcile(
-            Tripo.HostUi.GenerationStatusPoller.GetPendingTaskId(
+        string? pendingGenerationTaskId =
+            Tripo.HostUi.DirectGlbGenerationPollingPolicy.GetPendingTaskId(
                 state,
-                recovery));
+                recovery,
+                _directGlbAutoImportIntent);
+        _generationStatusPoller.Reconcile(pendingGenerationTaskId);
     }
 
     private Tripo.HostUi.TripoPanelPresentation CreatePresentation(
@@ -2029,10 +2273,9 @@ public sealed class TripoRhinoPanel : Panel, IPanel
                     ownerSession.Recovery);
                 if (!IntentOwnsState(intent, frame))
                 {
-                    _directGlbAutoImportIntent = null;
-                    _directGlbCreateUiStage =
-                        Tripo.HostUi.DirectGlbCreateUiStage.Refused;
-                    RequestRender();
+                    FinishDirectGlbIntentForReview(
+                        intent,
+                        Tripo.HostUi.DirectGlbCreateUiStage.Refused);
                     return;
                 }
 
@@ -2045,9 +2288,21 @@ public sealed class TripoRhinoPanel : Panel, IPanel
         Tripo.HostUi.DirectGlbAutoImportIntent intent)
     {
         if (_closing ||
-            frame.State.Busy ||
-            frame.State.HasCredentialRefreshFailure ||
             !ReferenceEquals(_directGlbAutoImportIntent, intent))
+        {
+            return;
+        }
+
+        if (frame.Recovery.HasBlock)
+        {
+            FinishDirectGlbIntentForReview(
+                intent,
+                Tripo.HostUi.DirectGlbCreateUiStage.RecoveryBlocked);
+            return;
+        }
+
+        if (frame.State.Busy ||
+            frame.State.HasCredentialRefreshFailure)
         {
             return;
         }
@@ -2063,6 +2318,12 @@ public sealed class TripoRhinoPanel : Panel, IPanel
                     frame.OwnerSession,
                     frame.SessionGeneration,
                     intent);
+                break;
+            case Tripo.HostUi.DirectGlbAutoImportDecision.Stopped:
+                _directGlbCreateUiStage =
+                    Tripo.HostUi.DirectGlbCreateUiStage.WaitingPaused;
+                _generationStatusPoller.Stop();
+                RequestRender();
                 break;
             case Tripo.HostUi.DirectGlbAutoImportDecision
                 .TerminalWithoutImport:
@@ -2093,6 +2354,7 @@ public sealed class TripoRhinoPanel : Panel, IPanel
     {
         bool imported = false;
         bool deferred = false;
+        bool recoveryBlocked = false;
         try
         {
             if (_closing ||
@@ -2109,6 +2371,14 @@ public sealed class TripoRhinoPanel : Panel, IPanel
                 ownerGeneration,
                 ownerSession.State,
                 ownerSession.Recovery);
+            if (current.Recovery.HasBlock)
+            {
+                recoveryBlocked = true;
+                throw new InvalidOperationException(
+                    "Automatic direct GLB import stopped before Rhino " +
+                    "mutation because recovery evidence requires review.");
+            }
+
             if (!IntentOwnsState(intent, current) ||
                 current.State.PreparedImport is not null)
             {
@@ -2159,6 +2429,11 @@ public sealed class TripoRhinoPanel : Panel, IPanel
         }
         catch (Exception exception)
         {
+            recoveryBlocked =
+                recoveryBlocked ||
+                (ownerSession.Recovery.HasBlock &&
+                 !ownerSession.State.ImportDispatchAttempted &&
+                 ownerSession.State.ImportReceipt is null);
             ShowError(exception);
         }
         finally
@@ -2182,17 +2457,37 @@ public sealed class TripoRhinoPanel : Panel, IPanel
                         ownerGeneration,
                         finalState);
                     _directGlbAutoImportIntent = null;
-                    _directGlbCreateUiStage = imported
-                        ? Tripo.HostUi.DirectGlbCreateUiStage.Completed
-                        : finalState.ImportRequiresManualReview
-                            ? Tripo.HostUi.DirectGlbCreateUiStage
-                                .ManualReviewRequired
-                            : finalState.ImportDispatchAttempted &&
-                              finalState.ImportReceipt is null
-                                ? Tripo.HostUi.DirectGlbCreateUiStage
-                                    .ImportRetryRequired
-                                : Tripo.HostUi.DirectGlbCreateUiStage
-                                    .ImportFailed;
+                    if (imported)
+                    {
+                        _directGlbCreateUiStage =
+                            Tripo.HostUi.DirectGlbCreateUiStage.Completed;
+                    }
+                    else if (recoveryBlocked &&
+                             !finalState.ImportDispatchAttempted &&
+                             finalState.ImportReceipt is null)
+                    {
+                        _directGlbCreateUiStage =
+                            Tripo.HostUi.DirectGlbCreateUiStage
+                                .RecoveryBlocked;
+                    }
+                    else if (finalState.ImportRequiresManualReview)
+                    {
+                        _directGlbCreateUiStage =
+                            Tripo.HostUi.DirectGlbCreateUiStage
+                                .ManualReviewRequired;
+                    }
+                    else if (finalState.ImportDispatchAttempted &&
+                             finalState.ImportReceipt is null)
+                    {
+                        _directGlbCreateUiStage =
+                            Tripo.HostUi.DirectGlbCreateUiStage
+                                .ImportRetryRequired;
+                    }
+                    else
+                    {
+                        _directGlbCreateUiStage =
+                            Tripo.HostUi.DirectGlbCreateUiStage.ImportFailed;
+                    }
                 }
 
                 RequestRender();
@@ -2219,6 +2514,54 @@ public sealed class TripoRhinoPanel : Panel, IPanel
             prepared.OperationId,
             intent.GenerationOperationId,
             StringComparison.Ordinal);
+
+    private static bool DirectGlbWaitIntentIsIrrecoverable(
+        Tripo.HostUi.DirectGlbAutoImportIntent intent,
+        PanelRenderFrame frame) =>
+        intent.Phase == Tripo.HostUi.DirectGlbAutoImportPhase.Finished ||
+        !frame.State.HasDurableGenerationTask ||
+        !IntentOwnsState(intent, frame);
+
+    private void FinishDirectGlbIntentForReview(
+        Tripo.HostUi.DirectGlbAutoImportIntent intent,
+        Tripo.HostUi.DirectGlbCreateUiStage stage)
+    {
+        if (!ReferenceEquals(_directGlbAutoImportIntent, intent))
+        {
+            return;
+        }
+
+        _directGlbAutoImportIntent = null;
+        _directGlbCreateUiStage = stage;
+        _generationStatusPoller.Stop();
+        RequestRender();
+    }
+
+    private void QueueDirectGlbIntentReviewTransition(
+        Tripo.HostUi.TripoPanelSession ownerSession,
+        long ownerGeneration,
+        Tripo.HostUi.DirectGlbAutoImportIntent intent,
+        Tripo.HostUi.DirectGlbCreateUiStage stage)
+    {
+        if (_closing)
+        {
+            return;
+        }
+
+        Application.Instance.AsyncInvoke(
+            () =>
+            {
+                if (_closing ||
+                    ownerGeneration != _sessionGeneration ||
+                    !ReferenceEquals(ownerSession, _session) ||
+                    !ReferenceEquals(_directGlbAutoImportIntent, intent))
+                {
+                    return;
+                }
+
+                FinishDirectGlbIntentForReview(intent, stage);
+            });
+    }
 
     private bool IsDirectGlbSelected() =>
         _importSource.SelectedIndex != 1;

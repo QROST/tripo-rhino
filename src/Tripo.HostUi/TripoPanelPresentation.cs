@@ -205,8 +205,10 @@ internal enum DirectGlbCreateUiStage
     Inactive,
     Preflighting,
     WaitingForGeneration,
+    WaitingPaused,
     Importing,
     Completed,
+    RecoveryBlocked,
     TerminalWithoutImport,
     Refused,
     ImportFailed,
@@ -408,6 +410,18 @@ public sealed class TripoPanelPresentation
 
     public string CreateInRhinoHelp { get; private init; } = string.Empty;
 
+    public bool CreateInRhinoGuidanceVisible { get; private init; }
+
+    public bool DirectGlbWaitActionVisible { get; private init; }
+
+    public bool DirectGlbWaitActionEnabled { get; private init; }
+
+    public string DirectGlbWaitActionText { get; private init; } =
+        "Stop waiting";
+
+    public string DirectGlbWaitActionHelp { get; private init; } =
+        string.Empty;
+
     public bool GenerateEnabled { get; private init; }
 
     public string GenerateText { get; private init; } = string.Empty;
@@ -475,6 +489,7 @@ public sealed class TripoPanelPresentation
             directGlbCreateStage is
                 DirectGlbCreateUiStage.Preflighting or
                 DirectGlbCreateUiStage.WaitingForGeneration or
+                DirectGlbCreateUiStage.WaitingPaused or
                 DirectGlbCreateUiStage.Importing;
         bool controlsReady = ready && !automaticCreateActive;
         bool generationPrepared = state.PreparedGeneration is not null;
@@ -507,10 +522,16 @@ public sealed class TripoPanelPresentation
         bool directGlbCredentialRecoveryReady =
             ready &&
             !recoveryBlocked &&
-            directGlbCreateStage ==
-                DirectGlbCreateUiStage.WaitingForGeneration &&
+            (directGlbCreateStage is
+                DirectGlbCreateUiStage.WaitingForGeneration or
+                DirectGlbCreateUiStage.WaitingPaused) &&
             state.HasDurableGenerationTask &&
             state.HasCredentialRefreshFailure;
+        bool generationPending =
+            state.GenerationStatus is not null &&
+            GenerationStatusPoller.GetPendingTaskId(
+                state,
+                recovery) is not null;
         bool normalApiKeyInteractionReady =
             controlsReady &&
             (!recoveryBlocked ||
@@ -553,12 +574,29 @@ public sealed class TripoPanelPresentation
             DirectGlbCreateUiStage.WaitingForGeneration =>
                 "Waiting for Tripo generation… Rhino will import the GLB " +
                 "automatically when it is ready.",
+            DirectGlbCreateUiStage.WaitingPaused
+                when state.HasCredentialRefreshFailure =>
+                "Automatic waiting is paused and the generation credential " +
+                "needs recovery. Restore a same-account session-only key, " +
+                "then resume; nothing will import while paused.",
+            DirectGlbCreateUiStage.WaitingPaused
+                when generationSucceeded =>
+                "Generation is ready, but automatic import is paused. Resume " +
+                "automatic waiting to import this task's GLB.",
+            DirectGlbCreateUiStage.WaitingPaused =>
+                "Automatic waiting is paused. The remote Tripo task was not " +
+                "canceled. Refresh manually or resume automatic waiting; " +
+                "nothing will import while paused.",
             DirectGlbCreateUiStage.Importing =>
                 "Generation complete. Importing GLB into Rhino…",
             DirectGlbCreateUiStage.Completed
                 when state.ImportReceipt is not null =>
                 FriendlyImportResult(
                     state.ImportReceipt.HostReceipt.TransactionStatus),
+            DirectGlbCreateUiStage.RecoveryBlocked =>
+                "Automatic import stopped before Rhino mutation because " +
+                "recovery evidence requires review. Nothing was imported; " +
+                "review Recovery before continuing.",
             DirectGlbCreateUiStage.TerminalWithoutImport =>
                 "Generation ended with " +
                 (state.GenerationStatus?.Status ?? "an unknown status") +
@@ -695,6 +733,8 @@ public sealed class TripoPanelPresentation
                     "Checking…",
                 DirectGlbCreateUiStage.WaitingForGeneration =>
                     "Generating…",
+                DirectGlbCreateUiStage.WaitingPaused =>
+                    "Waiting paused",
                 DirectGlbCreateUiStage.Importing =>
                     "Importing GLB…",
                 DirectGlbCreateUiStage.Completed =>
@@ -705,6 +745,7 @@ public sealed class TripoPanelPresentation
                         _ => "Review required",
                     },
                 DirectGlbCreateUiStage.TerminalWithoutImport or
+                DirectGlbCreateUiStage.RecoveryBlocked or
                 DirectGlbCreateUiStage.Refused or
                 DirectGlbCreateUiStage.ImportFailed or
                 DirectGlbCreateUiStage.ImportRetryRequired =>
@@ -722,6 +763,40 @@ public sealed class TripoPanelPresentation
                     hasPrompt,
                     hasObjectName,
                     directGlbCreateStage),
+            CreateInRhinoGuidanceVisible =
+                directGlbCreateStage == DirectGlbCreateUiStage.Inactive &&
+                !state.Busy &&
+                !canStartDirectGlbCreate,
+            DirectGlbWaitActionVisible =
+                directGlbCreateStage is
+                    DirectGlbCreateUiStage.WaitingForGeneration or
+                    DirectGlbCreateUiStage.WaitingPaused,
+            DirectGlbWaitActionEnabled =
+                ready &&
+                !recoveryBlocked &&
+                state.HasDurableGenerationTask &&
+                ((directGlbCreateStage ==
+                     DirectGlbCreateUiStage.WaitingPaused &&
+                   !state.HasCredentialRefreshFailure) ||
+                 (directGlbCreateStage ==
+                    DirectGlbCreateUiStage.WaitingForGeneration &&
+                  generationPending)),
+            DirectGlbWaitActionText =
+                directGlbCreateStage ==
+                    DirectGlbCreateUiStage.WaitingPaused
+                    ? "Resume automatic waiting"
+                    : "Stop waiting",
+            DirectGlbWaitActionHelp =
+                directGlbCreateStage ==
+                    DirectGlbCreateUiStage.WaitingPaused
+                    ? state.HasCredentialRefreshFailure
+                        ? "Restore a same-account session-only API key before " +
+                          "resuming this same generation task."
+                        : "Resume local status polling and automatic direct GLB " +
+                          "import for this same generation task."
+                    : "Stop local status polling and automatic import. This " +
+                      "does not cancel the remote Tripo task or refund credits; " +
+                      "you can refresh manually or resume later.",
             GenerateEnabled =
                 controlsReady &&
                 !recoveryBlocked &&
@@ -856,6 +931,18 @@ public sealed class TripoPanelPresentation
                    "conversion task is created.";
         }
 
+        if (directGlbCreateStage ==
+            DirectGlbCreateUiStage.WaitingPaused)
+        {
+            return state.HasCredentialRefreshFailure
+                ? "Local polling and automatic direct GLB import are paused. " +
+                  "Restore a same-account session-only API key before resuming; " +
+                  "the same task and durable operation ID are kept."
+                : "Local polling and automatic direct GLB import are paused. " +
+                   "The same remote task and durable operation ID are kept; " +
+                   "resume waiting when you want Rhino to import on success.";
+        }
+
         if (directGlbCreateStage == DirectGlbCreateUiStage.Importing)
         {
             return "The generation succeeded and Rhino is importing that " +
@@ -884,6 +971,14 @@ public sealed class TripoPanelPresentation
                    "operation.";
         }
 
+        if (directGlbCreateStage ==
+            DirectGlbCreateUiStage.RecoveryBlocked)
+        {
+            return "Automatic import stopped before Rhino mutation because " +
+                   "recovery evidence requires review. Nothing was imported; " +
+                   "open Recovery and reconcile the durable operation IDs.";
+        }
+
         if (directGlbCreateStage is
             DirectGlbCreateUiStage.TerminalWithoutImport or
             DirectGlbCreateUiStage.Refused or
@@ -900,7 +995,8 @@ public sealed class TripoPanelPresentation
 
         if (!state.Connected)
         {
-            return "Connect to the active Rhino document first.";
+            return "Connect to the active Rhino document first. The manual " +
+                   "Connect / Refresh action is in Advanced.";
         }
 
         if (recoveryBlocked)
@@ -911,14 +1007,15 @@ public sealed class TripoPanelPresentation
 
         if (state.CredentialStatus?.HasApiKey != true)
         {
-            return "Set a Tripo API key before starting generation that can " +
-                   "consume credits.";
+            return "Open Settings and set a Tripo API key before starting " +
+                   "generation that can consume credits.";
         }
 
         if (!directGlbSelected)
         {
-            return "Select Direct GLB to use the one-click Rhino workflow. " +
-                   "OBJ compatibility remains a separate manual path.";
+            return "Direct GLB is required for the one-click Rhino workflow. " +
+                   "OBJ compatibility is selected in Advanced and remains a " +
+                   "separate manual path.";
         }
 
         if (!directGlbSupported)
@@ -941,7 +1038,8 @@ public sealed class TripoPanelPresentation
 
         if (!hasObjectName)
         {
-            return "The Rhino object name must contain 1 to 128 characters.";
+            return "The Rhino object name in Settings must contain 1 to 128 " +
+                   "characters.";
         }
 
         return "Creates one Tripo generation task, which can consume credits, " +

@@ -42,6 +42,31 @@ public sealed class GenerationStatusPollerTests
     }
 
     [Fact]
+    public void PendingTaskSelectionRejectsNullStatusValue()
+    {
+        Tripo.HostUi.TripoPanelState state =
+            Tripo.HostUi.TripoPanelState.Initial with
+            {
+                Connected = true,
+                GenerationReceipt =
+                    new Tripo.Bridge.HostControlTextTaskCreationReceipt(
+                        "operation-id",
+                        "task-id",
+                        "model"),
+                GenerationStatus =
+                    TaskStatus("task-id", "running") with
+                    {
+                        Status = null!,
+                    },
+            };
+
+        Assert.Null(
+            Tripo.HostUi.GenerationStatusPoller.GetPendingTaskId(
+                state,
+                Tripo.HostUi.TripoPanelRecoveryLoadResult.Empty));
+    }
+
+    [Fact]
     public void PendingTaskSelectionRequiresConnectionAndDurableIdentity()
     {
         Tripo.HostUi.TripoPanelState disconnected =
@@ -276,6 +301,91 @@ public sealed class GenerationStatusPollerTests
         poller.Stop();
         await refreshCancelled.Task.WaitAsync(TimeSpan.FromSeconds(5));
 
+        Assert.Empty(failures);
+    }
+
+    [Fact]
+    public async Task StopThenResumeSameTaskStartsExactlyOneFreshRun()
+    {
+        ControlledDelay delay = new();
+        TaskCompletionSource<bool> firstRefreshEntered =
+            NewCompletionSource();
+        TaskCompletionSource<bool> firstRefreshCancelled =
+            NewCompletionSource();
+        TaskCompletionSource<bool> releaseFirstRefreshExit =
+            NewCompletionSource();
+        TaskCompletionSource<bool> resumedRefreshEntered =
+            NewCompletionSource();
+        TaskCompletionSource<bool> releaseResumedRefreshExit =
+            NewCompletionSource();
+        int calls = 0;
+        int inFlight = 0;
+        int maximumInFlight = 0;
+        List<Exception> failures = [];
+        using Tripo.HostUi.GenerationStatusPoller poller = new(
+            Interval,
+            async (_, cancellationToken) =>
+            {
+                int current = Interlocked.Increment(ref inFlight);
+                UpdateMaximum(ref maximumInFlight, current);
+                int call = Interlocked.Increment(ref calls);
+                try
+                {
+                    if (call == 1)
+                    {
+                        firstRefreshEntered.TrySetResult(true);
+                        try
+                        {
+                            await Task.Delay(
+                                Timeout.InfiniteTimeSpan,
+                                cancellationToken);
+                        }
+                        catch (OperationCanceledException)
+                        {
+                            firstRefreshCancelled.TrySetResult(true);
+                            await releaseFirstRefreshExit.Task;
+                            throw;
+                        }
+                    }
+                    else
+                    {
+                        resumedRefreshEntered.TrySetResult(true);
+                        await releaseResumedRefreshExit.Task;
+                    }
+                }
+                finally
+                {
+                    Interlocked.Decrement(ref inFlight);
+                }
+            },
+            (_, exception) => failures.Add(exception),
+            delay.WaitAsync);
+        poller.Reconcile("task-id");
+        (await delay.NextAsync()).Release();
+        await firstRefreshEntered.Task.WaitAsync(TimeSpan.FromSeconds(5));
+
+        poller.Stop();
+        await firstRefreshCancelled.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        poller.Resume("task-id");
+        for (int index = 0; index < 10; index++)
+        {
+            await Task.Yield();
+        }
+
+        int requestsBeforeOldRunExit = delay.RequestCount;
+        releaseFirstRefreshExit.TrySetResult(true);
+        Assert.Equal(1, requestsBeforeOldRunExit);
+        (await delay.NextAsync()).Release();
+        await resumedRefreshEntered.Task.WaitAsync(TimeSpan.FromSeconds(5));
+
+        int totalRequests = delay.RequestCount;
+        int totalCalls = Volatile.Read(ref calls);
+        int observedMaximumInFlight =
+            Volatile.Read(ref maximumInFlight);
+        releaseResumedRefreshExit.TrySetResult(true);
+        Assert.Equal(2, totalRequests);
+        Assert.Equal(2, totalCalls);
+        Assert.Equal(1, observedMaximumInFlight);
         Assert.Empty(failures);
     }
 

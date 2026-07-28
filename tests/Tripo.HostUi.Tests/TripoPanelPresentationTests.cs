@@ -940,14 +940,18 @@ public sealed class TripoPanelPresentationTests
         Assert.Contains(
             "No separate OBJ conversion request",
             direct.CreateInRhinoHelp);
+        Assert.False(direct.CreateInRhinoGuidanceVisible);
         Assert.True(preflighting.CanStartDirectGlbCreate);
         Assert.False(preflighting.CreateInRhinoEnabled);
         Assert.Equal("Checking…", preflighting.CreateInRhinoText);
         Assert.False(preflighting.ConnectEnabled);
         Assert.False(preflighting.GenerateEnabled);
         Assert.False(capabilitySkew.CreateInRhinoEnabled);
+        Assert.True(capabilitySkew.CreateInRhinoGuidanceVisible);
         Assert.Contains("matching build", capabilitySkew.CreateInRhinoHelp);
         Assert.False(obj.CreateInRhinoEnabled);
+        Assert.True(obj.CreateInRhinoGuidanceVisible);
+        Assert.Contains("selected in Advanced", obj.CreateInRhinoHelp);
         Assert.Contains("separate manual path", obj.CreateInRhinoHelp);
         Assert.True(obj.GenerateEnabled);
     }
@@ -984,10 +988,13 @@ public sealed class TripoPanelPresentationTests
                 importSource: "glb");
 
         Assert.False(blankPrompt.CreateInRhinoEnabled);
+        Assert.True(blankPrompt.CreateInRhinoGuidanceVisible);
         Assert.Contains("1 to 1024", blankPrompt.CreateInRhinoHelp);
         Assert.False(longPrompt.CreateInRhinoEnabled);
         Assert.Contains("1 to 1024", longPrompt.CreateInRhinoHelp);
         Assert.False(blankName.CreateInRhinoEnabled);
+        Assert.True(blankName.CreateInRhinoGuidanceVisible);
+        Assert.Contains("in Settings", blankName.CreateInRhinoHelp);
         Assert.Contains("1 to 128", blankName.CreateInRhinoHelp);
         Assert.False(longName.CreateInRhinoEnabled);
         Assert.Contains("1 to 128", longName.CreateInRhinoHelp);
@@ -1162,6 +1169,36 @@ public sealed class TripoPanelPresentationTests
                 directGlbCreateStage:
                     Tripo.HostUi.DirectGlbCreateUiStage
                         .WaitingForGeneration);
+        Tripo.HostUi.TripoPanelPresentation noObservedStatus =
+            Present(
+                waiting with { GenerationStatus = null },
+                importSource: "glb",
+                directGlbCreateStage:
+                    Tripo.HostUi.DirectGlbCreateUiStage
+                        .WaitingForGeneration);
+        Tripo.HostUi.TripoPanelPresentation inactive =
+            Present(waiting, importSource: "glb");
+        Tripo.HostUi.TripoPanelPresentation mismatchedStatus =
+            Present(
+                waiting with
+                {
+                    GenerationStatus = TaskStatus(
+                        "task_other",
+                        "text_to_model",
+                        "running"),
+                },
+                importSource: "glb",
+                directGlbCreateStage:
+                    Tripo.HostUi.DirectGlbCreateUiStage
+                        .WaitingForGeneration);
+        Tripo.HostUi.TripoPanelPresentation recoveryBlocked =
+            Present(
+                waiting,
+                BlockingGenerationRecovery(),
+                importSource: "glb",
+                directGlbCreateStage:
+                    Tripo.HostUi.DirectGlbCreateUiStage
+                        .WaitingForGeneration);
 
         Assert.False(presentation.CreateInRhinoEnabled);
         Assert.Equal("Generating…", presentation.CreateInRhinoText);
@@ -1181,6 +1218,134 @@ public sealed class TripoPanelPresentationTests
         Assert.False(presentation.NameEnabled);
         Assert.False(presentation.ImportSourceEnabled);
         Assert.True(presentation.RefreshGenerationEnabled);
+        Assert.True(presentation.DirectGlbWaitActionVisible);
+        Assert.True(presentation.DirectGlbWaitActionEnabled);
+        Assert.Equal(
+            "Stop waiting",
+            presentation.DirectGlbWaitActionText);
+        Assert.Contains(
+            "does not cancel",
+            presentation.DirectGlbWaitActionHelp);
+        Assert.Contains(
+            "refund credits",
+            presentation.DirectGlbWaitActionHelp);
+        Assert.True(noObservedStatus.DirectGlbWaitActionVisible);
+        Assert.False(noObservedStatus.DirectGlbWaitActionEnabled);
+        Assert.False(mismatchedStatus.DirectGlbWaitActionEnabled);
+        Assert.False(recoveryBlocked.DirectGlbWaitActionEnabled);
+        Assert.False(inactive.DirectGlbWaitActionVisible);
+    }
+
+    [Fact]
+    public void PausedDirectGlbWaitPreservesTaskAndRequiresExplicitResume()
+    {
+        Tripo.HostUi.PreparedTextGeneration prepared = new(
+            "a chair",
+            10_000,
+            true,
+            DocumentSessionId,
+            "11111111-1111-4111-8111-111111111111");
+        Tripo.HostUi.TripoPanelState waiting =
+            ReadyState() with
+            {
+                Context = ReadyState().Context! with
+                {
+                    Capabilities =
+                    [
+                        Tripo.Bridge.BridgeConstants.ContextMethod,
+                        Tripo.Bridge.BridgeConstants.ImportGlbMethod,
+                    ],
+                },
+                PreparedGeneration = prepared,
+                GenerationDispatchAttempted = true,
+                GenerationReceipt =
+                    new Tripo.Bridge.HostControlTextTaskCreationReceipt(
+                        prepared.OperationId,
+                        "task_source123",
+                        "v3"),
+                GenerationStatus = TaskStatus(
+                    "task_source123",
+                    "text_to_model",
+                    "running"),
+            };
+
+        Tripo.HostUi.TripoPanelPresentation paused =
+            Present(
+                waiting,
+                importSource: "glb",
+                directGlbCreateStage:
+                    Tripo.HostUi.DirectGlbCreateUiStage.WaitingPaused);
+        Tripo.HostUi.TripoPanelPresentation succeeded =
+            Present(
+                waiting with
+                {
+                    GenerationStatus = TaskStatus(
+                        "task_source123",
+                        "text_to_model",
+                        "success"),
+                },
+                importSource: "glb",
+                directGlbCreateStage:
+                    Tripo.HostUi.DirectGlbCreateUiStage.WaitingPaused);
+        Tripo.HostUi.TripoPanelPresentation credentialFailure =
+            Present(
+                waiting with
+                {
+                    LastError = "The provider rejected the credential.",
+                    LastErrorCode =
+                        Tripo.Bridge.HostControlConstants
+                            .CredentialInvalidError,
+                },
+                importSource: "glb",
+                directGlbCreateStage:
+                    Tripo.HostUi.DirectGlbCreateUiStage.WaitingPaused);
+        Tripo.HostUi.TripoPanelPresentation busy =
+            Present(
+                waiting with { Busy = true },
+                importSource: "glb",
+                directGlbCreateStage:
+                    Tripo.HostUi.DirectGlbCreateUiStage.WaitingPaused);
+
+        Assert.False(paused.CreateInRhinoEnabled);
+        Assert.Equal("Waiting paused", paused.CreateInRhinoText);
+        Assert.Contains(
+            "remote Tripo task was not canceled",
+            paused.ResultStatus);
+        Assert.Contains(
+            "nothing will import while paused",
+            paused.ResultStatus);
+        Assert.True(paused.DirectGlbWaitActionVisible);
+        Assert.True(paused.DirectGlbWaitActionEnabled);
+        Assert.Equal(
+            "Resume automatic waiting",
+            paused.DirectGlbWaitActionText);
+        Assert.Contains(
+            "same generation task",
+            paused.DirectGlbWaitActionHelp);
+        Assert.True(paused.RefreshGenerationEnabled);
+        Assert.False(paused.GenerateEnabled);
+        Assert.False(paused.ConvertEnabled);
+        Assert.False(paused.ImportEnabled);
+        Assert.False(paused.ResetEnabled);
+
+        Assert.Contains(
+            "Generation is ready",
+            succeeded.ResultStatus);
+        Assert.Contains(
+            "automatic import is paused",
+            succeeded.ResultStatus);
+        Assert.True(succeeded.DirectGlbWaitActionEnabled);
+        Assert.False(succeeded.RefreshGenerationEnabled);
+
+        Assert.False(credentialFailure.DirectGlbWaitActionEnabled);
+        Assert.True(credentialFailure.ApiKeyEnabled);
+        Assert.Contains(
+            "same-account session-only API key",
+            credentialFailure.DirectGlbWaitActionHelp);
+        Assert.Contains(
+            "nothing will import",
+            credentialFailure.ResultStatus);
+        Assert.False(busy.DirectGlbWaitActionEnabled);
     }
 
     [Fact]
@@ -1381,6 +1546,13 @@ public sealed class TripoPanelPresentationTests
                 directGlbCreateStage:
                     Tripo.HostUi.DirectGlbCreateUiStage
                         .TerminalWithoutImport);
+        Tripo.HostUi.TripoPanelPresentation recoveryBlocked =
+            Present(
+                succeeded,
+                BlockingGenerationRecovery(),
+                importSource: "glb",
+                directGlbCreateStage:
+                    Tripo.HostUi.DirectGlbCreateUiStage.RecoveryBlocked);
         Tripo.HostUi.TripoPanelPresentation refused =
             Present(
                 succeeded,
@@ -1456,9 +1628,22 @@ public sealed class TripoPanelPresentationTests
 
         Assert.Equal("Importing GLB…", importing.CreateInRhinoText);
         Assert.Contains("Importing GLB", importing.ResultStatus);
+        Assert.False(importing.DirectGlbWaitActionVisible);
         Assert.Equal("Review required", terminal.CreateInRhinoText);
         Assert.Contains("failed", terminal.ResultStatus);
         Assert.Contains("Nothing was imported", terminal.ResultStatus);
+        Assert.Equal(
+            "Review required",
+            recoveryBlocked.CreateInRhinoText);
+        Assert.Contains(
+            "before Rhino mutation",
+            recoveryBlocked.ResultStatus);
+        Assert.Contains(
+            "Nothing was imported",
+            recoveryBlocked.ResultStatus);
+        Assert.True(recoveryBlocked.RecoveryHasBlock);
+        Assert.True(recoveryBlocked.CheckRecoveryEnabled);
+        Assert.False(recoveryBlocked.DirectGlbWaitActionVisible);
         Assert.Equal("Review required", refused.CreateInRhinoText);
         Assert.Contains("evidence did not match", refused.ResultStatus);
         Assert.Contains("Nothing was imported", refused.ResultStatus);
