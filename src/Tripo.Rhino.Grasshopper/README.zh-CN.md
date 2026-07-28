@@ -13,6 +13,11 @@ GHA 不包含另一套 Tripo client 或 credential store。它复用 matching
 `Tripo.Rhino.rhp` 已加载的 sidecar、API-key owner、paid-operation journal、
 recovery records 与精确 Rhino document session。
 
+Rhino panel 与 MCP document-import surface 还提供推荐的 direct
+generation-GLB/PBR 路径。该路径有意不改变 GHA contract：**Tripo Task to Mesh**
+仍使用显式 OBJ conversion，因为它必须在不 mutation Rhino document 的前提下发布
+scalar Grasshopper `Mesh` value。
+
 > **证据边界：**源码可针对 pinned Rhino 8 RhinoCommon 与 Grasshopper packages
 > 编译。portable tests 覆盖 shared image staging、upload/generation recovery、OBJ
 > staging 与 journal 行为。编译不能证明真实 Rhino/Grasshopper 已加载 GHA、解析

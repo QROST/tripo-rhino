@@ -33,8 +33,19 @@ The automated suite covers:
   `outcome_unknown` refusal to resend;
 - explicit successful-response `code` validation plus exact round-trip of
   current `task_...` and canonical lowercase UUID task identities;
-- image transfer, signed download, ZIP extraction, bundle hashing, OBJ/MTL
-  parsing, coordinate conversion, and parser limits;
+- image transfer, signed download, ZIP extraction, content-addressed OBJ/GLB
+  staging, GLB exact-manifest reuse, entry rehashing, symlink rejection,
+  OBJ/MTL parsing, coordinate conversion, and parser limits;
+- GLB v2 structure, aggregate accessor/image budgets, buffer/accessor bounds,
+  acyclic nodes, fixed verified snapshots, host-import journal transitions,
+  incomplete/corrupt-tail behavior, schema-2 PBR proof requirements, and
+  queued-versus-started cancellation;
+- fixed-snapshot cleanup naming, age, live/uncertain PID preservation,
+  symlink/reparse rejection, bounded enumeration/mutation, quarantine restore,
+  and stale tombstone deletion;
+- Rhino proof construction across headless, active, completed-definition, and
+  replay stages, including geometry, material-source/binding, recursive render
+  content, PBR values, texture mappings, and referenced texture bytes;
 - host UI state, recovery hints, explicit paid confirmations, and stable UUID
   retries;
 - host-agnostic UI render coalescing, including leading busy and trailing final
@@ -50,10 +61,12 @@ requires `git diff --check` and a clean `git status`.
 ## Evidence boundaries
 
 A green repository gate proves deterministic compilation and automated
-contracts against pinned reference packages. It does not prove that Rhino
-loaded the `.rhp` or `.gha`, that macOS Keychain or Windows Credential Manager
-behaved correctly in the real host, or that imported materials render as
-intended.
+contracts against pinned reference packages. Separate macOS development-host
+testing has exercised the manual `.rhp` layout, Eto panel, Keychain-backed
+credential save/use, text generation, and two-second progress refresh. Neither
+evidence class proves that the new direct GLB/PBR path renders as intended,
+that Undo/replay is correct in a real document, that the optional GHA loads, or
+that a Windows production-user Credential Manager deployment works.
 
 On the Windows CI lane,
 `TRIPO_RUN_WINDOWS_CREDENTIAL_MANAGER_CANARY=1` exercises `CredWriteW`,
@@ -65,14 +78,17 @@ canary never reads `TRIPO_API_KEY` or the production
 ephemeral runner profile, not that Rhino UI, a production user profile, or
 cross-host deployment has been accepted.
 
-Real Rhino 8 acceptance remains a separate gate:
+Remaining real Rhino 8 acceptance stays a separate gate. Repeat the previously
+exercised macOS panel/credential/generation checks after each deployed revision:
 
 1. Load the `.rhp` on every supported OS and open `TripoPanel`.
 2. Verify the optional GHA loads and all three **Tripo → Generate** components
    appear.
 3. Exercise session and persistent credentials without saving a key into
    `.3dm` or `.gh`.
-4. Run text generation, status, conversion, and both `mesh` and `instance`
+4. Run text generation/status, then use the recommended direct GLB import and
+   verify one PBR block is created without a conversion task or second charge.
+   Separately run OBJ conversion and both `mesh` and `instance` compatibility
    imports with explicit cost confirmations.
 5. Deliberately lose a paid response and recover with the displayed UUID
    without issuing a replacement POST.
@@ -92,9 +108,15 @@ Real Rhino 8 acceptance remains a separate gate:
    crashes.
 10. Switch or close documents during delayed work and confirm fail-closed
    behavior.
-11. Verify scale, handedness, material appearance, one-step Undo, restart
-   recovery, and no unexpected document mutation from Grasshopper recompute.
-12. Verify package layout from a clean checkout rather than a developer `bin/`
+11. For direct GLB, verify embedded textures/PBR channels, exact object count,
+    one-step Undo, same-UUID `already_exists`, and that 401/403 recovery before
+    mutation does not leave the import occupied.
+12. Force/kill at `prepared`, during native import, after block wrapping, and
+    after EndUndo-before-journal-commit. Reopening and retrying the same UUID
+    must show manual review and must never call native import again.
+13. Verify scale, handedness, OBJ material appearance, restart recovery, and no
+    unexpected document mutation from Grasshopper recompute.
+14. Verify package layout from a clean checkout rather than a developer `bin/`
    directory.
 
 Static checks, unit/process tests, real Rhino interaction, visual acceptance,

@@ -90,14 +90,20 @@ Materials and the final import-or-value target are explicit choices:
 3. Persist the valid generation task ID before returning it; recover it with the
    same UUID or `tripo_operation_status` if the response is lost.
 4. Poll that task through the separate read-only task-status tool.
-5. Generate a second UUID, re-check the document, validate the successful generation
-   task, then checkpoint and submit one OBJ conversion POST. `withMaterials=true`
-   sends `bake=true` so the OBJ ships with an MTL and baked-diffuse image textures;
-   `withMaterials=false` sends `bake=false`. `quad` and `with_animation` are always
-   `false`.
-6. Persist and return the conversion task ID, then poll it through the task-status tool.
-7. Download the short-lived `model_url` without an API-key header.
-8. Validate and stage a content-addressed bundle instead of one bare OBJ file: a
+5. Choose one Rhino output branch:
+   - **direct GLB (recommended):** generate an import UUID, re-check the
+     document, query the successful generation task, download its short-lived
+     `model_url` without an API-key header, validate and content-address the GLB,
+     then call the Rhino-only `host.import_glb` capability. This creates no
+     conversion task and no additional Tripo charge;
+   - **OBJ compatibility / Grasshopper value:** generate a conversion UUID,
+     re-check the document, validate the successful generation task, then
+     checkpoint and submit one OBJ conversion POST. `withMaterials=true` sends
+     `bake=true`; `withMaterials=false` sends `bake=false`. `quad` and
+     `with_animation` remain `false`.
+6. On the OBJ branch, persist and return the conversion task ID, poll it through
+   the task-status tool, then download its short-lived `model_url`.
+7. Validate and stage the OBJ as a content-addressed bundle instead of one bare file: a
    non-zip download is a single-entry bundle; a zip download is extracted to exactly
    one `.obj` entry, zero or one `.mtl` entry, and zero or more `.png`/`.jpg`/`.jpeg`
    texture entries, with every other archive entry ignored. Entry names are
@@ -108,7 +114,9 @@ Materials and the final import-or-value target are explicit choices:
    length; a bundle directory is complete only once its `manifest.json` marker
    exists, and a pre-existing complete bundle is re-verified byte-for-byte before
    reuse rather than trusted blindly.
-9. Choose one final path:
+8. Choose one final path:
+   - **direct Rhino GLB import:** pass only artifact identity, relative entry,
+     length, and SHA-256 across the bridge; the signed URL never crosses;
    - **document import:** re-check the document and import with a third
      caller-generated UUID that is reused across host retries, carrying
      `importMode` (`native` resolves MCP-side from the host context to `instance`
@@ -118,13 +126,13 @@ Materials and the final import-or-value target are explicit choices:
      the GHA, transform meters/Y-up/right-handed coordinates into Rhino document
      units/Z-up/right-handed coordinates, and publish one GH `Mesh`.
 
-The import request may also explicitly select `mesh`, `instance`, or `family`;
+The OBJ import request may explicitly select `mesh`, `instance`, or `family`;
 a host rejects an unsupported mode before mutation. `applyMaterials` fails
 closed when the bundle has no MTL rather than silently importing geometry-only.
 The Grasshopper value path performs no Rhino document mutation and creates no
 Undo record.
 
-The document-import path returns a typed host mutation receipt, including
+Each document-import path returns a typed host mutation receipt, including
 `ImportMode`, `MaterialCount`, `TextureCount`, and—Revit family mode only—
 `SavedFamilyPath`.
 
@@ -263,22 +271,42 @@ a paid call.
   explicit snapshot-bound review controls.
 - All document reads and writes run on the Rhino UI thread.
 - A delayed request is rejected if the active document no longer matches the requested document session.
-- Geometry is prepared before mutation; each import (a mesh, or an instance plus its
-  definition) is created in one undo record.
+- Geometry is prepared before mutation; each OBJ import (a mesh, or an instance
+  plus its definition) is created in one undo record.
+- Direct GLB is the recommended panel/MCP path. Bounded container/JSON,
+  accessor, scene-graph, buffer, and decoded-image checks run before the native
+  parser, including 64 MiB GLB/accessor-decoding ceilings and
+  4096-pixel/16-Mi-pixel-per-image/32-Mi-pixel-total limits. Verified bytes are
+  copied to a private random fixed snapshot, then preflighted in a headless
+  document and imported into the active document with the same hash.
+- Immediately before `RhinoDoc.Import`, a deterministic marker definition and
+  flushed append-only host journal record `prepared` exist. After wrapping the
+  native result into one outer PBR block and verifying exact membership,
+  geometry counts, material bindings, exact geometry digest, and recursive
+  PBR-content digest, the schema-2 journal records `committed`. The proof is
+  recomputed across headless preflight, active import, completed definition,
+  and read-only replay; it includes selected material sources, recursive render
+  content and texture mappings, PBR values, and referenced texture-file bytes.
+  `prepared`, `outcome_unknown`, corrupt, incomplete, older-schema, or
+  journal-less existing-root state never authorizes another native import.
+- Fixed snapshots are lease-scoped. A later import performs only a bounded,
+  strict-name, non-recursive best-effort cleanup: at most 256 entries inspected
+  and 16 mutated, only after 24 hours and definite owner-PID exit, with
+  symlink/reparse rejection and current-process quarantine/tombstone ownership.
 - Two import modes: `mesh` (one Rhino mesh object; refuses `applyMaterials` when the
   bundle carries more than one material slot rather than silently collapsing
   colors) and `instance` (one block definition holding one sub-mesh per material
   slot, plus one `InstanceObject`) — `importMode=native` resolves to `instance` on
   Rhino.
-- Idempotency metadata binds a key to the complete canonical import request: user
+- OBJ idempotency metadata binds a key to the complete canonical import request: user
   strings on the mesh object in `mesh` mode; on the `InstanceObject` **and** on each
   geometry member inside the block definition in `instance` mode, so a definition
   that exists without its instance (a crash between the two creates) is reconciled
   by verifying the stored fingerprint on the definition's members before adding the
   missing instance.
-- Materials apply the baked diffuse OBJ/MTL via `TextureCoordinates` plus a render
-  `Material` with an optional bitmap texture; native GLB/PBR import stays a
-  declined-for-now enhancement.
+- Direct GLB preserves native Rhino PBR/render materials and embedded textures.
+  OBJ compatibility applies baked diffuse OBJ/MTL via `TextureCoordinates` plus
+  a render `Material` with an optional bitmap texture.
 - Shutdown synchronously drains panel sessions, performs the bounded sidecar
   graceful-shutdown attempt, and drains the bridge before disposing dispatcher
   state.
@@ -297,6 +325,9 @@ a paid call.
 - Task-to-Mesh uses the stage-only method and returns a GH mesh value. It does
   not call the host import bridge, mutate the Rhino document, bake, or create an
   Undo record.
+- The GHA scalar `Mesh` value remains on the OBJ conversion route. The direct
+  GLB capability belongs to the Rhino panel and MCP document-import surfaces,
+  not Grasshopper value output.
 - Removing a component discards future UI/mesh publication; an already admitted
   sidecar wait continues to its durable task-ID or ambiguity safety checkpoint.
   This is not remote cancellation.

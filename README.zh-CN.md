@@ -5,8 +5,9 @@
 Tripo-Rhino 是面向 Rhino 8 的独立社区适配器。AEC 用户可以在 per-document Eto
 panel 中使用 text-to-model workflow，也可以通过可选 Grasshopper GHA 显式执行
 text/本地图生 3D 并得到 Grasshopper mesh value；agentic client 可通过 MCP 使用
-同一个 sidecar。经校验的 OBJ 可以导入精确 active Rhino document 成为 mesh/block，
-也可以不 mutation document，仅 staging 给 Grasshopper。
+同一个 sidecar。Rhino 推荐路径会把成功 generation 的 GLB 直接导入为原生 PBR
+block，不需要第二个 conversion task；经校验的 OBJ 仍是显式 mesh/block 兼容路径，
+也是 Grasshopper 的 stage-only 格式。
 
 它不是 Tripo 或 McNeel 官方产品。
 
@@ -26,13 +27,15 @@ sidecar 是唯一解析、存储或使用 Tripo API key 的进程。plug-in 的 
 
 > **当前状态：**`.rhp` 与可选 `.gha` 以 Rhino 8 为目标，并可针对 pinned
 > RhinoCommon/Grasshopper packages 编译。Eto text workflow、Grasshopper
-> text/本地 PNG 或 JPEG workflow、credential dialog、sidecar launcher 与 bundled
-> sidecar layout 已存在源码，并有 portable control/workflow/MCP/process tests。
-> Windows CI 还会对隔离、合成的 Credential Manager target 执行 write/read/delete
-> canary。真实 Rhino panel/GHA 加载、component 可见性与 menu 交互、macOS
-> Keychain 与 production-user Credential Manager 交互、Undo、scale/orientation、
-> 性能与视觉验收仍是 open gates。目前没有 Yak package、安装器、签名、
-> notarization 或自动更新机制。
+> text/本地 PNG 或 JPEG workflow、credential dialog、sidecar launcher、direct
+> GLB/PBR import 与 bundled sidecar layout 已存在源码，并有 portable
+> control/workflow/MCP/process tests。macOS 开发宿主已实际验证手动 package
+> layout、Eto panel、Keychain-backed credential 保存/使用、text generation 与约
+> 两秒一次的 generation progress 刷新。Windows CI 还会对隔离、合成的
+> Credential Manager target 执行 write/read/delete canary。新 direct GLB/PBR
+> 路径、可选 GHA、production-user Credential Manager、Windows 宿主加载、Undo、
+> scale/orientation、性能与视觉验收仍是彼此独立的 open gates。目前没有 Yak
+> package、安装器、签名、notarization 或自动更新机制。
 
 GHA 的详细构建、安装、components、隐私与恢复说明见
 [Grasshopper 指南](./src/Tripo.Rhino.Grasshopper/README.zh-CN.md)。
@@ -146,7 +149,8 @@ McNeel 文档说明了 `.rhp` package-folder 约定，以及 Rhino 8 按版本�
 `MacPlugIns` 位置：
 [Plugin Installers (Mac)](https://developer.rhino3d.com/guides/rhinocommon/plugin-installers-mac/)。
 McNeel 目前说明 `.macrhi` 已不再积极开发，并建议使用 Package Manager。本仓库既
-没有 Yak package，也没有 `.macrhi`；该手动布局也尚未在真实宿主 canary 中验收。
+没有 Yak package，也没有 `.macrhi`。上述 package-folder layout 已在 macOS Rhino
+8 开发宿主中实际使用，但它不是已签名或普遍支持的安装器。
 
 ## 安装可选 Grasshopper components
 
@@ -251,7 +255,8 @@ OS 上明确报告的 private fallback，绝不是 Windows 或 macOS 路径。
 - 使用稳定本地 filesystem 上的绝对、私有路径；
 - 不要使用 NFS/SMB；
 - 恢复期间不要移动或删除其中的 `bridges`、`controls`、`staging`、
-  `image-transfers`、`operations`、`secrets` 或 `ui-recovery`。
+  `host-import-snapshots`、`host-imports`、`image-transfers`、`operations`、
+  `secrets` 或 `ui-recovery`。
 
 只在 MCP client 中设置该变量会让 server 与 Rhino 使用不同的 discovery/staging
 roots，无法建立正确的 bridge 连接。
@@ -274,14 +279,18 @@ roots，无法建立正确的 bridge 连接。
 4. 输入 prompt、face limit 与材质选项，然后点击 **Generate**。panel 会先显示
    可选择复制的 durable operation UUID，再显示 credit confirmation；拒绝确认不会
    发送付费请求。
-5. 点击 **Refresh generation**，直到 task 为 `success`。
-6. 点击 **Convert to OBJ**。该阶段生成另一个 UUID，并需要第二次独立费用确认；
-   刷新 conversion 直到成功。
-7. 选择 object name、`native`/`mesh`/`instance` 与是否应用 baked diffuse
-   materials，然后点击 **Import into Rhino**。
+5. generation 在 `queued` 或 `running` 时会约每两秒自动刷新；也可点击
+   **Refresh generation** 立即刷新，直到 task 为 `success`。
+6. 保持 **Direct GLB (recommended)**，输入 block name，再点击
+   **Import GLB (recommended)**。该路径下载 generation GLB 并保留 Rhino-native
+   PBR；不会创建 conversion task，也不会消耗第二次 conversion credits。
+7. 只有 direct GLB 不可用，或明确需要 OBJ/GH mesh 时才选择 **OBJ
+   compatibility**：点击 **Convert to OBJ**、确认独立的可能费用、刷新至成功，再选择
+   `native`/`mesh`/`instance` 与 baked-diffuse material 选项后导入。
 
-panel 不自动轮询，也不声称能取消远端 task。响应丢失后，该阶段必须先执行
-**Refresh**；只有 paid-operation journal 表明 creation 可以继续时，重试才会启用，
+panel 仅对已有 durable task ID 的 generation status 自动进行 single-flight
+只读轮询；不会自动发送付费请求，也不声称能取消远端 task。响应丢失后，该阶段必须
+先执行 **Refresh**；只有 paid-operation journal 表明 creation 可以继续时，重试才会启用，
 button 会明确标为 **Retry same UUID**。一旦取得 durable task 或 import receipt，
 对应阶段 action 就会禁用，不会伪装成新请求。任意 dispatch 未决时，
 **New workflow** 会禁用；account-bound workflow 显式 reset 前，stored-key
@@ -359,7 +368,7 @@ Rhino/PBR materials。完整说明见
 2. 启动 Rhino 并打开目标 document。
 3. 等待 bridge-ready 消息并记下 PID。
 4. 启动或重启 MCP client，让它启动 `Tripo.Rhino.Mcp`。
-5. 确认 client 列出了下文八个 tools。
+5. 确认 client 列出了下文九个 tools。
 6. 调用 `tripo_host_context`。
 
 成功的 context receipt 证明 MCP server 已经连接到 Rhino。它会返回宿主版本、
@@ -375,7 +384,7 @@ PID，然后重启 MCP server。
 
 ## MCP 工具
 
-MCP 入口通过以下八个 tools 暴露同一套 shared workflow：
+MCP 入口通过以下九个 tools 暴露同一套 shared workflow：
 
 | 工具 | 主要参数 | 作用 |
 | --- | --- | --- |
@@ -385,6 +394,7 @@ MCP 入口通过以下八个 tools 暴露同一套 shared workflow：
 | `tripo_create_text_task` | `prompt`、`faceLimit`、`withMaterials`、`documentSessionId`、`operationId`、`confirmExternalCost` | 创建一个 text-to-model task。`withMaterials=true` 请求 textured PBR generation（`texture`/`pbr`）；`false` 保持 geometry-only。可能消耗 credits。 |
 | `tripo_stage_local_image` | `localImagePath` | 校验并私有 snapshot 一张本地 PNG/JPEG，返回 opaque descriptor；不调用 Tripo。 |
 | `tripo_create_image_task` | `transferId`、`sha256`、`byteLength`、`mediaType`、`faceLimit`、`withMaterials`、`documentSessionId`、`operationId`、`confirmExternalCost` | 上传一张 staged image，并以独立 upload/generation durable checkpoints 创建 image-to-model task。四个 descriptor fields 必须原样复制自 `tripo_stage_local_image`。可能消耗 credits。 |
+| `tripo_import_generation_glb` | `generationTaskId`、`name`、`documentSessionId`、`operationId`、`applyMaterials`（必须为 `true`） | Rhino 推荐路径：下载并原生导入成功 generation 的 GLB，创建一个 PBR block；不创建 conversion task，也没有额外 Tripo 费用。 |
 | `tripo_create_obj_conversion` | `sourceTaskId`、`faceLimit`、`withMaterials`、`documentSessionId`、`operationId`、`confirmExternalCost` | 创建一个 OBJ conversion。`withMaterials=true` 请求带 baked-diffuse MTL 与 image textures 的 OBJ bundle（`bake=true`）；`false` 只转换几何。可能消耗 credits。 |
 | `tripo_import_obj_task` | `conversionTaskId`、`name`、`documentSessionId`、`operationId`、`importMode`（默认 `native`）、`applyMaterials`（默认 `false`） | 下载、校验并将成功的 OBJ conversion 导入为一个 Rhino mesh 或 block instance。 |
 
@@ -414,20 +424,22 @@ MCP 入口通过以下八个 tools 暴露同一套 shared workflow：
      分别传入四个同名参数，再调用 `tripo_create_image_task`。
 3. 用 `tripo_task_status` 轮询返回的 task ID，直到 `success` 或 terminal failure。
    遇到 `failed`、`cancelled`、`banned` 或 `expired` 时停止。
-4. 生成 UUID B；再次取得明确费用确认后调用
-   `tripo_create_obj_conversion`。
-5. 轮询 conversion task，直到 `success` 或 terminal failure。
-6. 生成 UUID C，调用 `tripo_import_obj_task`，并按需选择
-   `importMode` 与 `applyMaterials`。
-7. 检查 receipt 与创建出的 Rhino mesh 或 block instance。已提交的 import 应可由
-   一次 Rhino Undo 撤销。
+4. Rhino 推荐路径：生成 UUID B，调用 `tripo_import_generation_glb`，并保持
+   `applyMaterials=true`。检查 receipt 与创建出的 PBR block instance；已提交的
+   import 应可由一次 Rhino Undo 撤销。
+5. OBJ 兼容路径：生成 UUID B，再次取得明确费用确认后调用
+   `tripo_create_obj_conversion`；轮询至 `success`，再生成 UUID C 并调用
+   `tripo_import_obj_task`，按需选择 mode 与 baked-diffuse material policy。
 
-若要导入材质，两个付费创建阶段都使用 `withMaterials=true`，导入阶段使用
-`applyMaterials=true`；geometry-only 工作流则把三个 flags 都保持为 `false`。
+推荐的 direct 路径中，generation 使用 `withMaterials=true`，direct import 保持其
+必需的 `applyMaterials=true`。带材质的 OBJ fallback 中，两个付费创建阶段都使用
+`withMaterials=true`，import 使用 `applyMaterials=true`。geometry-only 仅通过
+OBJ fallback 提供，并把该路径的三个 flags 都保持为 `false`。
 
-text creation、OBJ conversion 与 host import 必须使用三个不同的 caller-owned
-UUID。工作流执行期间不要切换或关闭 active document；在付费操作前、下载/导入前以及
-Rhino UI-thread mutation 内部都会重新核对 document session。
+generation 与 direct GLB import 使用两个不同的 caller-owned UUID；OBJ fallback
+使用三个：generation、conversion 与 host import。工作流执行期间不要切换或关闭
+active document；在付费操作前、下载/导入前以及 Rhino UI-thread mutation 内部都会
+重新核对 document session。
 
 付费阶段响应丢失时，先使用 `tripo_operation_status` 检查对应的本地记录。只有
 journal 表明 creation 可以继续时，才以原 UUID、完全相同的显式参数、API key 与
@@ -443,17 +455,45 @@ Image creation 会分别 checkpoint upload 与 generation。持久化的 `file_t
 继续 generation 而不再次 upload。若 upload 或 generation 结果不明确，journal 会
 记录具体 stage 并拒绝自动重发；人工核对前需保留 `image-transfers/` 与 journal。
 
-导入恢复有意采用不同规则。复用 import UUID、conversion task 与 artifact
-content、name、解析后的 mode 和 materials flag。Rhino 重启后，应重新打开同一个目标
-document，调用
-`tripo_host_context`，并传入新的 `documentSessionId`；host fingerprint 排除了该
-临时 session ID，但 active-session check 仍会 fail closed。要让
-`already_exists` 跨应用重启生效，原 import 后必须保存 `.3dm`；若未保存的改动已经
-丢失，持久化文档中没有可回放对象，重试会再次 commit 该 import。
+导入恢复有意采用不同规则。必须复用精确 import UUID、source task/artifact
+content、name、解析后的 mode 与 materials flag。Direct GLB 还使用 flushed
+host-import journal：`prepared`、`outcome_unknown`、corrupt 或 incomplete 状态都
+绝不授权再次执行 native import；`committed` replay 只读核对 exact root GUID、
+block members、计数、geometry digest 与 PBR-content digest。Rhino 重启后，应
+重新打开同一个已保存的目标 document，
+调用 `tripo_host_context` 并传入新的 `documentSessionId`。journal 与 document
+不一致时必须人工检查，不能重发 paid 或 native request。
 
 ## Rhino 导入行为
 
-- Converted OBJ（以及存在时的 MTL 与 PNG/JPEG textures）会成为
+- **Direct GLB（推荐）：**sidecar 按 signed-URL policy 下载成功 generation 的 GLB，
+  校验 content-addressed manifest、container、bounded glTF arrays/buffer
+  references 与 embedded PNG/JPEG dimensions，再只把 verified bytes 交给 Rhino。
+  host 从这些 bytes 建立 private random fixed snapshot，先在 headless Rhino
+  document preflight，再把同一 hash 导入 active document。
+- native GLB 会保留 Rhino render/PBR materials 与 embedded textures，并包装进
+  deterministic `Tripo_<operationId>` block，只建立一个带 identity 的 root
+  `InstanceObject`。write-through host journal 会在 native import 前与 commit 后
+  flush；任意 ambiguous native outcome 返回 `mutation_state_uncertain`、禁用 UI
+  retry，并要求人工核对 document/journal。
+- Direct GLB 仅接受 embedded PNG/JPEG，并在 native parser 前限制 64 MiB GLB、
+  4 MiB JSON、arrays、accessors、buffer ranges、总计 64 MiB decoded accessor
+  data、单边 4096 pixels、单图 16 Mi pixels 与所有图片合计 32 Mi pixels。Rhino
+  native parser 仍在 Rhino process 内运行；headless preflight 只隔离 target
+  document，不是 process crash isolation。
+- committed proof 会在 headless preflight、active document、完成后的 block
+  definition 与只读 replay 中重新计算。它覆盖精确 mesh data 与 transforms、
+  解析后的 object/layer/plugin/subobject material bindings、递归 render content
+  与 texture mappings、material/PBR values，以及每个可读 referenced texture
+  file 的 SHA-256。parent-inherited 或 non-object plugin material source 会
+  fail closed。journal schema 2 强制要求该 proof；旧版或不完整记录不能授权
+  replay。
+- fixed GLB snapshot 通常会在 import lease 结束时删除。后续 import 只会
+  best-effort、有界清理严格命名且超过 24 小时的 snapshot，并且必须能确认记录的
+  owner PID 已不存活。每次最多检查 256 项、mutation 16 项；symlink/reparse
+  content 会被拒绝，并使用当前进程拥有的 quarantine/tombstone 名称，不做递归
+  删除。
+- **OBJ 兼容路径：**converted OBJ（以及存在时的 MTL 与 PNG/JPEG textures）会成为
   content-addressed bundle。每个 entry 都按 manifest 校验 SHA-256 和字节数，然后
   在 mutation 前完成解析与几何校验。bundle 最多保留 32 个 entries，每个最多
   128 MiB，总计最多 256 MiB。
@@ -468,7 +508,7 @@ document，调用
   应用 baked-diffuse color，以及存在时的 diffuse texture。`mesh` 模式不会把多个
   OBJ `usemtl` slots 静默压到单个 mesh；multi-slot bundle 必须使用 `instance`。
   Texture validation 会以文末列出的 typed errors fail closed。
-- import UUID 与 canonical import-identity fingerprint 会写入 object attributes；
+- OBJ import UUID 与 canonical import-identity fingerprint 会写入 object attributes；
   fingerprint 有意排除临时 `documentSessionId`。`mesh` 模式写在 mesh object 上；
   `instance` 模式写在 `InstanceObject` 与 block definition 内每个 geometry member
   上。若崩溃留下已创建但没有引用的 block definition，会先验证 member fingerprint，
@@ -525,6 +565,13 @@ session。
 等待当前 Rhino command 或 undo activity 结束，然后用同一个 import UUID 与相同参数
 重试。
 
+### `mutation_state_uncertain`
+
+不要再次点击或脚本调用 import。保留 `host-imports/`；若 Rhino 允许，先另存当前
+`.3dm` 副本，再人工核对对应 block/root 与本地 journal。即使 best-effort Undo
+看似成功，native importer 也可能已经开始；只有完整验证后的 `committed` replay
+可以返回 `already_exists`。
+
 ### MCP 进程无法启动
 
 确认已经安装 .NET 8 runtime，command 与 assembly path 都是绝对路径，完整 MCP 输出
@@ -553,14 +600,17 @@ Tripo task/billing history；不要自动发送另一个付费请求。进程被
   已由可选 GHA 与 MCP 提供；panel image mode、WebP 与 public URL input 尚未实现。
 - text-generation 默认 model 是 `v3.1-20260211`；`TRIPO_MODEL` 可以选择另一个
   通过语法校验的 identifier，改变它也会改变 text-task paid-operation identity。
-- 材质只支持 baked diffuse（OBJ `Kd`/`d`/`Tr` color/alpha 加每个 slot 一张
-  `map_Kd` texture）：没有真正的 PBR channels，也没有 native GLB import。
-  Text generation 关闭 quad output；OBJ conversion 关闭 quad output 与 animation。
+- OBJ 兼容路径的材质上限是 baked diffuse（OBJ `Kd`/`d`/`Tr` color/alpha 加每个
+  slot 一张 `map_Kd` texture）；direct GLB 会保留 Rhino-native PBR channels 与
+  embedded textures。Text generation 关闭 quad output；OBJ conversion 关闭 quad
+  output 与 animation。
 - GHA 只支持 scalar、interactive workflow；没有 Grasshopper Player、headless、
   automatic polling、automatic material binding 或 one-call paid workflow。
 - 没有 Yak package、安装器、签名、notarization 或自动更新。
 - Production HTTP connections 有意不使用 system proxies。
-- Windows/macOS 上尚未完成真实宿主验收。
+- macOS 真实宿主已部分验收 panel loading、Keychain-backed credential、
+  generation 与 status polling。Direct GLB/PBR 视觉效果、Undo/replay、可选 GHA
+  与 Windows 真实宿主行为仍待验收。
 
 详细信任与验收边界见 [Architecture](./docs/ARCHITECTURE.md)、
 [Materials design](./docs/MATERIALS-DESIGN.md)、

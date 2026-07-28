@@ -13,6 +13,12 @@ The GHA does not contain another Tripo client or credential store. It borrows
 the sidecar, API-key owner, paid-operation journal, recovery records, and exact
 Rhino document session from the matching installed `Tripo.Rhino.rhp`.
 
+The Rhino panel and MCP document-import surfaces also offer a recommended
+direct generation-GLB/PBR route. That route intentionally does not change this
+GHA contract: **Tripo Task to Mesh** still uses explicit OBJ conversion because
+it must publish a scalar Grasshopper `Mesh` value without mutating the Rhino
+document.
+
 > **Evidence boundary:** this source builds against the pinned Rhino 8
 > RhinoCommon and Grasshopper packages. Portable tests cover shared image
 > staging, upload/generation recovery, OBJ staging, and journal behavior.

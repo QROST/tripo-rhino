@@ -186,11 +186,11 @@ This boundary protects against cross-user access. It does not treat another proc
   unexpected channel/version/PID, stale processes, and ambiguous hosts fail
   closed.
 - The method allowlist is limited to health, graceful shutdown, credential
-  status/set/clear, and shared workflow calls, including opaque image creation
-  and stage-only OBJ receipts. It does not accept scripts, arbitrary shell
-  commands, remote import URLs, or arbitrary local import paths. Only the
-  explicit host import method can mutate a document; stage-only mesh retrieval
-  cannot.
+  status/set/clear, and shared workflow calls, including opaque image creation,
+  Rhino-only generation-GLB import, and stage-only OBJ receipts. It does not
+  accept scripts, arbitrary shell commands, remote import URLs, or arbitrary
+  local import paths. Only explicit host import methods can mutate a document;
+  stage-only mesh retrieval cannot.
 - Requests are length-bounded, concurrency-bounded, authenticated before
   dispatch, and covered by client/server deadlines. Request and descriptor
   string rendering redacts tokens and payloads.
@@ -207,11 +207,68 @@ same user.
 - Only HTTPS downloads are accepted.
 - API-key headers are not sent to signed artifact URLs.
 - Production API and download connections disable proxy and cookie state, resolve DNS once, reject any non-public address, and connect to the vetted endpoint directly.
-- Redirect count, compressed bytes, expanded bytes, OBJ vertices, faces, and coordinate magnitude are bounded.
+- Redirect count, compressed bytes, expanded bytes, OBJ vertices, faces, and
+  coordinate magnitude are bounded.
 - Independent deadlines cover response headers and the complete response body.
 - ZIP entry paths are never used as filesystem paths.
 - The host accepts only a content-addressed artifact ID under the staging root and verifies byte length and SHA-256 before parsing.
 - NaN, infinity, invalid indices, oversized polygons, and degenerate geometry fail closed.
+- GLB staging rejects symlink/reparse components, uses no-overwrite placement,
+  publishes `manifest.json` last, and exact-revalidates both manifest and
+  payload before reuse. The signed provider URL, API key, absolute staging
+  path, and fixed-snapshot path never cross the host bridge or recovery state.
+- Before Rhino's native parser runs, GLB v2 structure, JSON size, aggregate
+  accessor elements, mesh vertex/triangle estimates, scene-graph acyclicity,
+  buffer/view/accessor bounds, aggregate decoded image pixels, and embedded
+  PNG/JPEG dimensions are bounded. External/data/file buffer and image URIs are
+  rejected. The exact top-level limits are 64 MiB per GLB, 4 MiB JSON, 64 MiB
+  aggregate decoded accessor storage, 4096 pixels on either image side,
+  16 Mi pixels per image, and 32 Mi pixels across all images.
+- The bridge loads verified GLB bytes, not an authority-bearing staging path.
+  Rhino writes those bytes with `CreateNew`, `WriteThrough`, `Flush(true)`, and
+  private permissions into a random non-reparse snapshot directory, keeps a
+  read lease through import, and verifies the same length/hash before and after
+  each native call.
+- Snapshot deletion is attempted when its lease ends. Each new snapshot also
+  attempts a bounded stale cleanup for leftovers: inspect at most 256 strictly
+  named entries, mutate at most 16, require both directory/file age over
+  24 hours and a definitely exited owner PID, reject
+  symlink/reparse/device content, and use current-cleaner-owned
+  quarantine/tombstone names. It never recursively deletes an uninspected
+  directory; uncertain liveness or filesystem metadata preserves the
+  candidate.
+- `RhinoDoc.Import` still executes inside the Rhino process. A headless
+  preflight isolates ordinary parse mutations from the user's target document,
+  but is not process isolation against a native parser crash. On macOS, another
+  malicious process already running as the same user remains outside the
+  filesystem isolation claim.
+
+## Rhino direct-GLB mutation journal
+
+- The host owns an append-only, checksummed, write-through JSONL journal under
+  `host-imports/rhino/<operation-id>.jsonl`; it stores identity, hashes, bounded
+  counts, and state, never credentials, URLs, or paths.
+- A deterministic prepared block marker and durable `prepared` record exist
+  immediately before native import. Any failure after native import begins is
+  `outcome_unknown` even when best-effort Undo restores tracked tables.
+- `prepared`, `outcome_unknown`, corrupt, incomplete, or document/journal
+  mismatch state disables UI dispatch and never authorizes a second native
+  import. A normal exit before `prepared` deletes its unused empty journal;
+  an empty journal left by a crash fails closed.
+- `committed` replay is read-only. It verifies the exact root GUID, unique
+  idempotency identity, stored counts, direct membership, recursive
+  geometry digest, PBR-content digest, and recalculated mesh counts. The
+  PBR-content proof covers selected object/layer/plugin/subobject material
+  bindings, recursive render-content and child-slot state, legacy/simulated
+  PBR values, mappings/wrap state, and SHA-256 of readable referenced texture
+  bytes; unsupported inheritance or unsafe/unreadable texture references fail
+  closed. It never recreates a missing root or definition.
+- Journal schema 2 requires both geometry-membership and PBR-content proof. An
+  older/incomplete record, or an existing direct-import root without a durable
+  committed journal, cannot return `already_exists`.
+- Cancellation may win while UI work is queued. Once the Rhino UI mutation
+  starts, the caller waits for its real completion before the fixed snapshot,
+  journal lease, and single-mutation gate are released.
 
 ## Remote-task semantics
 
@@ -231,6 +288,11 @@ same user.
 - Task-query responses must carry the exact requested task ID.
 - Cancelling a local status query does not claim that a remote task was cancelled.
 - Host import canonicalizes a caller-owned UUID before the bridge and persistent host lookup; case-only UUID variants cannot create a second host object.
+- Direct GLB import is local and does not create another Tripo task. An HTTP
+  401/403 while reading the existing generation task is reported as
+  `credential_invalid` before host mutation; the same import UUID can continue
+  after a session-only replacement key. Once native mutation is uncertain,
+  credential replacement never turns that state into an import retry.
 
 ## Reporting
 

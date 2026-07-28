@@ -50,7 +50,13 @@ The route is:
    - magic `glTF`, version 2, exact declared file length;
    - exactly one first JSON chunk and at most one following BIN chunk;
    - no overflow, overlap, duplicate chunk, or trailing bytes;
-   - parseable JSON with `asset.version` in the 2.x family;
+   - at most 64 MiB total GLB and 4 MiB JSON, with `asset.version` in the 2.x
+     family;
+   - bounded aggregate accessors, primitive vertex/triangle estimates,
+     single-parent acyclic nodes, buffer/view/accessor ranges, and embedded
+     decoded-image pixels before Rhino's native parser runs: decoded accessor
+     storage is at most 64 MiB; embedded images are at most 4096 pixels on
+     either side, 16 Mi pixels each, and 32 Mi pixels in aggregate;
    - no `uri` member on `buffers[]` or `images[]` in the first release.
      Embedded `bufferView` content is accepted; remote, file, absolute,
      relative, and `data:` references are all rejected.
@@ -66,25 +72,55 @@ The route is:
    preflight. Require at least one valid mesh, bounded vertices/triangles, and
    finite geometry. This protects the user document from ordinary parse
    failures, but it is not process isolation.
-8. In one dedicated undo record, run the native import in the active document,
-   collect only newly created top-level objects, preserve their native
-   attributes/material references, wrap them in deterministic outer block
-   definition `Tripo_<idempotencyKey>`, remove the temporary top-level
-   objects, and create one root instance carrying import identity metadata.
+8. In one dedicated undo record, create deterministic prepared definition
+   `Tripo_<idempotencyKey>`, flush a host-import `prepared` journal record, then
+   run the native import in the active document. Collect only newly created
+   top-level objects, preserve their native attributes/material references,
+   replace the marker geometry with the imported result, remove the temporary
+   roots, and create one root instance carrying import identity metadata.
+9. Verify unique top-level addition, mesh counts, PBR/material binding, direct
+   membership, and cycle-bounded recursive geometry and PBR-content digests.
+   End the Undo record, then flush
+   `committed(createdId, counts, member digest, PBR-content digest)`.
 
 `RhinoDoc.Import` and headless documents are supported APIs, but they are not
 transaction APIs. Failure handling therefore compares pre/post object,
-definition, material, render-material, texture, and layer state. A rollback is
-reported as clean only when one owned undo restores every captured set.
-Otherwise the result is `mutation_state_uncertain`, and the same import is not
-automatically re-dispatched.
+definition, material, render-material, texture, embedded-file, and layer state
+and performs best-effort Undo. Any failure after native import begins remains
+`mutation_state_uncertain` even if those tracked sets are restored; the same
+import is never automatically re-dispatched.
 
 The outer definition members and root instance carry a fingerprint over the
 artifact identity, name, fixed GLB import mode, and materials policy, with the
-document session omitted exactly as on the OBJ host fingerprint. An existing
-definition without its root instance is reconciled only when every member
-holds the exact fingerprint. A different format or content under the same
-UUID is `idempotency_conflict`.
+document session omitted exactly as on the OBJ host fingerprint. A flushed
+append-only host journal is authoritative: `prepared`, `outcome_unknown`,
+corrupt/incomplete state, or a definition without a committed root always
+requires manual review and never triggers definition-only reconciliation.
+`committed` replay only returns `already_exists` after exact root, counts,
+recursive geometry and PBR-content digests, and member identity verification.
+An existing direct-import root without a durable committed journal fails
+closed. Journal schema 2 requires both digests; an older or incomplete record
+does not authorize replay. A different format or content under the same UUID
+is `idempotency_conflict`.
+
+The PBR-content proof is recomputed for the headless preflight, active import,
+completed definition, and committed replay. It hashes exact mesh topology,
+vertices, normals, colors, UVs, transforms, and cached mapping coordinates;
+the selected object/layer material source; effective front/back,
+plugin-specific, and subobject bindings; legacy and simulated PBR material
+values; recursive render-content type/hash/child-slot state; texture mapping
+and wrap state; and the SHA-256 bytes of every readable referenced texture
+file. Roots and definition members are compared as sorted digest multisets so
+Rhino table ordering is not treated as content. Parent-inherited materials,
+non-object plugin material sources, unreadable/unsafe texture files, cycles,
+or unsupported object types fail closed.
+
+Fixed snapshots normally disappear when their read lease ends. Creation also
+performs a best-effort cleanup pass over at most 256 strictly named entries,
+mutating at most 16 snapshots older than 24 hours whose recorded owner PID is
+definitely dead. Symlink/reparse content is rejected. Cleanup renames candidates
+through current-process quarantine/tombstone names and never recursively
+deletes an uninspected directory.
 
 The host-control method is `workflow.import_generation_glb`; the bridge method
 is `host.import_glb`. Both are advertised only for Rhino. Protocol versions
@@ -283,17 +319,20 @@ bare filename). Unknown keywords ignored. Bounded: max 64 materials, max
   makes a legitimate cross-restart replay (same idempotency key, new
   session) recover instead of failing as a conflict. A retry with a
   different mode or flag still fails closed as `idempotency_conflict`.
-- Rhino stores the idempotency key + fingerprint user strings on the
-  geometry INSIDE the block definition as well as on the instance, so the
-  definition-without-instance reconcile path verifies the fingerprint
-  before reusing a leftover definition.
+- The Rhino OBJ instance path stores the idempotency key + fingerprint user
+  strings on geometry inside the block definition as well as on the instance,
+  so its legacy definition-without-instance reconcile path verifies the
+  fingerprint before reusing a leftover definition. The native GLB path never
+  uses that reconcile rule: only an exact, durable committed journal may be
+  replayed.
 - Revit's Extensible Storage entity also persists MaterialCount and
   TextureCount so `already_exists` receipts report what the document holds,
   not the incoming request's intent. Before LoadFamily, an already-loaded
   family with the target name is reused (recovers the
   instance-deleted-but-family-loaded retry). The template probe also scans
   one bounded level of FamilyTemplatePath subdirectories.
-- Rhino instance mode (R wave): definition name `Tripo_<IdempotencyKey>`;
+- Rhino OBJ instance mode (R wave): definition name
+  `Tripo_<IdempotencyKey>`;
   user strings move to the InstanceObject; lookup switches to
   `ObjectType.InstanceReference`; a definition existing without its instance
   is reconciled by adding the instance to the existing definition.

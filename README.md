@@ -5,9 +5,10 @@ English | [简体中文](./README.zh-CN.md)
 Tripo-Rhino is an independent community adapter for Rhino 8. AEC users can run
 the text-to-model workflow from a per-document Eto panel, or use the optional
 Grasshopper GHA for explicit text/local-image generation and a Grasshopper mesh
-value; agentic clients can use the same sidecar through MCP. Validated OBJ
-output can be imported into the exact active Rhino document as a mesh/block, or
-staged without document mutation for Grasshopper.
+value; agentic clients can use the same sidecar through MCP. The recommended
+Rhino path imports a successful generation GLB directly as a native PBR block,
+without a second conversion task. Validated OBJ remains an explicit
+mesh/block compatibility path and the stage-only Grasshopper format.
 
 It is not an official Tripo or McNeel product.
 
@@ -29,12 +30,15 @@ the key to Rhino settings or the `.3dm` document.
 > **Current status:** the `.rhp` and optional `.gha` target Rhino 8 and compile
 > against pinned RhinoCommon/Grasshopper packages. The Eto text workflow,
 > Grasshopper text/local-PNG-or-JPEG workflow, credential dialog, sidecar
-> launcher, and bundled sidecar layout exist in source, with portable
-> control/workflow/MCP/process tests. Windows CI also performs an isolated,
-> synthetic Credential Manager write/read/delete canary. Real Rhino panel/GHA
-> loading, component visibility and menu interaction, macOS Keychain and
-> production-user Credential Manager interaction, Undo, scale/orientation,
-> performance, and visual acceptance remain open gates.
+> launcher, direct GLB/PBR import path, and bundled sidecar layout exist in
+> source, with portable control/workflow/MCP/process tests. A macOS development
+> host has exercised the manual package layout, real Eto panel, Keychain-backed
+> credential save/use, text generation, and two-second generation progress
+> refresh. Windows CI also performs an isolated, synthetic Credential Manager
+> write/read/delete canary. The new direct GLB/PBR path, optional GHA,
+> production-user Credential Manager, Windows host loading, Undo,
+> scale/orientation, performance, and visual acceptance remain separate open
+> gates.
 > There is no Yak package, installer, signing, notarization, or automatic update
 > mechanism.
 
@@ -161,7 +165,8 @@ version-specific `MacPlugIns` location:
 [Plugin Installers (Mac)](https://developer.rhino3d.com/guides/rhinocommon/plugin-installers-mac/).
 McNeel now describes `.macrhi` as no longer under active development and points
 authors to Package Manager. This repository provides neither a Yak package nor
-a `.macrhi`, and the manual layout has not been accepted in a real-host canary.
+a `.macrhi`. The package-folder layout above has been exercised on a macOS
+Rhino 8 development host; it is not a signed or generally supported installer.
 
 ## Install the optional Grasshopper components
 
@@ -273,8 +278,8 @@ If you customize the directory:
 - use an absolute, private path on a stable local filesystem;
 - do not use NFS/SMB; and
 - do not move or delete its `bridges`, `controls`, `staging`,
-  `image-transfers`, `operations`, `secrets`, or `ui-recovery` content during
-  recovery.
+  `host-import-snapshots`, `host-imports`, `image-transfers`, `operations`,
+  `secrets`, or `ui-recovery` content during recovery.
 
 Setting this variable only in the MCP client makes the server and Rhino use
 different discovery/staging roots and prevents a correct bridge connection.
@@ -303,10 +308,15 @@ recovery.
 5. The panel refreshes a durable generation task every two seconds while it is
    `queued` or `running`. **Refresh generation** remains available for an
    immediate refresh or to resume polling after a status error.
-6. Click **Convert to OBJ**. This creates a different UUID and requires a
-   separate credit confirmation. Refresh conversion until `success`.
-7. Choose object name, `native`/`mesh`/`instance`, and whether to apply baked
-   diffuse materials; then click **Import into Rhino**.
+6. Keep **Direct GLB (recommended)** selected, enter the block name, and click
+   **Import GLB (recommended)**. This downloads the successful generation's
+   GLB and imports its native PBR materials; it creates no conversion task and
+   consumes no second conversion credits.
+7. Use **OBJ compatibility** only when direct GLB is unavailable or an OBJ/GH
+   mesh is specifically required. Click **Convert to OBJ**, confirm that
+   separate possible charge, refresh it to `success`, then choose
+   `native`/`mesh`/`instance` and the baked-diffuse material option before
+   importing.
 
 The panel's only automatic polling is the read-only generation status query
 for a durable task ID. It is single-flight, stops on terminal status, recovery
@@ -405,7 +415,7 @@ For the optional MCP path:
 2. Start Rhino and open the target document.
 3. Wait for the bridge-ready message and note its PID.
 4. Start or restart the MCP client so it launches `Tripo.Rhino.Mcp`.
-5. Confirm that the client lists the eight tools below.
+5. Confirm that the client lists the nine tools below.
 6. Call `tripo_host_context`.
 
 A successful context receipt proves that the MCP server reached Rhino. It
@@ -421,7 +431,7 @@ the PID printed by the intended Rhino process and restart the MCP server.
 
 ## MCP tools
 
-The MCP front door exposes the same shared workflow as these eight tools:
+The MCP front door exposes the same shared workflow as these nine tools:
 
 | Tool | Main arguments | Effect |
 | --- | --- | --- |
@@ -431,6 +441,7 @@ The MCP front door exposes the same shared workflow as these eight tools:
 | `tripo_create_text_task` | `prompt`, `faceLimit`, `withMaterials`, `documentSessionId`, `operationId`, `confirmExternalCost` | Creates one text-to-model task. `withMaterials=true` requests textured PBR generation (`texture`/`pbr`); `false` stays geometry-only. May consume credits. |
 | `tripo_stage_local_image` | `localImagePath` | Validates and privately snapshots one local PNG/JPEG and returns an opaque descriptor. No Tripo call. |
 | `tripo_create_image_task` | `transferId`, `sha256`, `byteLength`, `mediaType`, `faceLimit`, `withMaterials`, `documentSessionId`, `operationId`, `confirmExternalCost` | Uploads one staged image and creates an image-to-model task with durable upload/generation checkpoints. Copy the four descriptor fields exactly from `tripo_stage_local_image`. May consume credits. |
+| `tripo_import_generation_glb` | `generationTaskId`, `name`, `documentSessionId`, `operationId`, `applyMaterials` (must be `true`) | Recommended Rhino path: downloads and natively imports a successful generation GLB as one PBR block. It creates no conversion task and has no additional Tripo charge. |
 | `tripo_create_obj_conversion` | `sourceTaskId`, `faceLimit`, `withMaterials`, `documentSessionId`, `operationId`, `confirmExternalCost` | Creates one OBJ conversion. `withMaterials=true` requests an OBJ bundle with a baked-diffuse MTL and image textures (`bake=true`); `false` converts geometry only. May consume credits. |
 | `tripo_import_obj_task` | `conversionTaskId`, `name`, `documentSessionId`, `operationId`, `importMode` (default `native`), `applyMaterials` (default `false`) | Downloads, validates, and imports a successful OBJ conversion as one Rhino mesh or block instance. |
 
@@ -465,23 +476,26 @@ possible external charge.
 3. Poll its returned task ID with `tripo_task_status` until it reports
    `success` or a terminal failure. Stop on `failed`, `cancelled`, `banned`, or
    `expired`.
-4. Generate UUID B and, after a second explicit cost confirmation, call
-   `tripo_create_obj_conversion`.
-5. Poll the returned conversion task until it reports `success` or a terminal
-   failure.
-6. Generate UUID C and call `tripo_import_obj_task`, choosing `importMode` and
-   `applyMaterials` as needed.
-7. Inspect the returned receipt and the created Rhino mesh or block instance.
-   One Rhino Undo operation should revert a committed import.
+4. Recommended Rhino path: generate UUID B and call
+   `tripo_import_generation_glb` with `applyMaterials=true`. Inspect its receipt
+   and the created PBR block instance. One Rhino Undo operation should revert a
+   committed import.
+5. OBJ compatibility path: generate UUID B and, after a second explicit cost
+   confirmation, call `tripo_create_obj_conversion`; poll it to `success`, then
+   generate UUID C and call `tripo_import_obj_task` with the required mode and
+   baked-diffuse material policy.
 
-For a material-bearing import, set `withMaterials=true` on both paid creation
-stages and `applyMaterials=true` on import. Keep all three false for a
-geometry-only workflow.
+For the recommended direct path, set generation `withMaterials=true` and keep
+the required direct-import `applyMaterials=true`. For a material-bearing OBJ
+fallback, set `withMaterials=true` on both paid creation stages and
+`applyMaterials=true` on import. A geometry-only workflow is available only
+through the OBJ fallback: keep those three OBJ-path flags false.
 
-The generation, OBJ conversion, and host import must use three different
-caller-owned UUIDs. Do not switch or close the active document during the
-workflow; the document session is rechecked before paid operations, before the
-download/import, and inside the Rhino UI-thread mutation.
+Generation and direct GLB import use two different caller-owned UUIDs. The OBJ
+fallback uses three: generation, conversion, and host import. Do not switch or
+close the active document during the workflow; the document session is
+rechecked before paid operations, before download/import, and inside the Rhino
+UI-thread mutation.
 
 If a paid-stage response is lost, first use `tripo_operation_status` to inspect
 its local record. Retry with the original UUID, identical explicit arguments,
@@ -501,18 +515,53 @@ Image creation separately checkpoints upload and generation. A durable
 generation records its stage and refuses automatic resend; preserve
 `image-transfers/` and the journal until manual reconciliation.
 
-Import recovery is deliberately different. Reuse the import UUID, conversion
-task and artifact content, name, resolved mode, and materials flag. If Rhino
-restarted, reopen the same target document, call `tripo_host_context`, and pass
-the new `documentSessionId`; the host fingerprint excludes that ephemeral
-session ID while the active-session check still fails closed. For
-`already_exists` to survive the application restart, save the `.3dm` after the
-original import; if unsaved changes were lost, the retry can commit the import
-again because no persisted object remains.
+Import recovery is deliberately different. Reuse the exact import UUID, source
+task/artifact content, name, resolved mode, and materials flag. Direct GLB
+additionally uses a flushed host-import journal: `prepared`,
+`outcome_unknown`, corrupt, or incomplete state never authorizes another native
+import. `committed` replay is read-only and succeeds only when the exact root
+GUID, block definition members, counts, geometry digest, and PBR-content digest
+still match the document.
+After restart, reopen the same saved target document and pass the new
+`documentSessionId`; if the journal and document disagree, manual review is
+required and the paid or native request must not be resent.
 
 ## Rhino import behavior
 
-- The converted OBJ (and, when present, its MTL plus PNG/JPEG textures) is staged
+- **Direct GLB (recommended):** the sidecar downloads the successful generation
+  GLB through the signed-URL policy, verifies a content-addressed manifest,
+  container structure, bounded glTF arrays/buffer references, and embedded
+  PNG/JPEG dimensions, then gives Rhino only verified bytes. The host writes a
+  private random fixed snapshot, preflights it in a headless Rhino document,
+  and imports the same hash into the active document.
+- The native GLB result preserves Rhino render/PBR materials and embedded
+  textures, is wrapped in deterministic block `Tripo_<operationId>`, and creates
+  exactly one identified root `InstanceObject`. A write-through host journal is
+  flushed immediately before native import and after commit. Any ambiguous
+  native outcome returns `mutation_state_uncertain`, disables UI retry, and
+  requires document/journal review.
+- Direct GLB accepts only embedded PNG/JPEG images and has pre-native limits on
+  a 64 MiB GLB, 4 MiB JSON, arrays, accessors, buffer ranges, 64 MiB aggregate
+  decoded accessor data, 4096-pixel image dimensions, 16 Mi pixels per image,
+  and 32 Mi pixels in aggregate.
+  Rhino's native parser still runs in the Rhino process; the headless preflight
+  is isolation from the target document, not process-level crash isolation.
+- The committed proof is recomputed in the headless preflight, active
+  document, completed block definition, and read-only replay. It covers exact
+  mesh data and transforms, selected object/layer/plugin/subobject material
+  bindings, recursive render content and texture mappings, material/PBR
+  values, and SHA-256 of each readable referenced texture file. Unsupported
+  parent-inherited or non-object plugin material sources fail closed. Journal
+  schema 2 requires this proof; older or incomplete records do not authorize
+  replay.
+- Fixed GLB snapshots are normally removed when the import lease ends. A later
+  import performs a best-effort bounded cleanup of strictly named snapshots
+  older than 24 hours only when the recorded owner PID is definitely no longer
+  alive. It inspects at most 256 entries and mutates at most 16, rejects
+  symlink/reparse content, and uses same-process quarantine/tombstone names
+  rather than recursive deletion.
+- **OBJ compatibility:** the converted OBJ (and, when present, its MTL plus
+  PNG/JPEG textures) is staged
   as a content-addressed bundle, every entry is SHA-256 and byte-length checked
   against its manifest, then parsed and geometrically validated before mutation.
   A bundle keeps at most 32 entries, each at most 128 MiB, with a 256 MiB
@@ -529,7 +578,7 @@ again because no persisted object remains.
   mode refuses more than one OBJ `usemtl` slot rather than collapsing colors
   onto a single mesh, so a multi-slot bundle needs `instance` mode. Texture
   validation fails closed with the typed errors described below.
-- The import UUID and canonical import-identity fingerprint are stored in
+- For OBJ, the import UUID and canonical import-identity fingerprint are stored in
   object attributes. The fingerprint intentionally excludes the ephemeral
   `documentSessionId`. The UUID and fingerprint are stored on the mesh object
   in `mesh` mode; on the `InstanceObject` and on every geometry member inside
@@ -592,6 +641,14 @@ flag.
 Wait for the current Rhino command or undo activity to finish, then retry the
 same import UUID with identical arguments.
 
+### `mutation_state_uncertain`
+
+Do not click or script another import. Preserve `host-imports/`, save a copy of
+the current `.3dm` if Rhino allows it, and inspect the named block/root plus the
+local journal. The native importer may have started even if best-effort Undo
+appeared successful; only a verified `committed` replay may return
+`already_exists`.
+
 ### The MCP process does not start
 
 Confirm that a .NET 8 runtime is installed, the command and assembly paths are
@@ -627,15 +684,18 @@ switching to `instance`.
   another syntactically valid identifier, and changing it changes text-task
   paid-operation identity.
 - Materials are baked diffuse only (OBJ `Kd`/`d`/`Tr` color/alpha plus one
-  `map_Kd` texture per slot): no true PBR channels and no native GLB import.
-  Text generation disables quad output; OBJ conversion disables quad output
-  and animation.
+  `map_Kd` texture per slot) on the compatibility path. Direct GLB preserves
+  Rhino-native PBR channels and embedded textures. Text generation disables
+  quad output; OBJ conversion disables quad output and animation.
 - The GHA is scalar-only and interactive-only: no Grasshopper Player, headless
   execution, automatic polling, automatic material binding, or one-call paid
   workflow.
 - No Yak package, installer, signing, notarization, or automatic update.
 - Production HTTP connections intentionally do not use system proxies.
-- No completed real-host acceptance on Windows or macOS.
+- Real-host acceptance is partial on macOS for panel loading, Keychain-backed
+  credentials, generation, and status polling. Direct GLB/PBR visual
+  acceptance, Undo/replay, the optional GHA, and Windows real-host behavior
+  remain open.
 
 See [Architecture](./docs/ARCHITECTURE.md),
 [Materials design](./docs/MATERIALS-DESIGN.md),
