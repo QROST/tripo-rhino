@@ -119,6 +119,12 @@ public sealed record ObjTaskImportReceipt(
     decimal? ConversionCreditsConsumed,
     Tripo.Bridge.HostImportReceipt HostReceipt);
 
+public sealed record GenerationGlbImportReceipt(
+    string OperationId,
+    string GenerationTaskId,
+    decimal? GenerationCreditsConsumed,
+    Tripo.Bridge.HostImportReceipt HostReceipt);
+
 public sealed record ObjTaskStageReceipt(
     string ConversionTaskId,
     decimal? ConversionCreditsConsumed,

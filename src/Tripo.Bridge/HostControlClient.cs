@@ -41,6 +41,12 @@ public interface IHostControlClient
         HostControlCreateObjConversionRequest request,
         CancellationToken cancellationToken);
 
+    Task<HostControlGenerationGlbImportReceipt> ImportGenerationGlbAsync(
+        HostControlImportGenerationGlbRequest request,
+        CancellationToken cancellationToken) =>
+        throw new NotSupportedException(
+            "This host-control client does not support direct GLB import.");
+
     Task<HostControlObjTaskImportReceipt> ImportObjTaskAsync(
         HostControlImportObjTaskRequest request,
         CancellationToken cancellationToken);
@@ -167,6 +173,17 @@ public sealed class HostControlClient : IHostControlClient
             HostControlImportObjTaskRequest,
             HostControlObjTaskImportReceipt>(
             HostControlConstants.ImportObjTaskMethod,
+            request,
+            cancellationToken);
+
+    public Task<HostControlGenerationGlbImportReceipt>
+        ImportGenerationGlbAsync(
+            HostControlImportGenerationGlbRequest request,
+            CancellationToken cancellationToken) =>
+        CallAsync<
+            HostControlImportGenerationGlbRequest,
+            HostControlGenerationGlbImportReceipt>(
+            HostControlConstants.ImportGenerationGlbMethod,
             request,
             cancellationToken);
 

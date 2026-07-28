@@ -8,6 +8,12 @@ public interface IHostConnection
     Task<Tripo.Bridge.HostImportReceipt> ImportMeshAsync(
         Tripo.Bridge.ImportMeshRequest request,
         CancellationToken cancellationToken);
+
+    Task<Tripo.Bridge.HostImportReceipt> ImportGlbAsync(
+        Tripo.Bridge.ImportGlbRequest request,
+        CancellationToken cancellationToken) =>
+        throw new NotSupportedException(
+            "This host connection does not support direct GLB import.");
 }
 
 public sealed class HostConnection : IHostConnection
@@ -38,6 +44,16 @@ public sealed class HostConnection : IHostConnection
             Tripo.Bridge.ImportMeshRequest,
             Tripo.Bridge.HostImportReceipt>(
             Tripo.Bridge.BridgeConstants.ImportMeshMethod,
+            request,
+            cancellationToken);
+
+    public Task<Tripo.Bridge.HostImportReceipt> ImportGlbAsync(
+        Tripo.Bridge.ImportGlbRequest request,
+        CancellationToken cancellationToken) =>
+        _client.CallAsync<
+            Tripo.Bridge.ImportGlbRequest,
+            Tripo.Bridge.HostImportReceipt>(
+            Tripo.Bridge.BridgeConstants.ImportGlbMethod,
             request,
             cancellationToken);
 }

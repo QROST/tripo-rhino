@@ -31,7 +31,8 @@ internal static class TripoHostControlApplication
         using CancellationTokenSource shutdown =
             CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         IReadOnlyList<string> capabilities =
-            Tripo.Bridge.HostControlConstants.WorkflowCapabilities;
+            Tripo.Bridge.HostControlConstants.GetWorkflowCapabilities(
+                normalizedHost);
         HostControlDispatcher dispatcher = new(
             normalizedHost,
             options.HostProcessId,

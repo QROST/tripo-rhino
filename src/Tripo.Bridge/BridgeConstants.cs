@@ -6,6 +6,7 @@ public static class BridgeConstants
     public const int MaximumMessageBytes = 64 * 1024;
     public const long MaximumImageTransferBytes = 20_000_000;
     public const long MaximumArtifactBytes = 128L * 1024 * 1024;
+    public const long MaximumGlbArtifactBytes = 64L * 1024 * 1024;
     public const int MaximumBundleFiles = 32;
     public const long MaximumBundleBytes = 256L * 1024 * 1024;
     public const int MaximumVertices = 250_000;
@@ -15,4 +16,7 @@ public static class BridgeConstants
 
     public const string ContextMethod = "host.context";
     public const string ImportMeshMethod = "host.import_mesh";
+    public const string ImportGlbMethod = "host.import_glb";
+    public const string MutationStateUncertainError =
+        "mutation_state_uncertain";
 }

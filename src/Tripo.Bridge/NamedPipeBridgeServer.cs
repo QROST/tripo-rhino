@@ -303,7 +303,9 @@ public sealed class NamedPipeBridgeServer : IAsyncDisposable
             throw new BridgeCallException("unauthorized", "Bridge authentication failed.");
         }
 
-        if (request.Method is not BridgeConstants.ContextMethod and not BridgeConstants.ImportMeshMethod)
+        if (request.Method is not BridgeConstants.ContextMethod and
+            not BridgeConstants.ImportMeshMethod and
+            not BridgeConstants.ImportGlbMethod)
         {
             throw new BridgeCallException("method_not_allowed", "The requested host method is not allowed.");
         }

@@ -80,6 +80,7 @@ public sealed class McpProcessSmokeTests
                 "tripo_create_obj_conversion",
                 "tripo_create_text_task",
                 "tripo_host_context",
+                "tripo_import_generation_glb",
                 "tripo_import_obj_task",
                 "tripo_operation_status",
                 "tripo_stage_local_image",

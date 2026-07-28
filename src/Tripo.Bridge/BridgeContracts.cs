@@ -67,6 +67,12 @@ public sealed record StagedBundle(
     IReadOnlyList<StagedBundleEntry> Entries,
     string RootDirectory);
 
+public sealed record StagedGlbArtifact(
+    string ArtifactId,
+    string GlbEntry,
+    StagedBundleEntry Entry,
+    string RootDirectory);
+
 public sealed record StagedMeshLoadRequest(
     string BundleId,
     string ObjEntry,
@@ -96,6 +102,21 @@ public sealed record ImportMeshRequest(
     string IdempotencyKey,
     string ImportMode,
     bool ApplyMaterials);
+
+public sealed record ImportGlbRequest(
+    string DocumentSessionId,
+    string ArtifactId,
+    string GlbEntry,
+    StagedBundleEntry Entry,
+    string Name,
+    string IdempotencyKey,
+    bool ApplyMaterials);
+
+public sealed record PreparedGlbArtifact(
+    string ArtifactId,
+    string GlbEntry,
+    StagedBundleEntry Entry,
+    ReadOnlyMemory<byte> VerifiedContent);
 
 public sealed record HostImportReceipt(
     string Host,

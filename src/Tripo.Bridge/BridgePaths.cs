@@ -42,8 +42,10 @@ public static partial class BridgePaths
 
     public static string GetStagingDirectory()
     {
-        string path = Path.Combine(GetRootDirectory(), "staging");
-        EnsurePrivateDirectory(path);
+        string root = GetRootDirectory();
+        EnsurePrivateNonReparseDirectory(root);
+        string path = Path.Combine(root, "staging");
+        EnsurePrivateNonReparseDirectory(path);
         return path;
     }
 
@@ -150,32 +152,55 @@ public static partial class BridgePaths
         }
     }
 
-    private static void EnsurePrivateNonReparseDirectory(string path)
+    public static void EnsurePrivateNonReparseDirectory(string path)
     {
-        DirectoryInfo info = new(path);
-        if (info.Exists &&
-            (info.LinkTarget is not null ||
-             (info.Attributes & FileAttributes.ReparsePoint) != 0))
-        {
+        string fullPath = Path.GetFullPath(path);
+        string root = Path.GetPathRoot(fullPath) ??
             throw new InvalidOperationException(
-                "The image-transfer data directory cannot be a symbolic link " +
-                "or reparse point.");
+                "A private data directory must have a filesystem root.");
+        string current = root;
+        foreach (string segment in fullPath[root.Length..].Split(
+                     Path.DirectorySeparatorChar,
+                     StringSplitOptions.RemoveEmptyEntries))
+        {
+            current = Path.Combine(current, segment);
+            DirectoryInfo component = new(current);
+            component.Refresh();
+            if (component.LinkTarget is not null ||
+                component.Exists &&
+                (component.Attributes & FileAttributes.ReparsePoint) != 0)
+            {
+                throw new InvalidOperationException(
+                    "A private data directory cannot contain a symbolic link " +
+                    "or reparse point.");
+            }
+
+            if (!component.Exists)
+            {
+                Directory.CreateDirectory(current);
+                component.Refresh();
+                if (component.LinkTarget is not null ||
+                    (component.Attributes & FileAttributes.ReparsePoint) != 0)
+                {
+                    throw new InvalidOperationException(
+                        "A private data directory cannot contain a symbolic link " +
+                        "or reparse point.");
+                }
+            }
         }
 
-        Directory.CreateDirectory(path);
+        DirectoryInfo info = new(fullPath);
         info.Refresh();
-        if (info.LinkTarget is not null ||
-            (info.Attributes & FileAttributes.ReparsePoint) != 0)
+        if (!info.Exists)
         {
             throw new InvalidOperationException(
-                "The image-transfer data directory cannot be a symbolic link " +
-                "or reparse point.");
+                "The private data directory could not be created.");
         }
 
         if (!OperatingSystem.IsWindows())
         {
             File.SetUnixFileMode(
-                path,
+                fullPath,
                 UnixFileMode.UserRead |
                 UnixFileMode.UserWrite |
                 UnixFileMode.UserExecute);

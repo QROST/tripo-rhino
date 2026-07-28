@@ -121,6 +121,85 @@ public sealed class HostControlDispatcherTests
     }
 
     [Fact]
+    public async Task DirectGlbMethodMapsGenerationIdentityWithoutPaidArguments()
+    {
+        FakeWorkflow workflow = new();
+        Tripo.Mcp.HostControlDispatcher dispatcher = CreateDispatcher(
+            new FakeCredentialService(),
+            workflow);
+        Tripo.Bridge.HostControlImportGenerationGlbRequest request = new(
+            "task_generation123",
+            "PBR Chair",
+            Guid.NewGuid().ToString("D"),
+            Guid.NewGuid().ToString("D"),
+            ApplyMaterials: true);
+
+        object result = await dispatcher.DispatchAsync(
+            Tripo.Bridge.HostControlConstants.ImportGenerationGlbMethod,
+            Tripo.Bridge.BridgeJson.ToElement(request),
+            CancellationToken.None);
+
+        Tripo.Bridge.HostControlGenerationGlbImportReceipt receipt =
+            Assert.IsType<
+                Tripo.Bridge.HostControlGenerationGlbImportReceipt>(result);
+        Assert.Equal(request, workflow.LastGlbImportRequest);
+        Assert.Equal(request.GenerationTaskId, receipt.GenerationTaskId);
+        Assert.Equal(request.OperationId, receipt.OperationId);
+    }
+
+    [Theory]
+    [InlineData(System.Net.HttpStatusCode.Unauthorized, "credential_invalid")]
+    [InlineData(System.Net.HttpStatusCode.Forbidden, "credential_invalid")]
+    [InlineData(System.Net.HttpStatusCode.BadGateway, "tripo_api_error")]
+    public async Task DirectGlbReadFailureDistinguishesCredentialRejection(
+        System.Net.HttpStatusCode statusCode,
+        string expectedCode)
+    {
+        FakeWorkflow workflow = new()
+        {
+            GlbImportFailureStatusCode = statusCode,
+        };
+        Tripo.Mcp.HostControlDispatcher dispatcher = CreateDispatcher(
+            new FakeCredentialService(),
+            workflow);
+        Tripo.Bridge.HostControlImportGenerationGlbRequest request = new(
+            "task_generation123",
+            "PBR Chair",
+            Guid.NewGuid().ToString("D"),
+            Guid.NewGuid().ToString("D"),
+            ApplyMaterials: true);
+
+        Tripo.Bridge.HostControlCallException exception =
+            await Assert.ThrowsAsync<Tripo.Bridge.HostControlCallException>(
+                () => dispatcher.DispatchAsync(
+                    Tripo.Bridge.HostControlConstants
+                        .ImportGenerationGlbMethod,
+                    Tripo.Bridge.BridgeJson.ToElement(request),
+                    CancellationToken.None));
+
+        Assert.Equal(expectedCode, exception.Code);
+    }
+
+    [Fact]
+    public void DirectGlbCapabilityIsAdvertisedOnlyForRhino()
+    {
+        IReadOnlyList<string> rhino =
+            Tripo.Bridge.HostControlConstants.GetWorkflowCapabilities("rhino");
+        IReadOnlyList<string> revit =
+            Tripo.Bridge.HostControlConstants.GetWorkflowCapabilities("revit");
+
+        Assert.Contains(
+            Tripo.Bridge.HostControlConstants.ImportGenerationGlbMethod,
+            rhino);
+        Assert.DoesNotContain(
+            Tripo.Bridge.HostControlConstants.ImportGenerationGlbMethod,
+            revit);
+        Assert.DoesNotContain(
+            Tripo.Bridge.HostControlConstants.ImportGenerationGlbMethod,
+            Tripo.Bridge.HostControlConstants.WorkflowCapabilities);
+    }
+
+    [Fact]
     public async Task InvalidCredentialPayloadReturnsTypedErrorWithoutPayload()
     {
         const string secret = "secret-never-in-error";
@@ -281,7 +360,7 @@ public sealed class HostControlDispatcherTests
         new(
             "rhino",
             Environment.ProcessId,
-            Tripo.Bridge.HostControlConstants.WorkflowCapabilities,
+            Tripo.Bridge.HostControlConstants.RhinoWorkflowCapabilities,
             credentials,
             workflow,
             () => { });
@@ -329,6 +408,12 @@ public sealed class HostControlDispatcherTests
 
         public bool ThrowPaidCredentialRejectionOnImage { get; init; }
 
+        public System.Net.HttpStatusCode? GlbImportFailureStatusCode
+        {
+            get;
+            init;
+        }
+
         public Tripo.Bridge.HostControlCreateTextTaskRequest? LastTextRequest
         {
             get;
@@ -342,6 +427,13 @@ public sealed class HostControlDispatcherTests
         }
 
         public Tripo.Bridge.HostControlStageObjTaskRequest? LastStageRequest
+        {
+            get;
+            private set;
+        }
+
+        public Tripo.Bridge.HostControlImportGenerationGlbRequest?
+            LastGlbImportRequest
         {
             get;
             private set;
@@ -539,5 +631,48 @@ public sealed class HostControlDispatcherTests
                         0,
                         0,
                         null)));
+
+        public Task<Tripo.Mcp.GenerationGlbImportReceipt>
+            ImportGenerationGlbAsync(
+                string generationTaskId,
+                string name,
+                string documentSessionId,
+                string operationId,
+                bool applyMaterials,
+                CancellationToken cancellationToken)
+        {
+            LastGlbImportRequest =
+                new Tripo.Bridge.HostControlImportGenerationGlbRequest(
+                    generationTaskId,
+                    name,
+                    documentSessionId,
+                    operationId,
+                    applyMaterials);
+            if (GlbImportFailureStatusCode is { } statusCode)
+            {
+                throw new Tripo.Mcp.TripoApiException(
+                    "The provider rejected the GLB task read.",
+                    statusCode);
+            }
+
+            return Task.FromResult(
+                new Tripo.Mcp.GenerationGlbImportReceipt(
+                    operationId,
+                    generationTaskId,
+                    2.5m,
+                    new Tripo.Bridge.HostImportReceipt(
+                        "rhino",
+                        documentSessionId,
+                        operationId,
+                        Guid.NewGuid().ToString("D"),
+                        3,
+                        1,
+                        0,
+                        "committed",
+                        "glb_instance",
+                        1,
+                        1,
+                        null)));
+        }
     }
 }

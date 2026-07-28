@@ -27,6 +27,27 @@ public sealed class NamedPipeBridgeTests
     }
 
     [Fact]
+    public async Task DirectGlbMethodIsInTheBridgeAllowlist()
+    {
+        using TemporaryDataRoot dataRoot = new();
+        RecordingDispatcher dispatcher = new();
+        await using Tripo.Bridge.NamedPipeBridgeServer server =
+            CreateServer(dispatcher);
+        await server.StartAsync();
+        Tripo.Bridge.NamedPipeBridgeClient client = new("rhino");
+
+        _ = await client.CallAsync<object, Tripo.Bridge.HostContextReceipt>(
+            Tripo.Bridge.BridgeConstants.ImportGlbMethod,
+            new { },
+            CancellationToken.None);
+
+        Assert.Equal(
+            Tripo.Bridge.BridgeConstants.ImportGlbMethod,
+            dispatcher.LastMethod);
+        Assert.Equal(1, dispatcher.CallCount);
+    }
+
+    [Fact]
     public async Task WrongTokenIsRejectedWithoutDispatch()
     {
         using TemporaryDataRoot dataRoot = new();
@@ -168,12 +189,15 @@ public sealed class NamedPipeBridgeTests
     {
         public int CallCount { get; private set; }
 
+        public string? LastMethod { get; private set; }
+
         public Task<object> DispatchAsync(
             string method,
             JsonElement payload,
             CancellationToken cancellationToken)
         {
             CallCount++;
+            LastMethod = method;
             return Task.FromResult<object>(
                 new Tripo.Bridge.HostContextReceipt(
                     "rhino",

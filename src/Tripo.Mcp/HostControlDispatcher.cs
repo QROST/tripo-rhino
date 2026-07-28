@@ -69,6 +69,9 @@ internal sealed class HostControlDispatcher :
                 Tripo.Bridge.HostControlConstants.CreateObjConversionMethod =>
                     await CreateObjConversionAsync(payload, cancellationToken)
                         .ConfigureAwait(false),
+                Tripo.Bridge.HostControlConstants.ImportGenerationGlbMethod =>
+                    await ImportGenerationGlbAsync(payload, cancellationToken)
+                        .ConfigureAwait(false),
                 Tripo.Bridge.HostControlConstants.ImportObjTaskMethod =>
                     await ImportObjTaskAsync(payload, cancellationToken)
                         .ConfigureAwait(false),
@@ -137,7 +140,9 @@ internal sealed class HostControlDispatcher :
                 ? string.Empty
                 : $" Request ID: {exception.RequestId}.";
             throw new Tripo.Bridge.HostControlCallException(
-                "tripo_api_error",
+                IsCredentialRejectedBeforeHostMutation(method, exception)
+                    ? Tripo.Bridge.HostControlConstants.CredentialInvalidError
+                    : "tripo_api_error",
                 exception.Message + requestSuffix,
                 exception);
         }
@@ -156,6 +161,21 @@ internal sealed class HostControlDispatcher :
             _hostProcessId,
             Environment.ProcessId,
             _capabilities);
+
+    private static bool IsCredentialRejectedBeforeHostMutation(
+        string method,
+        TripoApiException exception) =>
+        exception.StatusCode is
+            System.Net.HttpStatusCode.Unauthorized or
+            System.Net.HttpStatusCode.Forbidden &&
+        (string.Equals(
+             method,
+             Tripo.Bridge.HostControlConstants.ImportGenerationGlbMethod,
+             StringComparison.Ordinal) ||
+         string.Equals(
+             method,
+             Tripo.Bridge.HostControlConstants.ImportObjTaskMethod,
+             StringComparison.Ordinal));
 
     private Tripo.Bridge.HostControlHealthReceipt RequestShutdown()
     {
@@ -328,6 +348,30 @@ internal sealed class HostControlDispatcher :
             receipt.OperationId,
             receipt.ConversionTaskId,
             receipt.ConversionCreditsConsumed,
+            receipt.HostReceipt);
+    }
+
+    private async Task<Tripo.Bridge.HostControlGenerationGlbImportReceipt>
+        ImportGenerationGlbAsync(
+            JsonElement payload,
+            CancellationToken cancellationToken)
+    {
+        Tripo.Bridge.HostControlImportGenerationGlbRequest request =
+            Deserialize<
+                Tripo.Bridge.HostControlImportGenerationGlbRequest>(payload);
+        GenerationGlbImportReceipt receipt =
+            await _workflow.ImportGenerationGlbAsync(
+                    request.GenerationTaskId,
+                    request.Name,
+                    request.DocumentSessionId,
+                    request.OperationId,
+                    request.ApplyMaterials,
+                    cancellationToken)
+                .ConfigureAwait(false);
+        return new Tripo.Bridge.HostControlGenerationGlbImportReceipt(
+            receipt.OperationId,
+            receipt.GenerationTaskId,
+            receipt.GenerationCreditsConsumed,
             receipt.HostReceipt);
     }
 

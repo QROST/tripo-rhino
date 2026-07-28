@@ -182,6 +182,163 @@ public sealed class StagedArtifactLoaderTests
         Assert.Equal("idempotency_key_invalid", exception.Code);
     }
 
+    [Fact]
+    public async Task LoadPreparedGlbAsyncReturnsVerifiedImmutableSnapshot()
+    {
+        using TemporaryDataRoot dataRoot = new();
+        byte[] glb = GlbContainerValidatorTests.BuildGlb(
+            """
+            {"asset":{"version":"2.0"},"buffers":[{"byteLength":4}]}
+            """,
+            [1, 2, 3, 4]);
+        BuiltBundle bundle = BuildGlbArtifact(glb);
+        Tripo.Bridge.ImportGlbRequest request =
+            CreateGlbRequest(bundle, "model.glb");
+
+        Tripo.Bridge.PreparedGlbArtifact prepared =
+            await Tripo.Bridge.StagedArtifactLoader.LoadPreparedGlbAsync(
+                request,
+                CancellationToken.None);
+
+        Assert.Equal(bundle.BundleId, prepared.ArtifactId);
+        Assert.Equal("model.glb", prepared.GlbEntry);
+        Assert.Equal(request.Entry, prepared.Entry);
+        Assert.Equal(glb, prepared.VerifiedContent.ToArray());
+
+        byte[] replacement = GlbContainerValidatorTests.BuildGlb(
+            """{"asset":{"version":"2.0"},"scene":0,"scenes":[{}]}""");
+        await File.WriteAllBytesAsync(
+            System.IO.Path.Combine(bundle.Directory, "model.glb"),
+            replacement);
+
+        Assert.Equal(glb, prepared.VerifiedContent.ToArray());
+    }
+
+    [Fact]
+    public async Task LoadPreparedGlbAsyncRejectsHashMismatch()
+    {
+        using TemporaryDataRoot dataRoot = new();
+        byte[] glb = GlbContainerValidatorTests.BuildGlb(
+            """{"asset":{"version":"2.0"}}""");
+        BuiltBundle bundle = BuildGlbArtifact(glb);
+        byte[] tampered = (byte[])glb.Clone();
+        tampered[^1] ^= 1;
+        await File.WriteAllBytesAsync(
+            System.IO.Path.Combine(bundle.Directory, "model.glb"),
+            tampered);
+
+        Tripo.Bridge.BridgeCallException exception =
+            await Assert.ThrowsAsync<Tripo.Bridge.BridgeCallException>(
+                () => Tripo.Bridge.StagedArtifactLoader.LoadPreparedGlbAsync(
+                    CreateGlbRequest(bundle, "model.glb"),
+                    CancellationToken.None));
+
+        Assert.Equal("artifact_hash_mismatch", exception.Code);
+    }
+
+    [Fact]
+    public async Task LoadPreparedGlbAsyncRejectsInvalidContainerAfterHashVerification()
+    {
+        using TemporaryDataRoot dataRoot = new();
+        byte[] notGlb = Bytes("not a GLB container");
+        BuiltBundle bundle = BuildGlbArtifact(notGlb);
+
+        Tripo.Bridge.BridgeCallException exception =
+            await Assert.ThrowsAsync<Tripo.Bridge.BridgeCallException>(
+                () => Tripo.Bridge.StagedArtifactLoader.LoadPreparedGlbAsync(
+                    CreateGlbRequest(bundle, "model.glb"),
+                    CancellationToken.None));
+
+        Assert.Equal("glb_invalid", exception.Code);
+    }
+
+    [Fact]
+    public async Task LoadPreparedGlbAsyncRejectsMissingManifest()
+    {
+        using TemporaryDataRoot dataRoot = new();
+        BuiltBundle bundle = BuildGlbArtifact(
+            GlbContainerValidatorTests.BuildGlb(
+                """{"asset":{"version":"2.0"}}"""));
+        File.Delete(System.IO.Path.Combine(bundle.Directory, "manifest.json"));
+
+        Tripo.Bridge.BridgeCallException exception =
+            await Assert.ThrowsAsync<Tripo.Bridge.BridgeCallException>(
+                () => Tripo.Bridge.StagedArtifactLoader.LoadPreparedGlbAsync(
+                    CreateGlbRequest(bundle, "model.glb"),
+                    CancellationToken.None));
+
+        Assert.Equal("artifact_missing", exception.Code);
+    }
+
+    [Fact]
+    public async Task LoadPreparedGlbAsyncRejectsMismatchedManifest()
+    {
+        using TemporaryDataRoot dataRoot = new();
+        BuiltBundle bundle = BuildGlbArtifact(
+            GlbContainerValidatorTests.BuildGlb(
+                """{"asset":{"version":"2.0"}}"""));
+        await File.WriteAllTextAsync(
+            System.IO.Path.Combine(bundle.Directory, "manifest.json"),
+            "{}");
+
+        Tripo.Bridge.BridgeCallException exception =
+            await Assert.ThrowsAsync<Tripo.Bridge.BridgeCallException>(
+                () => Tripo.Bridge.StagedArtifactLoader.LoadPreparedGlbAsync(
+                    CreateGlbRequest(bundle, "model.glb"),
+                    CancellationToken.None));
+
+        Assert.Equal("artifact_invalid", exception.Code);
+    }
+
+    [Fact]
+    public async Task LoadPreparedGlbAsyncRejectsArtifactIdNotBoundToEntry()
+    {
+        using TemporaryDataRoot dataRoot = new();
+        BuiltBundle bundle = BuildGlbArtifact(
+            GlbContainerValidatorTests.BuildGlb(
+                """{"asset":{"version":"2.0"}}"""));
+        Tripo.Bridge.ImportGlbRequest request =
+            CreateGlbRequest(bundle, "model.glb") with
+            {
+                ArtifactId = new string('a', 64),
+            };
+
+        Tripo.Bridge.BridgeCallException exception =
+            await Assert.ThrowsAsync<Tripo.Bridge.BridgeCallException>(
+                () => Tripo.Bridge.StagedArtifactLoader.LoadPreparedGlbAsync(
+                    request,
+                    CancellationToken.None));
+
+        Assert.Equal("artifact_invalid", exception.Code);
+    }
+
+    [Fact]
+    public async Task LoadPreparedGlbAsyncRejectsSymlinkedEntryOnUnix()
+    {
+        if (OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        using TemporaryDataRoot dataRoot = new();
+        byte[] glb = GlbContainerValidatorTests.BuildGlb(
+            """{"asset":{"version":"2.0"}}""");
+        BuiltBundle bundle = BuildGlbArtifact(glb);
+        string entryPath = System.IO.Path.Combine(bundle.Directory, "model.glb");
+        string targetPath = System.IO.Path.Combine(dataRoot.Path, "outside.glb");
+        await File.WriteAllBytesAsync(targetPath, glb);
+        File.Delete(entryPath);
+        File.CreateSymbolicLink(entryPath, targetPath);
+
+        Tripo.Bridge.BridgeCallException exception =
+            await Assert.ThrowsAsync<Tripo.Bridge.BridgeCallException>(
+                () => Tripo.Bridge.StagedArtifactLoader.LoadPreparedGlbAsync(
+                    CreateGlbRequest(bundle, "model.glb"),
+                    CancellationToken.None));
+
+        Assert.Equal("artifact_invalid", exception.Code);
+    }
+
     private static Tripo.Bridge.ImportMeshRequest CreateRequest(
         BuiltBundle bundle,
         string objEntry,
@@ -200,6 +357,25 @@ public sealed class StagedArtifactLoaderTests
             Guid.NewGuid().ToString("D"),
             "mesh",
             applyMaterials);
+
+    private static Tripo.Bridge.ImportGlbRequest CreateGlbRequest(
+        BuiltBundle bundle,
+        string glbEntry)
+    {
+        Tripo.Bridge.StagedBundleEntry entry = bundle.Entries.Single(
+            candidate => string.Equals(
+                candidate.RelativePath,
+                glbEntry,
+                StringComparison.Ordinal));
+        return new Tripo.Bridge.ImportGlbRequest(
+            Guid.NewGuid().ToString("D"),
+            bundle.BundleId,
+            glbEntry,
+            entry,
+            "Test GLB",
+            Guid.NewGuid().ToString("D"),
+            ApplyMaterials: true);
+    }
 
     private static byte[] Bytes(string value) => Encoding.UTF8.GetBytes(value);
 
@@ -245,6 +421,39 @@ public sealed class StagedArtifactLoaderTests
             System.IO.Path.Combine(bundleDirectory, "manifest.json"),
             manifest.ToString());
         return new BuiltBundle(bundleId, entries, bundleDirectory);
+    }
+
+    private static BuiltBundle BuildGlbArtifact(byte[] content)
+    {
+        Tripo.Bridge.StagedBundleEntry entry = new(
+            "model.glb",
+            Convert.ToHexString(SHA256.HashData(content)).ToLowerInvariant(),
+            content.Length);
+        string descriptor =
+            entry.Sha256 + "\n" +
+            entry.ByteLength.ToString(
+                System.Globalization.CultureInfo.InvariantCulture) + "\n";
+        string artifactId = Convert.ToHexString(
+                SHA256.HashData(Encoding.UTF8.GetBytes(descriptor)))
+            .ToLowerInvariant();
+        string artifactDirectory = System.IO.Path.Combine(
+            Tripo.Bridge.BridgePaths.GetStagingDirectory(),
+            artifactId);
+        Directory.CreateDirectory(artifactDirectory);
+        File.WriteAllBytes(
+            System.IO.Path.Combine(artifactDirectory, entry.RelativePath),
+            content);
+        File.WriteAllText(
+            System.IO.Path.Combine(artifactDirectory, "manifest.json"),
+            System.Text.Json.JsonSerializer.Serialize(
+                new
+                {
+                    artifactId,
+                    glbEntry = entry.RelativePath,
+                    entry,
+                },
+                Tripo.Bridge.BridgeJson.Options));
+        return new BuiltBundle(artifactId, [entry], artifactDirectory);
     }
 
     private sealed record BuiltBundle(

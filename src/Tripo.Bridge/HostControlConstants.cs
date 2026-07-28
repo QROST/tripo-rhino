@@ -20,6 +20,8 @@ public static class HostControlConstants
     public const string OperationStatusMethod = "workflow.operation_status";
     public const string CreateObjConversionMethod =
         "workflow.create_obj_conversion";
+    public const string ImportGenerationGlbMethod =
+        "workflow.import_generation_glb";
     public const string ImportObjTaskMethod = "workflow.import_obj_task";
     public const string StageObjTaskMethod = "workflow.stage_obj_task";
     public const string CredentialInvalidError = "credential_invalid";
@@ -42,4 +44,18 @@ public static class HostControlConstants
         ImportObjTaskMethod,
         StageObjTaskMethod,
     ];
+
+    public static IReadOnlyList<string> RhinoWorkflowCapabilities { get; } =
+    [
+        .. WorkflowCapabilities,
+        ImportGenerationGlbMethod,
+    ];
+
+    public static IReadOnlyList<string> GetWorkflowCapabilities(string host) =>
+        string.Equals(
+            BridgePaths.NormalizeHost(host),
+            "rhino",
+            StringComparison.Ordinal)
+            ? RhinoWorkflowCapabilities
+            : WorkflowCapabilities;
 }

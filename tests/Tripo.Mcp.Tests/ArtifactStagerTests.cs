@@ -1,3 +1,5 @@
+using System.Buffers.Binary;
+using System.Globalization;
 using System.IO.Compression;
 using System.Net;
 using System.Security.Cryptography;
@@ -8,10 +10,355 @@ namespace Tripo.Mcp.Tests;
 
 public sealed class ArtifactStagerTests
 {
+    private static readonly Uri GlbUri = new("https://cdn.example.test/model.glb");
     private static readonly Uri ModelUri = new("https://cdn.example.test/model.obj");
     private const string Obj = "v 0 0 0\nv 1 0 0\nv 0 1 0\nf 1 2 3\n";
     private const string Mtl = "newmtl mat\nKd 1 0 0\nmap_Kd wood.png\n";
     private const string Png = "PNG-BYTES";
+
+    [Fact]
+    public async Task StageGlbAsyncStagesMinimalValidGlbDeterministically()
+    {
+        using TemporaryDataRoot dataRoot = new();
+        byte[] glb = CreateGlb("""{"asset":{"version":"2.0"}}""");
+        DelegateHttpMessageHandler handler = new((request, _) =>
+        {
+            Assert.Null(request.Headers.Authorization);
+            return Task.FromResult(
+                new HttpResponseMessage(HttpStatusCode.OK)
+                {
+                    Content = new ByteArrayContent(glb),
+                });
+        });
+        Tripo.Mcp.ArtifactStager stager = new(new HttpClient(handler));
+
+        Tripo.Bridge.StagedGlbArtifact first =
+            await stager.StageGlbAsync(GlbUri, CancellationToken.None);
+        Tripo.Bridge.StagedGlbArtifact second =
+            await stager.StageGlbAsync(GlbUri, CancellationToken.None);
+
+        string expectedHash =
+            Convert.ToHexString(SHA256.HashData(glb)).ToLowerInvariant();
+        Assert.Equal(ExpectedGlbArtifactId(glb), first.ArtifactId);
+        Assert.Equal(first.ArtifactId, second.ArtifactId);
+        Assert.Equal(first.RootDirectory, second.RootDirectory);
+        Assert.Equal("model.glb", first.GlbEntry);
+        Assert.Equal("model.glb", first.Entry.RelativePath);
+        Assert.Equal(expectedHash, first.Entry.Sha256);
+        Assert.Equal(glb.Length, first.Entry.ByteLength);
+        Assert.Equal(
+            glb,
+            await File.ReadAllBytesAsync(
+                Path.Combine(first.RootDirectory, first.GlbEntry)));
+        Assert.True(File.Exists(Path.Combine(first.RootDirectory, "manifest.json")));
+        Assert.Equal(2, handler.CallCount);
+    }
+
+    [Fact]
+    public async Task StageGlbAsyncProducesManifestAcceptedByHostLoader()
+    {
+        using TemporaryDataRoot dataRoot = new();
+        byte[] glb = CreateGlb("""{"asset":{"version":"2.0"}}""");
+        Tripo.Mcp.ArtifactStager stager = new(
+            new HttpClient(GlbHandler(glb)));
+
+        Tripo.Bridge.StagedGlbArtifact staged =
+            await stager.StageGlbAsync(GlbUri, CancellationToken.None);
+        Tripo.Bridge.ImportGlbRequest request = new(
+            Guid.NewGuid().ToString("D"),
+            staged.ArtifactId,
+            staged.GlbEntry,
+            staged.Entry,
+            "Stager-loader integration",
+            Guid.NewGuid().ToString("D"),
+            ApplyMaterials: true);
+
+        Tripo.Bridge.PreparedGlbArtifact prepared =
+            await Tripo.Bridge.StagedArtifactLoader.LoadPreparedGlbAsync(
+                request,
+                CancellationToken.None);
+
+        Assert.Equal(glb, prepared.VerifiedContent.ToArray());
+    }
+
+    [Fact]
+    public async Task StageGlbAsyncRejectsCorruptDeclaredLength()
+    {
+        using TemporaryDataRoot dataRoot = new();
+        byte[] glb = CreateGlb("""{"asset":{"version":"2.0"}}""");
+        BinaryPrimitives.WriteUInt32LittleEndian(
+            glb.AsSpan(8, sizeof(uint)),
+            checked((uint)glb.Length + 4));
+        DelegateHttpMessageHandler handler = GlbHandler(glb);
+        Tripo.Mcp.ArtifactStager stager = new(new HttpClient(handler));
+
+        Tripo.Mcp.TripoApiException exception =
+            await Assert.ThrowsAsync<Tripo.Mcp.TripoApiException>(
+                () => stager.StageGlbAsync(GlbUri, CancellationToken.None));
+
+        Assert.Contains("invalid", exception.Message, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public async Task StageGlbAsyncRejectsEmbeddedUriReference()
+    {
+        using TemporaryDataRoot dataRoot = new();
+        byte[] glb = CreateGlb(
+            """
+            {"asset":{"version":"2.0"},"buffers":[{"byteLength":0,"uri":"data:application/octet-stream;base64,"}]}
+            """);
+        DelegateHttpMessageHandler handler = GlbHandler(glb);
+        Tripo.Mcp.ArtifactStager stager = new(new HttpClient(handler));
+
+        Tripo.Mcp.TripoApiException exception =
+            await Assert.ThrowsAsync<Tripo.Mcp.TripoApiException>(
+                () => stager.StageGlbAsync(GlbUri, CancellationToken.None));
+
+        Assert.Contains("invalid", exception.Message, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public async Task StageGlbAsyncRejectsNonHttpsUriBeforeNetworkCall()
+    {
+        using TemporaryDataRoot dataRoot = new();
+        DelegateHttpMessageHandler handler = GlbHandler(
+            CreateGlb("""{"asset":{"version":"2.0"}}"""));
+        Tripo.Mcp.ArtifactStager stager = new(new HttpClient(handler));
+
+        await Assert.ThrowsAsync<Tripo.Mcp.TripoApiException>(
+            () => stager.StageGlbAsync(
+                new Uri("http://cdn.example.test/model.glb"),
+                CancellationToken.None));
+
+        Assert.Equal(0, handler.CallCount);
+    }
+
+    [Fact]
+    public async Task StageGlbAsyncConcurrentIdenticalContentConverges()
+    {
+        using TemporaryDataRoot dataRoot = new();
+        byte[] glb = CreateGlb("""{"asset":{"version":"2.0"}}""");
+        TaskCompletionSource release = new(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        int arrivals = 0;
+        DelegateHttpMessageHandler handler = new(async (_, _) =>
+        {
+            if (Interlocked.Increment(ref arrivals) == 2)
+            {
+                release.TrySetResult();
+            }
+
+            await release.Task;
+            return new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new ByteArrayContent(glb),
+            };
+        });
+        HttpClient httpClient = new(handler);
+        Tripo.Mcp.ArtifactStager first = new(httpClient);
+        Tripo.Mcp.ArtifactStager second = new(httpClient);
+
+        Tripo.Bridge.StagedGlbArtifact[] results = await Task.WhenAll(
+            first.StageGlbAsync(GlbUri, CancellationToken.None),
+            second.StageGlbAsync(GlbUri, CancellationToken.None));
+
+        Assert.Equal(results[0].ArtifactId, results[1].ArtifactId);
+        Assert.Equal(results[0].RootDirectory, results[1].RootDirectory);
+        Assert.Equal(
+            glb,
+            await File.ReadAllBytesAsync(
+                Path.Combine(results[0].RootDirectory, "model.glb")));
+        Assert.True(File.Exists(
+            Path.Combine(results[0].RootDirectory, "manifest.json")));
+    }
+
+    [Fact]
+    public async Task StageGlbAsyncRehashesCompletedArtifactBeforeReuse()
+    {
+        using TemporaryDataRoot dataRoot = new();
+        byte[] glb = CreateGlb("""{"asset":{"version":"2.0"}}""");
+        DelegateHttpMessageHandler handler = GlbHandler(glb);
+        Tripo.Mcp.ArtifactStager stager = new(new HttpClient(handler));
+        Tripo.Bridge.StagedGlbArtifact staged =
+            await stager.StageGlbAsync(GlbUri, CancellationToken.None);
+        byte[] tampered = [.. glb];
+        tampered[^1] ^= 1;
+        await File.WriteAllBytesAsync(
+            Path.Combine(staged.RootDirectory, staged.GlbEntry),
+            tampered);
+
+        Tripo.Mcp.TripoApiException exception =
+            await Assert.ThrowsAsync<Tripo.Mcp.TripoApiException>(
+                () => stager.StageGlbAsync(GlbUri, CancellationToken.None));
+
+        Assert.Contains(
+            "collision",
+            exception.Message,
+            StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public async Task StageGlbAsyncRejectsChangedCompletionManifest()
+    {
+        using TemporaryDataRoot dataRoot = new();
+        byte[] glb = CreateGlb("""{"asset":{"version":"2.0"}}""");
+        DelegateHttpMessageHandler handler = GlbHandler(glb);
+        Tripo.Mcp.ArtifactStager stager = new(new HttpClient(handler));
+        Tripo.Bridge.StagedGlbArtifact staged =
+            await stager.StageGlbAsync(GlbUri, CancellationToken.None);
+        await File.WriteAllTextAsync(
+            Path.Combine(staged.RootDirectory, "manifest.json"),
+            "{}");
+
+        Tripo.Mcp.TripoApiException exception =
+            await Assert.ThrowsAsync<Tripo.Mcp.TripoApiException>(
+                () => stager.StageGlbAsync(GlbUri, CancellationToken.None));
+
+        Assert.Contains(
+            "collision",
+            exception.Message,
+            StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public async Task StageGlbAsyncRejectsSymlinkedCompletionManifest()
+    {
+        if (OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        using TemporaryDataRoot dataRoot = new();
+        byte[] glb = CreateGlb("""{"asset":{"version":"2.0"}}""");
+        Tripo.Mcp.ArtifactStager stager =
+            new(new HttpClient(GlbHandler(glb)));
+        Tripo.Bridge.StagedGlbArtifact staged =
+            await stager.StageGlbAsync(GlbUri, CancellationToken.None);
+        string manifest = Path.Combine(staged.RootDirectory, "manifest.json");
+        File.Delete(manifest);
+        string target = Path.Combine(dataRoot.Path, "outside-manifest");
+        await File.WriteAllTextAsync(target, "{}");
+        File.CreateSymbolicLink(manifest, target);
+
+        await Assert.ThrowsAsync<Tripo.Mcp.TripoApiException>(
+            () => stager.StageGlbAsync(GlbUri, CancellationToken.None));
+
+        Assert.Equal("{}", await File.ReadAllTextAsync(target));
+    }
+
+    [Fact]
+    public async Task StageGlbAsyncRejectsSymlinkedConfiguredRootBeforeNetwork()
+    {
+        if (OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        using TemporaryDataRoot dataRoot = new();
+        string realRoot = Path.Combine(dataRoot.Path, "real-root");
+        string linkedRoot = Path.Combine(dataRoot.Path, "linked-root");
+        Directory.CreateDirectory(realRoot);
+        Directory.CreateSymbolicLink(linkedRoot, realRoot);
+        Environment.SetEnvironmentVariable(
+            Tripo.Bridge.BridgePaths.LocalDataEnvironmentVariable,
+            linkedRoot);
+        DelegateHttpMessageHandler handler = GlbHandler(
+            CreateGlb("""{"asset":{"version":"2.0"}}"""));
+        Tripo.Mcp.ArtifactStager stager = new(new HttpClient(handler));
+
+        try
+        {
+            Tripo.Mcp.TripoApiException exception =
+                await Assert.ThrowsAsync<Tripo.Mcp.TripoApiException>(
+                    () => stager.StageGlbAsync(
+                        GlbUri,
+                        CancellationToken.None));
+
+            Assert.Contains(
+                "collision",
+                exception.Message,
+                StringComparison.OrdinalIgnoreCase);
+            Assert.Equal(0, handler.CallCount);
+            Assert.Empty(Directory.EnumerateFileSystemEntries(realRoot));
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable(
+                Tripo.Bridge.BridgePaths.LocalDataEnvironmentVariable,
+                dataRoot.Path);
+        }
+    }
+
+    [Fact]
+    public async Task StageGlbAsyncRejectsSymlinkedRootAncestorBeforeNetwork()
+    {
+        if (OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        using TemporaryDataRoot dataRoot = new();
+        string realParent = Path.Combine(dataRoot.Path, "real-parent");
+        string linkedParent = Path.Combine(dataRoot.Path, "linked-parent");
+        Directory.CreateDirectory(realParent);
+        Directory.CreateSymbolicLink(linkedParent, realParent);
+        Environment.SetEnvironmentVariable(
+            Tripo.Bridge.BridgePaths.LocalDataEnvironmentVariable,
+            Path.Combine(linkedParent, "configured-root"));
+        DelegateHttpMessageHandler handler = GlbHandler(
+            CreateGlb("""{"asset":{"version":"2.0"}}"""));
+        Tripo.Mcp.ArtifactStager stager = new(new HttpClient(handler));
+
+        try
+        {
+            await Assert.ThrowsAsync<Tripo.Mcp.TripoApiException>(
+                () => stager.StageGlbAsync(
+                    GlbUri,
+                    CancellationToken.None));
+
+            Assert.Equal(0, handler.CallCount);
+            Assert.False(Directory.Exists(
+                Path.Combine(realParent, "configured-root")));
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable(
+                Tripo.Bridge.BridgePaths.LocalDataEnvironmentVariable,
+                dataRoot.Path);
+        }
+    }
+
+    [Fact]
+    public async Task StageGlbAsyncRejectsSymlinkedArtifactWithoutWritingTarget()
+    {
+        if (OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        using TemporaryDataRoot dataRoot = new();
+        byte[] glb = CreateGlb("""{"asset":{"version":"2.0"}}""");
+        string staging = Tripo.Bridge.BridgePaths.GetStagingDirectory();
+        string target = Path.Combine(dataRoot.Path, "outside-target");
+        Directory.CreateDirectory(target);
+        Directory.CreateSymbolicLink(
+            Path.Combine(staging, ExpectedGlbArtifactId(glb)),
+            target);
+        Tripo.Mcp.ArtifactStager stager =
+            new(new HttpClient(GlbHandler(glb)));
+
+        Tripo.Mcp.TripoApiException exception =
+            await Assert.ThrowsAsync<Tripo.Mcp.TripoApiException>(
+                () => stager.StageGlbAsync(
+                    GlbUri,
+                    CancellationToken.None));
+
+        Assert.Contains(
+            "collision",
+            exception.Message,
+            StringComparison.OrdinalIgnoreCase);
+        Assert.Empty(Directory.EnumerateFileSystemEntries(target));
+    }
 
     [Fact]
     public async Task StageBundleAsyncDoesNotForwardAuthorization()
@@ -375,6 +722,28 @@ public sealed class ArtifactStagerTests
                     Content = new ByteArrayContent(archive),
                 }));
 
+    private static DelegateHttpMessageHandler GlbHandler(byte[] glb) =>
+        new((_, _) =>
+            Task.FromResult(
+                new HttpResponseMessage(HttpStatusCode.OK)
+                {
+                    Content = new ByteArrayContent(glb),
+                }));
+
+    private static string ExpectedGlbArtifactId(byte[] glb)
+    {
+        string sha256 =
+            Convert.ToHexString(SHA256.HashData(glb)).ToLowerInvariant();
+        string descriptor = string.Concat(
+            sha256,
+            "\n",
+            glb.LongLength.ToString(CultureInfo.InvariantCulture),
+            "\n");
+        return Convert.ToHexString(
+                SHA256.HashData(Encoding.UTF8.GetBytes(descriptor)))
+            .ToLowerInvariant();
+    }
+
     private static string ExpectedBundleId(
         params (string RelativePath, byte[] Content)[] files)
     {
@@ -442,5 +811,31 @@ public sealed class ArtifactStagerTests
         }
 
         return buffer.ToArray();
+    }
+
+    private static byte[] CreateGlb(string json)
+    {
+        byte[] jsonBytes = Encoding.UTF8.GetBytes(json);
+        int paddedJsonLength = checked((jsonBytes.Length + 3) & ~3);
+        int totalLength = checked(12 + 8 + paddedJsonLength);
+        byte[] glb = new byte[totalLength];
+        BinaryPrimitives.WriteUInt32LittleEndian(
+            glb.AsSpan(0, sizeof(uint)),
+            0x46546c67);
+        BinaryPrimitives.WriteUInt32LittleEndian(
+            glb.AsSpan(4, sizeof(uint)),
+            2);
+        BinaryPrimitives.WriteUInt32LittleEndian(
+            glb.AsSpan(8, sizeof(uint)),
+            checked((uint)totalLength));
+        BinaryPrimitives.WriteUInt32LittleEndian(
+            glb.AsSpan(12, sizeof(uint)),
+            checked((uint)paddedJsonLength));
+        BinaryPrimitives.WriteUInt32LittleEndian(
+            glb.AsSpan(16, sizeof(uint)),
+            0x4e4f534a);
+        glb.AsSpan(20, paddedJsonLength).Fill((byte)' ');
+        jsonBytes.CopyTo(glb, 20);
+        return glb;
     }
 }

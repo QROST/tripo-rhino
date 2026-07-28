@@ -204,6 +204,19 @@ public sealed record HostControlObjConversionCreationReceipt(
     string ConversionTaskId,
     string Format);
 
+public sealed record HostControlImportGenerationGlbRequest(
+    string GenerationTaskId,
+    string Name,
+    string DocumentSessionId,
+    string OperationId,
+    bool ApplyMaterials);
+
+public sealed record HostControlGenerationGlbImportReceipt(
+    string OperationId,
+    string GenerationTaskId,
+    decimal? GenerationCreditsConsumed,
+    HostImportReceipt HostReceipt);
+
 public sealed record HostControlImportObjTaskRequest(
     string ConversionTaskId,
     string Name,

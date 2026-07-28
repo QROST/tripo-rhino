@@ -173,6 +173,44 @@ public sealed class TripoTools
             cancellationToken);
 
     [McpServerTool(
+        Name = "tripo_import_generation_glb",
+        Title = "Import a Tripo generation GLB into Rhino",
+        ReadOnly = false,
+        Destructive = false,
+        Idempotent = true,
+        OpenWorld = true,
+        UseStructuredContent = true)]
+    [Description(
+        "Download, validate, and natively import one successful Tripo generation " +
+        "task's GLB into the exact active Rhino document. This skips OBJ conversion, " +
+        "creates no new Tripo task, and preserves Rhino-native PBR materials.")]
+    public Task<GenerationGlbImportReceipt> ImportGenerationGlbAsync(
+        [Description("Successful Tripo v3 generation task ID.")]
+        string generationTaskId,
+        [Description("Rhino block name containing 1 to 128 characters.")]
+        string name,
+        [Description(
+            "Exact document-session UUID returned by tripo_host_context.")]
+        string documentSessionId,
+        [Description(
+            "Caller-generated UUID. Reuse the exact UUID when retrying this import.")]
+        string operationId,
+        [Description(
+            "Must be true. Direct GLB import preserves native PBR materials; use " +
+            "the OBJ compatibility path for geometry-only import.")]
+        bool applyMaterials = true,
+        CancellationToken cancellationToken = default) =>
+        InvokeAsync(
+            () => _workflow.ImportGenerationGlbAsync(
+                generationTaskId,
+                name,
+                documentSessionId,
+                operationId,
+                applyMaterials,
+                cancellationToken),
+            cancellationToken);
+
+    [McpServerTool(
         Name = "tripo_create_obj_conversion",
         Title = "Create a Tripo OBJ conversion",
         ReadOnly = false,

@@ -8,8 +8,9 @@ internal sealed class TemporaryDataRoot : IDisposable
 
     public TemporaryDataRoot()
     {
+        string temporaryDirectory = CanonicalTemporaryDirectory();
         Path = System.IO.Path.Combine(
-            System.IO.Path.GetTempPath(),
+            temporaryDirectory,
             "tripo-mcp-tests",
             Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(Path);
@@ -21,6 +22,25 @@ internal sealed class TemporaryDataRoot : IDisposable
     }
 
     public string Path { get; }
+
+    private static string CanonicalTemporaryDirectory()
+    {
+        string temporaryDirectory = System.IO.Path.GetTempPath();
+        if (!OperatingSystem.IsMacOS())
+        {
+            return temporaryDirectory;
+        }
+
+        return temporaryDirectory switch
+        {
+            "/tmp/" => "/private/tmp/",
+            _ when temporaryDirectory.StartsWith(
+                "/var/",
+                StringComparison.Ordinal) =>
+                "/private" + temporaryDirectory,
+            _ => temporaryDirectory,
+        };
+    }
 
     public void Dispose()
     {

@@ -60,6 +60,16 @@ public interface ITripoWorkflow
         bool applyMaterials,
         CancellationToken cancellationToken);
 
+    Task<GenerationGlbImportReceipt> ImportGenerationGlbAsync(
+        string generationTaskId,
+        string name,
+        string documentSessionId,
+        string operationId,
+        bool applyMaterials,
+        CancellationToken cancellationToken) =>
+        throw new NotSupportedException(
+            "This workflow does not support direct GLB import.");
+
     Task<ObjTaskStageReceipt> StageObjTaskAsync(
         string conversionTaskId,
         string documentSessionId,

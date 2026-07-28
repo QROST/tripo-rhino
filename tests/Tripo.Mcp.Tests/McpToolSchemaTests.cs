@@ -7,7 +7,7 @@ namespace Tripo.Mcp.Tests;
 public sealed class McpToolSchemaTests
 {
     [Fact]
-    public void ToolDiscoveryExposesOnlyTheEightRecoverableTools()
+    public void ToolDiscoveryExposesOnlyTheNineRecoverableTools()
     {
         ServiceCollection services = new();
         services
@@ -26,6 +26,7 @@ public sealed class McpToolSchemaTests
                 "tripo_create_obj_conversion",
                 "tripo_create_text_task",
                 "tripo_host_context",
+                "tripo_import_generation_glb",
                 "tripo_import_obj_task",
                 "tripo_operation_status",
                 "tripo_stage_local_image",
@@ -96,5 +97,17 @@ public sealed class McpToolSchemaTests
             "confirmExternalCost",
             importSchema,
             StringComparison.Ordinal);
+
+        McpServerTool glbImport = tools.Single(
+            tool => tool.ProtocolTool.Name == "tripo_import_generation_glb");
+        string glbSchema = glbImport.ProtocolTool.InputSchema.ToString();
+        Assert.Contains("generationTaskId", glbSchema, StringComparison.Ordinal);
+        Assert.Contains("operationId", glbSchema, StringComparison.Ordinal);
+        Assert.Contains("applyMaterials", glbSchema, StringComparison.Ordinal);
+        Assert.DoesNotContain(
+            "confirmExternalCost",
+            glbSchema,
+            StringComparison.Ordinal);
+        Assert.True(glbImport.ProtocolTool.Annotations?.IdempotentHint);
     }
 }

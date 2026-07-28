@@ -686,6 +686,176 @@ public sealed class TripoWorkflowTests : IDisposable
     }
 
     [Fact]
+    public async Task DirectGlbImportSkipsObjConversionAndKeepsSignedUrlOutOfReceipt()
+    {
+        string requestedSession = Guid.NewGuid().ToString("D");
+        string operationId = Guid.NewGuid().ToString("D");
+        const string signedUrl =
+            "https://cdn.example.test/model.glb?token=secret-download-token";
+        FakeApiClient api = new();
+        api.TaskSnapshots.Enqueue(Success(
+            "task_generation123",
+            "text_to_model",
+            signedUrl,
+            credits: 3));
+        FakeHostConnection host = new();
+        host.Contexts.Enqueue(GlbContext(requestedSession));
+        host.Contexts.Enqueue(GlbContext(requestedSession));
+        FakeArtifactStager stager = new();
+        Tripo.Mcp.TripoWorkflow workflow = CreateWorkflow(api, stager, host);
+
+        Tripo.Mcp.GenerationGlbImportReceipt receipt =
+            await workflow.ImportGenerationGlbAsync(
+                "task_generation123",
+                "PBR Chair",
+                requestedSession,
+                operationId,
+                applyMaterials: true,
+                CancellationToken.None);
+        string serialized = System.Text.Json.JsonSerializer.Serialize(receipt);
+
+        Assert.Equal(operationId, receipt.OperationId);
+        Assert.Equal("task_generation123", receipt.GenerationTaskId);
+        Assert.Equal(3, receipt.GenerationCreditsConsumed);
+        Assert.Equal(1, stager.GlbCallCount);
+        Assert.Equal(signedUrl, stager.LastGlbUri?.AbsoluteUri);
+        Assert.Equal(1, host.GlbImportCalls);
+        Assert.Equal(0, api.CreateConversionCalls);
+        Assert.Equal(operationId, host.LastGlbImportRequest?.IdempotencyKey);
+        Assert.DoesNotContain("secret-download-token", serialized);
+        Assert.DoesNotContain("cdn.example.test", serialized);
+    }
+
+    [Fact]
+    public async Task DirectGlbImportRejectsRevitBeforeProviderRead()
+    {
+        string requestedSession = Guid.NewGuid().ToString("D");
+        FakeApiClient api = new();
+        FakeHostConnection host = new();
+        host.Contexts.Enqueue(Context(requestedSession, "revit"));
+        FakeArtifactStager stager = new();
+        Tripo.Mcp.TripoWorkflow workflow = CreateWorkflow(api, stager, host);
+
+        await Assert.ThrowsAsync<Tripo.Mcp.TripoWorkflowException>(
+            () => workflow.ImportGenerationGlbAsync(
+                "task_generation123",
+                "Chair",
+                requestedSession,
+                Guid.NewGuid().ToString("D"),
+                applyMaterials: true,
+                CancellationToken.None));
+
+        Assert.Equal(0, api.GetTaskCalls);
+        Assert.Equal(0, stager.GlbCallCount);
+        Assert.Equal(0, host.GlbImportCalls);
+    }
+
+    [Fact]
+    public async Task DirectGlbImportRequiresAdvertisedBridgeCapability()
+    {
+        string requestedSession = Guid.NewGuid().ToString("D");
+        FakeApiClient api = new();
+        FakeHostConnection host = new();
+        host.Contexts.Enqueue(Context(requestedSession));
+        FakeArtifactStager stager = new();
+        Tripo.Mcp.TripoWorkflow workflow = CreateWorkflow(api, stager, host);
+
+        Tripo.Mcp.TripoWorkflowException exception =
+            await Assert.ThrowsAsync<Tripo.Mcp.TripoWorkflowException>(
+                () => workflow.ImportGenerationGlbAsync(
+                    "task_generation123",
+                    "Chair",
+                    requestedSession,
+                    Guid.NewGuid().ToString("D"),
+                    applyMaterials: true,
+                    CancellationToken.None));
+
+        Assert.Contains("does not advertise", exception.Message);
+        Assert.Equal(0, api.GetTaskCalls);
+        Assert.Equal(0, stager.GlbCallCount);
+        Assert.Equal(0, host.GlbImportCalls);
+    }
+
+    [Fact]
+    public async Task DirectGlbDocumentSwitchAfterStagingPreventsHostMutation()
+    {
+        string requestedSession = Guid.NewGuid().ToString("D");
+        FakeApiClient api = new();
+        api.TaskSnapshots.Enqueue(Success(
+            "task_generation123",
+            "image_to_model",
+            "https://cdn.example.test/model.glb"));
+        FakeHostConnection host = new();
+        host.Contexts.Enqueue(GlbContext(requestedSession));
+        host.Contexts.Enqueue(GlbContext(Guid.NewGuid().ToString("D")));
+        FakeArtifactStager stager = new();
+        Tripo.Mcp.TripoWorkflow workflow = CreateWorkflow(api, stager, host);
+
+        await Assert.ThrowsAsync<Tripo.Mcp.TripoWorkflowException>(
+            () => workflow.ImportGenerationGlbAsync(
+                "task_generation123",
+                "Chair",
+                requestedSession,
+                Guid.NewGuid().ToString("D"),
+                applyMaterials: true,
+                CancellationToken.None));
+
+        Assert.Equal(1, stager.GlbCallCount);
+        Assert.Equal(0, host.GlbImportCalls);
+        Assert.Equal(0, api.CreateConversionCalls);
+    }
+
+    [Fact]
+    public async Task DirectGlbRejectsConversionTaskBeforeStaging()
+    {
+        string requestedSession = Guid.NewGuid().ToString("D");
+        FakeApiClient api = new();
+        api.TaskSnapshots.Enqueue(Success(
+            "task_conversion123",
+            "convert_model",
+            "https://cdn.example.test/model.glb"));
+        FakeHostConnection host = new();
+        host.Contexts.Enqueue(GlbContext(requestedSession));
+        FakeArtifactStager stager = new();
+        Tripo.Mcp.TripoWorkflow workflow = CreateWorkflow(api, stager, host);
+
+        await Assert.ThrowsAsync<Tripo.Mcp.TripoWorkflowException>(
+            () => workflow.ImportGenerationGlbAsync(
+                "task_conversion123",
+                "Chair",
+                requestedSession,
+                Guid.NewGuid().ToString("D"),
+                applyMaterials: true,
+                CancellationToken.None));
+
+        Assert.Equal(1, api.GetTaskCalls);
+        Assert.Equal(0, stager.GlbCallCount);
+        Assert.Equal(0, host.GlbImportCalls);
+    }
+
+    [Fact]
+    public async Task DirectGlbRejectsGeometryOnlyModeBeforeAnyExternalRead()
+    {
+        FakeApiClient api = new();
+        FakeHostConnection host = new();
+        FakeArtifactStager stager = new();
+        Tripo.Mcp.TripoWorkflow workflow = CreateWorkflow(api, stager, host);
+
+        await Assert.ThrowsAsync<ArgumentException>(
+            () => workflow.ImportGenerationGlbAsync(
+                "task_generation123",
+                "Chair",
+                Guid.NewGuid().ToString("D"),
+                Guid.NewGuid().ToString("D"),
+                applyMaterials: false,
+                CancellationToken.None));
+
+        Assert.Equal(0, host.ContextCalls);
+        Assert.Equal(0, api.GetTaskCalls);
+        Assert.Equal(0, stager.GlbCallCount);
+    }
+
+    [Fact]
     public async Task DocumentSwitchAfterStagingPreventsHostMutation()
     {
         string requestedSession = Guid.NewGuid().ToString("D");
@@ -1262,6 +1432,21 @@ public sealed class TripoWorkflowTests : IDisposable
                 Tripo.Bridge.BridgeConstants.ImportMeshMethod,
             ]);
 
+    private static Tripo.Bridge.HostContextReceipt GlbContext(
+        string sessionId) =>
+        new(
+            "rhino",
+            "8-test",
+            Environment.ProcessId,
+            sessionId,
+            "Test",
+            "Meters",
+            [
+                Tripo.Bridge.BridgeConstants.ContextMethod,
+                Tripo.Bridge.BridgeConstants.ImportMeshMethod,
+                Tripo.Bridge.BridgeConstants.ImportGlbMethod,
+            ]);
+
     private static Tripo.Bridge.StagedImageTransfer ImageTransfer() =>
         new(
             "11111111-1111-1111-1111-111111111111",
@@ -1489,6 +1674,10 @@ public sealed class TripoWorkflowTests : IDisposable
     {
         public int CallCount { get; private set; }
 
+        public int GlbCallCount { get; private set; }
+
+        public Uri? LastGlbUri { get; private set; }
+
         public string? MtlEntry { get; init; }
 
         public Task<Tripo.Bridge.StagedBundle> StageBundleAsync(
@@ -1516,6 +1705,24 @@ public sealed class TripoWorkflowTests : IDisposable
                     entries,
                     "/not-used-in-fake"));
         }
+
+        public Task<Tripo.Bridge.StagedGlbArtifact> StageGlbAsync(
+            Uri modelUri,
+            CancellationToken cancellationToken)
+        {
+            GlbCallCount++;
+            LastGlbUri = modelUri;
+            Tripo.Bridge.StagedBundleEntry entry = new(
+                "model.glb",
+                new string('d', 64),
+                128);
+            return Task.FromResult(
+                new Tripo.Bridge.StagedGlbArtifact(
+                    new string('e', 64),
+                    "model.glb",
+                    entry,
+                    "/not-used-in-fake"));
+        }
     }
 
     private sealed class FakeHostConnection : Tripo.Mcp.IHostConnection
@@ -1526,7 +1733,15 @@ public sealed class TripoWorkflowTests : IDisposable
 
         public int ImportCalls { get; private set; }
 
+        public int GlbImportCalls { get; private set; }
+
         public Tripo.Bridge.ImportMeshRequest? LastImportRequest { get; private set; }
+
+        public Tripo.Bridge.ImportGlbRequest? LastGlbImportRequest
+        {
+            get;
+            private set;
+        }
 
         public Task<Tripo.Bridge.HostContextReceipt> GetContextAsync(
             CancellationToken cancellationToken)
@@ -1554,6 +1769,28 @@ public sealed class TripoWorkflowTests : IDisposable
                     request.ImportMode,
                     request.ApplyMaterials && request.MtlEntry is not null ? 1 : 0,
                     0,
+                    null));
+        }
+
+        public Task<Tripo.Bridge.HostImportReceipt> ImportGlbAsync(
+            Tripo.Bridge.ImportGlbRequest request,
+            CancellationToken cancellationToken)
+        {
+            GlbImportCalls++;
+            LastGlbImportRequest = request;
+            return Task.FromResult(
+                new Tripo.Bridge.HostImportReceipt(
+                    "rhino",
+                    request.DocumentSessionId,
+                    request.IdempotencyKey,
+                    Guid.NewGuid().ToString("D"),
+                    3,
+                    1,
+                    0,
+                    "committed",
+                    "glb_instance",
+                    1,
+                    1,
                     null));
         }
     }

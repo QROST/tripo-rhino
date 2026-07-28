@@ -462,6 +462,71 @@ public sealed class TripoWorkflow : ITripoWorkflow
             hostReceipt);
     }
 
+    public async Task<GenerationGlbImportReceipt> ImportGenerationGlbAsync(
+        string generationTaskId,
+        string name,
+        string documentSessionId,
+        string operationId,
+        bool applyMaterials,
+        CancellationToken cancellationToken)
+    {
+        TripoV3Client.ValidateTaskId(generationTaskId);
+        string canonicalOperationId = ValidateImportArguments(
+            name,
+            documentSessionId,
+            operationId);
+        if (!applyMaterials)
+        {
+            throw new ArgumentException(
+                "Direct GLB import preserves Rhino-native PBR materials. Use the " +
+                "OBJ compatibility path for a geometry-only import.",
+                nameof(applyMaterials));
+        }
+
+        await RequireRhinoGlbContextAsync(
+                documentSessionId,
+                cancellationToken)
+            .ConfigureAwait(false);
+
+        TripoTaskSnapshot generationTask = await GetTaskWithReadRetryAsync(
+                generationTaskId,
+                cancellationToken)
+            .ConfigureAwait(false);
+        EnsureSuccessfulTask(generationTask);
+        EnsureGenerationTask(generationTask);
+        string? modelUrl = generationTask.Output?.ModelUrl;
+        if (!Uri.TryCreate(modelUrl, UriKind.Absolute, out Uri? modelUri))
+        {
+            throw new TripoWorkflowException(
+                "The successful generation task did not return a valid GLB model URL.");
+        }
+
+        Tripo.Bridge.StagedGlbArtifact artifact =
+            await _artifactStager.StageGlbAsync(modelUri, cancellationToken)
+                .ConfigureAwait(false);
+
+        await RequireRhinoGlbContextAsync(
+                documentSessionId,
+                cancellationToken)
+            .ConfigureAwait(false);
+        Tripo.Bridge.ImportGlbRequest importRequest = new(
+            documentSessionId,
+            artifact.ArtifactId,
+            artifact.GlbEntry,
+            artifact.Entry,
+            name,
+            canonicalOperationId,
+            ApplyMaterials: true);
+        Tripo.Bridge.HostImportReceipt hostReceipt =
+            await _hostConnection.ImportGlbAsync(importRequest, cancellationToken)
+                .ConfigureAwait(false);
+        return new GenerationGlbImportReceipt(
+            canonicalOperationId,
+            generationTaskId,
+            generationTask.CreditsConsumed,
+            hostReceipt);
+    }
+
     public async Task<ObjTaskStageReceipt> StageObjTaskAsync(
         string conversionTaskId,
         string documentSessionId,
@@ -546,6 +611,39 @@ public sealed class TripoWorkflow : ITripoWorkflow
         {
             throw new TripoWorkflowException(
                 "The requested document session is not the host's active document.");
+        }
+
+        return context;
+    }
+
+    private async Task<Tripo.Bridge.HostContextReceipt>
+        RequireRhinoGlbContextAsync(
+            string documentSessionId,
+            CancellationToken cancellationToken)
+    {
+        Tripo.Bridge.HostContextReceipt context =
+            await RequireActiveDocumentAsync(
+                    documentSessionId,
+                    cancellationToken)
+                .ConfigureAwait(false);
+        if (!string.Equals(
+                context.Host?.Trim(),
+                "rhino",
+                StringComparison.OrdinalIgnoreCase))
+        {
+            throw new TripoWorkflowException(
+                "Direct GLB import is available only in Rhino. Use the OBJ " +
+                "compatibility path for this host.");
+        }
+
+        if (!context.Capabilities.Contains(
+                Tripo.Bridge.BridgeConstants.ImportGlbMethod,
+                StringComparer.Ordinal))
+        {
+            throw new TripoWorkflowException(
+                "The connected Rhino plugin does not advertise direct GLB import. " +
+                "Install the matching plugin/sidecar build or use the OBJ " +
+                "compatibility path.");
         }
 
         return context;
