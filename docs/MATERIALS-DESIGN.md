@@ -1,25 +1,96 @@
-# Materials + import-target design (bridge protocol v2)
+# Materials + import-target design (bridge protocol v2 + Rhino GLB capability)
 
 > Repository scope: Rhino is the implementation shipped here. Revit material
 > notes are retained as protocol compatibility constraints for the copied
 > bridge/runtime snapshot.
 
-Status: locked for the `harden/production-pass-1` implementation wave. Changes
-require updating this document first.
+Status: locked for the Rhino direct-GLB implementation wave. Changes require
+updating this document first.
 
 ## Route decision
 
-Materials travel as **OBJ + MTL + baked textures** (`bake=true`), not GLB.
+Rhino's recommended path imports the successful generation task's **binary
+glTF (`.glb`)** directly. **OBJ + MTL + baked textures** (`bake=true`) remains
+an explicit compatibility fallback and remains the shared Rhino/Revit route.
 
-- One shared parser feeds both hosts; no new binary-format dependency.
+- Direct GLB is a Rhino-only, capability-gated branch. It does not change
+  Revit's bridge behavior, the shared OBJ parser, or Grasshopper's scalar
+  `Mesh` output.
+- The direct branch skips the separate billable conversion task. Generation
+  and import still use different UUIDs; import is local and idempotent.
+- The expiring signed `model_url` never crosses the bridge or enters recovery
+  state. The sidecar downloads it into private content-addressed staging and
+  sends only a relative entry, exact length, and SHA-256 to Rhino.
+- Rhino uses its native glTF importer so PBR render materials and embedded
+  textures are not reduced to OBJ's baked diffuse ceiling. The result is
+  wrapped in one outer block instance for a single durable import identity.
+- One shared OBJ parser continues to feed both hosts; no binary parser is
+  introduced on the Revit path.
 - Revit's `TessellatedShapeBuilder` cannot consume arbitrary UV-mapped PBR on
   tessellated geometry — its realistic ceiling is per-face-group color and a
   baked diffuse appearance, which OBJ+MTL fully carries.
-- Rhino applies the baked diffuse via `TextureCoordinates` + a render
-  material; a native-GLB Rhino path stays a declined-for-now enhancement.
+- Rhino's OBJ fallback continues to apply the baked diffuse via
+  `TextureCoordinates` + a render material.
 - Tripo facts (verified against live docs 2026-07-23): native generation
   output is GLB with full PBR; OBJ conversion with `bake=true` carries a
   single baked diffuse via `.mtl` + image files; STL/3MF are geometry-only.
+
+Direct GLB is additive. Existing `ImportMeshRequest`, OBJ paid fingerprints,
+conversion recovery, and `host.import_mesh` semantics do not change.
+
+## Rhino direct-GLB route
+
+The route is:
+
+1. Query the existing generation task and require exact `success` plus a
+   supported generation type.
+2. Require a valid absolute `model_url`, then download it through the existing
+   HTTPS/public-address/redirect/deadline/size controls.
+3. Validate the GLB container before content-addressed staging:
+   - magic `glTF`, version 2, exact declared file length;
+   - exactly one first JSON chunk and at most one following BIN chunk;
+   - no overflow, overlap, duplicate chunk, or trailing bytes;
+   - parseable JSON with `asset.version` in the 2.x family;
+   - no `uri` member on `buffers[]` or `images[]` in the first release.
+     Embedded `bufferView` content is accepted; remote, file, absolute,
+     relative, and `data:` references are all rejected.
+4. Write `<staging>/<artifactId>/model.glb` and `manifest.json` last. The
+   artifact ID is derived from a canonical descriptor containing the file
+   hash and byte length. A pre-existing completed artifact is re-hashed and
+   reused only on an exact match.
+5. Re-check the active document session after staging.
+6. Send `ImportGlbRequest` through the additive `host.import_glb` capability.
+   The bridge accepts no URL or absolute path and re-verifies containment,
+   manifest, length, hash, and GLB structure.
+7. On Rhino's UI thread, import once into a disposable headless document as a
+   preflight. Require at least one valid mesh, bounded vertices/triangles, and
+   finite geometry. This protects the user document from ordinary parse
+   failures, but it is not process isolation.
+8. In one dedicated undo record, run the native import in the active document,
+   collect only newly created top-level objects, preserve their native
+   attributes/material references, wrap them in deterministic outer block
+   definition `Tripo_<idempotencyKey>`, remove the temporary top-level
+   objects, and create one root instance carrying import identity metadata.
+
+`RhinoDoc.Import` and headless documents are supported APIs, but they are not
+transaction APIs. Failure handling therefore compares pre/post object,
+definition, material, render-material, texture, and layer state. A rollback is
+reported as clean only when one owned undo restores every captured set.
+Otherwise the result is `mutation_state_uncertain`, and the same import is not
+automatically re-dispatched.
+
+The outer definition members and root instance carry a fingerprint over the
+artifact identity, name, fixed GLB import mode, and materials policy, with the
+document session omitted exactly as on the OBJ host fingerprint. An existing
+definition without its root instance is reconciled only when every member
+holds the exact fingerprint. A different format or content under the same
+UUID is `idempotency_conflict`.
+
+The host-control method is `workflow.import_generation_glb`; the bridge method
+is `host.import_glb`. Both are advertised only for Rhino. Protocol versions
+remain unchanged because this is an additive, capability-gated method. Older
+or partially deployed host/sidecar pairs fail closed on the missing
+capability; the UI keeps OBJ available as fallback.
 
 ## Tripo request changes (MCP side)
 
