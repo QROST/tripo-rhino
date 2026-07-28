@@ -99,21 +99,33 @@ requires manual review and never triggers definition-only reconciliation.
 `committed` replay only returns `already_exists` after exact root, counts,
 recursive geometry and PBR-content digests, and member identity verification.
 An existing direct-import root without a durable committed journal fails
-closed. Journal schema 2 requires both digests; an older or incomplete record
-does not authorize replay. A different format or content under the same UUID
-is `idempotency_conflict`.
+closed. Journal schema 3 records both digests plus PBR proof version 5;
+schema-2, older-proof-version, or incomplete records explicitly require manual
+review and do not authorize replay. This is intentional: a weaker/older digest
+cannot be safely migrated without recomputing its exact proof algorithm. A
+different format or content under the same UUID is `idempotency_conflict`.
 
-The PBR-content proof is recomputed for the headless preflight, active import,
-completed definition, and committed replay. It hashes exact mesh topology,
-vertices, normals, colors, UVs, transforms, and cached mapping coordinates;
-the selected object/layer material source; effective front/back,
-plugin-specific, and subobject bindings; legacy and simulated PBR material
-values; recursive render-content type/hash/child-slot state; texture mapping
-and wrap state; and the SHA-256 bytes of every readable referenced texture
-file. Roots and definition members are compared as sorted digest multisets so
-Rhino table ordering is not treated as content. Parent-inherited materials,
-non-object plugin material sources, unreadable/unsafe texture files, cycles,
-or unsupported object types fail closed.
+The PBR-content proof has two domains. A portable semantic proof must match
+across headless preflight, active import, and completed definition. It hashes
+exact mesh topology, vertices, normals, colors, explicit UVs, transforms,
+persistent texture-mapping definitions, the selected object/layer material
+source, effective front/back/plugin/subobject bindings, legacy-material fallback
+values, and recursive render content. Render content is restricted to Rhino's
+built-in PBR/basic material and bitmap/simple-bitmap texture types. Its
+portable identity hashes type, canonical persistent RDK fields, normalized
+child-slot/on/amount state, and the SHA-256 bytes of every readable referenced
+texture file. Projection, wrapping, mapping, linear-workflow, and normal-map
+meaning are represented by those persistent fields and slot semantics;
+contextual/derived `RenderTexture` getters are not a second source of truth.
+The portable domain also excludes the document-owned RDK render hash,
+`CachedTextureCoordinates`, and exact editor/preview-only fields, all of which
+can change without changing sampled material content. The completed
+definition's document-domain proof retains the RDK render hash and becomes
+authoritative for journal commit and exact read-only replay. Roots, definition
+members, and render children are normalized rather than trusting Rhino table
+or linked-list order. Parent-inherited materials, custom/procedural render
+content, non-object plugin material sources, unreadable/unsafe texture files,
+cycles, duplicate/empty child slots, or unsupported object types fail closed.
 
 Fixed snapshots normally disappear when their read lease ends. Creation also
 performs a best-effort cleanup pass over at most 256 strictly named entries,

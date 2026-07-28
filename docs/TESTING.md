@@ -38,14 +38,12 @@ The automated suite covers:
   OBJ/MTL parsing, coordinate conversion, and parser limits;
 - GLB v2 structure, aggregate accessor/image budgets, buffer/accessor bounds,
   acyclic nodes, fixed verified snapshots, host-import journal transitions,
-  incomplete/corrupt-tail behavior, schema-2 PBR proof requirements, and
+  incomplete/corrupt-tail behavior, schema-3/PBR-proof-v5 requirements,
+  explicit older-schema refusal, and
   queued-versus-started cancellation;
 - fixed-snapshot cleanup naming, age, live/uncertain PID preservation,
   symlink/reparse rejection, bounded enumeration/mutation, quarantine restore,
   and stale tombstone deletion;
-- Rhino proof construction across headless, active, completed-definition, and
-  replay stages, including geometry, material-source/binding, recursive render
-  content, PBR values, texture mappings, and referenced texture bytes;
 - host UI state, recovery hints, explicit paid confirmations, and stable UUID
   retries;
 - host-agnostic UI render coalescing, including leading busy and trailing final
@@ -63,10 +61,20 @@ requires `git diff --check` and a clean `git status`.
 A green repository gate proves deterministic compilation and automated
 contracts against pinned reference packages. Separate macOS development-host
 testing has exercised the manual `.rhp` layout, Eto panel, Keychain-backed
-credential save/use, text generation, and two-second progress refresh. Neither
-evidence class proves that the new direct GLB/PBR path renders as intended,
-that Undo/replay is correct in a real document, that the optional GHA loads, or
-that a Windows production-user Credential Manager deployment works.
+credential save/use, text generation, and two-second progress refresh. A later
+canary ran in three independent fresh Rhino processes during proof-stability
+stress, followed by one fresh process using the exact installed
+proof-v5/schema-3 binary. Each imported the same real provider GLB as one block
+with 17,666 vertices, 19,048 triangles, one material, and four textures; an
+immediate same-UUID call returned that round's same object ID as read-only
+`already_exists`.
+That artifact exercised the Rhino proof pipeline across headless, active,
+completed-definition, committed verification, and immediate replay stages,
+including its material/texture allowlist and mapping checks. This is a
+host canary, not an automated behavior-level seam. It proves native import,
+durable receipt verification, and immediate replay for that artifact, not
+visual PBR fidelity, one-step Undo, save/reopen replay, optional GHA loading,
+or a Windows production-user Credential Manager deployment.
 
 On the Windows CI lane,
 `TRIPO_RUN_WINDOWS_CREDENTIAL_MANAGER_CANARY=1` exercises `CredWriteW`,

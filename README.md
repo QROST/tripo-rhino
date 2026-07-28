@@ -34,11 +34,14 @@ the key to Rhino settings or the `.3dm` document.
 > source, with portable control/workflow/MCP/process tests. A macOS development
 > host has exercised the manual package layout, real Eto panel, Keychain-backed
 > credential save/use, text generation, and two-second generation progress
-> refresh. Windows CI also performs an isolated, synthetic Credential Manager
-> write/read/delete canary. The new direct GLB/PBR path, optional GHA,
-> production-user Credential Manager, Windows host loading, Undo,
-> scale/orientation, performance, and visual acceptance remain separate open
-> gates.
+> refresh. The same host has also imported a real provider GLB in three
+> independent fresh Rhino processes during proof-stability stress, followed by
+> an exact installed proof-v5/schema-3 canary; every run verified same-UUID
+> read-only `already_exists` replay.
+> Windows CI also performs an isolated, synthetic Credential Manager
+> write/read/delete canary. Optional GHA loading, production-user Credential
+> Manager, Windows host loading, Undo, scale/orientation, performance, and
+> visual/material acceptance remain separate open gates.
 > There is no Yak package, installer, signing, notarization, or automatic update
 > mechanism.
 
@@ -546,14 +549,24 @@ required and the paid or native request must not be resent.
   and 32 Mi pixels in aggregate.
   Rhino's native parser still runs in the Rhino process; the headless preflight
   is isolation from the target document, not process-level crash isolation.
-- The committed proof is recomputed in the headless preflight, active
-  document, completed block definition, and read-only replay. It covers exact
-  mesh data and transforms, selected object/layer/plugin/subobject material
-  bindings, recursive render content and texture mappings, material/PBR
-  values, and SHA-256 of each readable referenced texture file. Unsupported
-  parent-inherited or non-object plugin material sources fail closed. Journal
-  schema 2 requires this proof; older or incomplete records do not authorize
-  replay.
+- A portable semantic proof must match across headless preflight, active
+  import, and completed block definition. It covers exact mesh data and UVs,
+  persistent mapping definitions, transforms, selected material source and
+  effective front/back/plugin/subobject bindings, allowlisted built-in
+  PBR/basic materials and bitmap textures, canonical persistent RDK fields,
+  recursive child-slot/on/amount state, legacy-material fallback values, and
+  SHA-256 of each readable referenced texture file. Projection, wrapping,
+  mapping, linear-workflow, and normal-map meaning are covered by those
+  persistent fields and child-slot semantics, not by derived `RenderTexture`
+  runtime getters. The portable proof excludes the document-owned render hash,
+  derived cached texture coordinates/getters, and an exact allowlist of
+  non-semantic editor/preview fields. The completed definition's document
+  proof is then stored and must match read-only replay exactly. Custom or
+  procedural render content, unsupported parent inheritance, non-object plugin
+  material sources, and unsafe/unreadable texture references fail closed.
+  Journal schema 3 records PBR proof version 5 and requires the durable proof.
+  Schema-2, older proof versions, or incomplete records fail closed with
+  explicit manual review and do not authorize replay.
 - Fixed GLB snapshots are normally removed when the import lease ends. A later
   import performs a best-effort bounded cleanup of strictly named snapshots
   older than 24 hours only when the recorded owner PID is definitely no longer
@@ -693,9 +706,10 @@ switching to `instance`.
 - No Yak package, installer, signing, notarization, or automatic update.
 - Production HTTP connections intentionally do not use system proxies.
 - Real-host acceptance is partial on macOS for panel loading, Keychain-backed
-  credentials, generation, and status polling. Direct GLB/PBR visual
-  acceptance, Undo/replay, the optional GHA, and Windows real-host behavior
-  remain open.
+  credentials, generation, status polling, direct GLB import, and immediate
+  same-UUID replay. Direct GLB/PBR visual acceptance, one-step Undo,
+  save/reopen replay, the optional GHA, and Windows real-host behavior remain
+  open.
 
 See [Architecture](./docs/ARCHITECTURE.md),
 [Materials design](./docs/MATERIALS-DESIGN.md),

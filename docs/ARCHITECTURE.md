@@ -283,11 +283,20 @@ a paid call.
   flushed append-only host journal record `prepared` exist. After wrapping the
   native result into one outer PBR block and verifying exact membership,
   geometry counts, material bindings, exact geometry digest, and recursive
-  PBR-content digest, the schema-2 journal records `committed`. The proof is
-  recomputed across headless preflight, active import, completed definition,
-  and read-only replay; it includes selected material sources, recursive render
-  content and texture mappings, PBR values, and referenced texture-file bytes.
-  `prepared`, `outcome_unknown`, corrupt, incomplete, older-schema, or
+  PBR-content digest, the schema-3 journal records `committed` with PBR proof
+  version 5. A portable
+  semantic proof (excluding document-owned render hashes, derived cached
+  texture coordinates/runtime getters, and exact non-semantic editor fields)
+  must match across headless preflight, active import, and completed definition.
+  It includes selected material sources and effective bindings, exact mesh UVs,
+  persistent texture mappings, allowlisted built-in render-content types,
+  canonical persistent RDK fields, recursive child-slot/on/amount state,
+  legacy-material fallback values, and referenced texture-file bytes.
+  Projection/wrap/mapping and linear/normal-map semantics come from those
+  persistent fields and slots rather than contextual runtime getters.
+  The completed definition's document proof is
+  authoritative for read-only replay.
+  `prepared`, `outcome_unknown`, corrupt, incomplete, schema-2/older-proof, or
   journal-less existing-root state never authorizes another native import.
 - Fixed snapshots are lease-scoped. A later import performs only a bounded,
   strict-name, non-recursive best-effort cleanup: at most 256 entries inspected
@@ -305,6 +314,12 @@ a paid call.
   by verifying the stored fingerprint on the definition's members before adding the
   missing instance.
 - Direct GLB preserves native Rhino PBR/render materials and embedded textures.
+  Its portable proof accepts only built-in PBR/basic render materials and
+  bitmap/simple-bitmap textures, then hashes canonical persistent RDK fields,
+  child-slot/on/amount semantics, effective material bindings, persistent
+  mappings, exact mesh UVs, and validated texture bytes. Derived
+  `RenderTexture` getters and exact non-semantic editor/preview fields are not
+  portable identity.
   OBJ compatibility applies baked diffuse OBJ/MTL via `TextureCoordinates` plus
   a render `Material` with an optional bitmap texture.
 - Shutdown synchronously drains panel sessions, performs the bounded sidecar

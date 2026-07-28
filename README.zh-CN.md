@@ -31,11 +31,14 @@ sidecar 是唯一解析、存储或使用 Tripo API key 的进程。plug-in 的 
 > GLB/PBR import 与 bundled sidecar layout 已存在源码，并有 portable
 > control/workflow/MCP/process tests。macOS 开发宿主已实际验证手动 package
 > layout、Eto panel、Keychain-backed credential 保存/使用、text generation 与约
-> 两秒一次的 generation progress 刷新。Windows CI 还会对隔离、合成的
-> Credential Manager target 执行 write/read/delete canary。新 direct GLB/PBR
-> 路径、可选 GHA、production-user Credential Manager、Windows 宿主加载、Undo、
-> scale/orientation、性能与视觉验收仍是彼此独立的 open gates。目前没有 Yak
-> package、安装器、签名、notarization 或自动更新机制。
+> 两秒一次的 generation progress 刷新。同一宿主还已在三个彼此独立的全新 Rhino
+> process 中用一份真实 provider GLB 做 proof-stability 压力测试，随后又对实际安装
+> 的 proof-v5/schema-3 binary 做 exact canary；每轮都验证了同 UUID 的只读
+> `already_exists` replay。
+> Windows CI 还会对隔离、合成的 Credential Manager target 执行
+> write/read/delete canary。可选 GHA 加载、production-user Credential Manager、
+> Windows 宿主加载、Undo、scale/orientation、性能与视觉/材质验收仍是彼此独立的
+> open gates。目前没有 Yak package、安装器、签名、notarization 或自动更新机制。
 
 GHA 的详细构建、安装、components、隐私与恢复说明见
 [Grasshopper 指南](./src/Tripo.Rhino.Grasshopper/README.zh-CN.md)。
@@ -481,13 +484,22 @@ block members、计数、geometry digest 与 PBR-content digest。Rhino 重启�
   data、单边 4096 pixels、单图 16 Mi pixels 与所有图片合计 32 Mi pixels。Rhino
   native parser 仍在 Rhino process 内运行；headless preflight 只隔离 target
   document，不是 process crash isolation。
-- committed proof 会在 headless preflight、active document、完成后的 block
-  definition 与只读 replay 中重新计算。它覆盖精确 mesh data 与 transforms、
-  解析后的 object/layer/plugin/subobject material bindings、递归 render content
-  与 texture mappings、material/PBR values，以及每个可读 referenced texture
-  file 的 SHA-256。parent-inherited 或 non-object plugin material source 会
-  fail closed。journal schema 2 强制要求该 proof；旧版或不完整记录不能授权
-  replay。
+- portable semantic proof 必须在 headless preflight、active import 与完成后的
+  block definition 之间一致。它覆盖精确 mesh data 与 UV、持久 mapping
+  definitions、transforms、选定 material source 与 effective
+  front/back/plugin/subobject bindings、严格 allowlist 内的内建 PBR/basic
+  materials 与 bitmap textures、canonical persistent RDK fields、递归
+  child-slot/on/amount state、legacy-material fallback values，以及每个可读
+  referenced texture file 的 SHA-256。projection、wrap、mapping、
+  linear-workflow 与 normal-map 语义由这些持久 fields 与 child-slot 语义覆盖，
+  不依赖派生的 `RenderTexture` runtime getters。portable proof 排除
+  document-owned render hash、派生的 cached texture coordinates/getters，以及
+  精确 allowlist 内不影响语义的 editor/preview fields。随后把完成 definition
+  的 document proof 持久化，只读 replay 必须与它精确一致。custom/procedural
+  render content、parent-inherited 或 non-object plugin material source，以及
+  unsafe/unreadable texture references 都会 fail closed。journal schema 3 会
+  记录 PBR proof version 5 并强制要求 durable proof；schema 2、较旧 proof
+  version 或不完整记录会明确要求人工检查，不能授权 replay。
 - fixed GLB snapshot 通常会在 import lease 结束时删除。后续 import 只会
   best-effort、有界清理严格命名且超过 24 小时的 snapshot，并且必须能确认记录的
   owner PID 已不存活。每次最多检查 256 项、mutation 16 项；symlink/reparse
@@ -609,8 +621,9 @@ Tripo task/billing history；不要自动发送另一个付费请求。进程被
 - 没有 Yak package、安装器、签名、notarization 或自动更新。
 - Production HTTP connections 有意不使用 system proxies。
 - macOS 真实宿主已部分验收 panel loading、Keychain-backed credential、
-  generation 与 status polling。Direct GLB/PBR 视觉效果、Undo/replay、可选 GHA
-  与 Windows 真实宿主行为仍待验收。
+  generation、status polling、direct GLB import 与即时同 UUID replay。
+  Direct GLB/PBR 视觉效果、one-step Undo、save/reopen replay、可选 GHA 与
+  Windows 真实宿主行为仍待验收。
 
 详细信任与验收边界见 [Architecture](./docs/ARCHITECTURE.md)、
 [Materials design](./docs/MATERIALS-DESIGN.md)、

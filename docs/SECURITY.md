@@ -258,14 +258,25 @@ same user.
 - `committed` replay is read-only. It verifies the exact root GUID, unique
   idempotency identity, stored counts, direct membership, recursive
   geometry digest, PBR-content digest, and recalculated mesh counts. The
-  PBR-content proof covers selected object/layer/plugin/subobject material
-  bindings, recursive render-content and child-slot state, legacy/simulated
-  PBR values, mappings/wrap state, and SHA-256 of readable referenced texture
-  bytes; unsupported inheritance or unsafe/unreadable texture references fail
-  closed. It never recreates a missing root or definition.
-- Journal schema 2 requires both geometry-membership and PBR-content proof. An
-  older/incomplete record, or an existing direct-import root without a durable
-  committed journal, cannot return `already_exists`.
+  portable PBR proof must match from headless preflight through active import
+  and completed definition. It covers selected material source and effective
+  front/back/plugin/subobject bindings, explicit mesh UVs, persistent mappings,
+  legacy-material fallback values, allowlisted built-in render-content types,
+  canonical persistent RDK fields, normalized child-slot/on/amount state, and
+  SHA-256 of readable referenced texture bytes. Projection/wrap/mapping and
+  linear/normal-map semantics are proved through those persistent fields and
+  slots. The cross-stage proof excludes the document-owned RDK render hash,
+  derived cached texture coordinates/runtime getters, and exact
+  editor/preview-only fields; the completed definition's document proof
+  retains the render hash. The stored document proof must match replay exactly.
+  Unsupported inheritance, custom/procedural content, duplicate/empty child
+  slots, or unsafe/unreadable texture references fail closed. Replay never
+  recreates a missing root or definition.
+- Journal schema 3 requires both geometry-membership and PBR-content proof and
+  records PBR proof version 5. A schema-2, older-proof-version, or incomplete
+  record reports an explicit unsupported-proof/manual-review error. It cannot
+  return `already_exists`, and neither can an existing direct-import root
+  without a durable committed journal.
 - Cancellation may win while UI work is queued. Once the Rhino UI mutation
   starts, the caller waits for its real completion before the fixed snapshot,
   journal lease, and single-mutation gate are released.
