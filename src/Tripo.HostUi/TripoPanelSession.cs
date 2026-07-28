@@ -20,7 +20,38 @@ public sealed record PreparedObjImport(
     string DocumentSessionId,
     string OperationId,
     string ImportMode,
-    bool ApplyMaterials);
+    bool ApplyMaterials,
+    string ArtifactFormat = "obj")
+{
+    public bool IsDirectGlb =>
+        string.Equals(ArtifactFormat, "glb", StringComparison.Ordinal);
+}
+
+public sealed record TripoPanelImportReceipt(
+    string OperationId,
+    string SourceTaskId,
+    string ArtifactFormat,
+    decimal? SourceCreditsConsumed,
+    Tripo.Bridge.HostImportReceipt HostReceipt)
+{
+    public static implicit operator TripoPanelImportReceipt(
+        Tripo.Bridge.HostControlObjTaskImportReceipt receipt) =>
+        new(
+            receipt.OperationId,
+            receipt.ConversionTaskId,
+            "obj",
+            receipt.ConversionCreditsConsumed,
+            receipt.HostReceipt);
+
+    public static implicit operator TripoPanelImportReceipt(
+        Tripo.Bridge.HostControlGenerationGlbImportReceipt receipt) =>
+        new(
+            receipt.OperationId,
+            receipt.GenerationTaskId,
+            "glb",
+            receipt.GenerationCreditsConsumed,
+            receipt.HostReceipt);
+}
 
 public sealed record TripoPanelRecoveryOperationInspection(
     string OperationId,
@@ -123,8 +154,9 @@ public sealed record TripoPanelState(
     Tripo.Bridge.HostControlTaskStatusReceipt? ConversionStatus,
     PreparedObjImport? PreparedImport,
     bool ImportDispatchAttempted,
-    Tripo.Bridge.HostControlObjTaskImportReceipt? ImportReceipt,
-    string? LastError)
+    TripoPanelImportReceipt? ImportReceipt,
+    string? LastError,
+    string? ImportFailureCode = null)
 {
     public static TripoPanelState Initial { get; } = new(
         Connected: false,
@@ -144,7 +176,8 @@ public sealed record TripoPanelState(
         PreparedImport: null,
         ImportDispatchAttempted: false,
         ImportReceipt: null,
-        LastError: null);
+        LastError: null,
+        ImportFailureCode: null);
 
     public bool HasWorkflowState =>
         PreparedGeneration is not null ||
@@ -239,11 +272,20 @@ public sealed record TripoPanelState(
 
     public bool CanDispatchPreparedImport =>
         PreparedImport is not null &&
-        ImportReceipt is null;
+        ImportReceipt is null &&
+        !ImportRequiresManualReview;
 
     public bool ImportRetryRequired =>
         CanDispatchPreparedImport &&
         ImportDispatchAttempted;
+
+    public bool ImportRequiresManualReview =>
+        ImportDispatchAttempted &&
+        ImportReceipt is null &&
+        string.Equals(
+            ImportFailureCode,
+            Tripo.Bridge.BridgeConstants.MutationStateUncertainError,
+            StringComparison.Ordinal);
 }
 
 public sealed class TripoPanelSession : IAsyncDisposable
@@ -318,6 +360,22 @@ public sealed class TripoPanelSession : IAsyncDisposable
                 Tripo.Bridge.HostContextReceipt context =
                     await client.GetHostContextAsync(token).ConfigureAwait(false);
                 EnsureHealthMatchesContext(health, context);
+                if (!health.Capabilities.Contains(
+                        Tripo.Bridge.HostControlConstants
+                            .ImportGenerationGlbMethod,
+                        StringComparer.Ordinal))
+                {
+                    context = context with
+                    {
+                        Capabilities = context.Capabilities
+                            .Where(capability => !string.Equals(
+                                capability,
+                                Tripo.Bridge.BridgeConstants.ImportGlbMethod,
+                                StringComparison.Ordinal))
+                            .ToArray(),
+                    };
+                }
+
                 TripoPanelState current = State;
                 if (current.Context is not null &&
                     !IsSameDocumentSession(current.Context, context) &&
@@ -437,6 +495,7 @@ public sealed class TripoPanelSession : IAsyncDisposable
                 ImportDispatchAttempted = false,
                 ImportReceipt = null,
                 LastError = null,
+                ImportFailureCode = null,
             });
             return prepared;
         }
@@ -602,6 +661,7 @@ public sealed class TripoPanelSession : IAsyncDisposable
                 ImportDispatchAttempted = false,
                 ImportReceipt = null,
                 LastError = null,
+                ImportFailureCode = null,
             });
             return prepared;
         }
@@ -764,6 +824,66 @@ public sealed class TripoPanelSession : IAsyncDisposable
                 ImportDispatchAttempted = false,
                 ImportReceipt = null,
                 LastError = null,
+                ImportFailureCode = null,
+            });
+            return prepared;
+        }
+        finally
+        {
+            _operationGate.Release();
+        }
+    }
+
+    public PreparedObjImport PrepareGlbImport(string name)
+    {
+        EnterSynchronousMutation();
+        try
+        {
+            EnsureNoStaleRecovery();
+            ValidateName(name);
+            TripoPanelState state = State;
+            EnsureSuccessfulTask(state.GenerationStatus, "generation");
+            Tripo.Bridge.HostContextReceipt context =
+                state.Context ??
+                throw new InvalidOperationException(
+                    "Connect to Rhino before preparing direct GLB import.");
+            if (!string.Equals(
+                    context.Host,
+                    "rhino",
+                    StringComparison.OrdinalIgnoreCase) ||
+                !context.Capabilities.Contains(
+                    Tripo.Bridge.BridgeConstants.ImportGlbMethod,
+                    StringComparer.Ordinal))
+            {
+                throw new InvalidOperationException(
+                    "The connected Rhino plugin does not advertise direct GLB " +
+                    "import. Install the matching build or use the OBJ fallback.");
+            }
+
+            if (state.PreparedImport is not null ||
+                state.ImportDispatchAttempted ||
+                state.ImportReceipt is not null)
+            {
+                throw new InvalidOperationException(
+                    "Use the prepared import operation or start a new workflow before " +
+                    "creating another operation ID.");
+            }
+
+            PreparedObjImport prepared = new(
+                state.GenerationStatus!.TaskId,
+                name,
+                state.PreparedGeneration!.DocumentSessionId,
+                Guid.NewGuid().ToString("D"),
+                "glb_instance",
+                ApplyMaterials: true,
+                ArtifactFormat: "glb");
+            UpdateState(current => current with
+            {
+                PreparedImport = prepared,
+                ImportDispatchAttempted = false,
+                ImportReceipt = null,
+                LastError = null,
+                ImportFailureCode = null,
             });
             return prepared;
         }
@@ -788,7 +908,10 @@ public sealed class TripoPanelSession : IAsyncDisposable
                 if (!current.CanDispatchPreparedImport)
                 {
                     throw new InvalidOperationException(
-                        "The prepared import already has a durable receipt.");
+                        current.ImportRequiresManualReview
+                            ? "The import state is uncertain; manual document " +
+                              "review is required and this operation must not be retried."
+                            : "The prepared import already has a durable receipt.");
                 }
                 await EnsureSessionStillActiveAsync(
                         client,
@@ -798,22 +921,85 @@ public sealed class TripoPanelSession : IAsyncDisposable
                 UpdateState(state => state with
                 {
                     ImportDispatchAttempted = true,
+                    ImportFailureCode = null,
                 });
-                Tripo.Bridge.HostControlObjTaskImportReceipt receipt =
-                    await client.ImportObjTaskAsync(
-                            new Tripo.Bridge.HostControlImportObjTaskRequest(
-                                prepared.ConversionTaskId,
-                                prepared.Name,
-                                prepared.DocumentSessionId,
-                                prepared.OperationId,
-                                prepared.ImportMode,
-                                prepared.ApplyMaterials),
-                            token)
-                        .ConfigureAwait(false);
+                TripoPanelImportReceipt receipt;
+                try
+                {
+                    if (prepared.IsDirectGlb)
+                    {
+                        Tripo.Bridge.HostControlGenerationGlbImportReceipt
+                            glbReceipt =
+                            await client.ImportGenerationGlbAsync(
+                                    new Tripo.Bridge
+                                        .HostControlImportGenerationGlbRequest(
+                                            prepared.ConversionTaskId,
+                                            prepared.Name,
+                                            prepared.DocumentSessionId,
+                                            prepared.OperationId,
+                                            ApplyMaterials: true),
+                                    token)
+                                .ConfigureAwait(false);
+                        receipt = glbReceipt;
+                    }
+                    else if (string.Equals(
+                                 prepared.ArtifactFormat,
+                                 "obj",
+                                 StringComparison.Ordinal))
+                    {
+                        Tripo.Bridge.HostControlObjTaskImportReceipt objReceipt =
+                            await client.ImportObjTaskAsync(
+                                    new Tripo.Bridge
+                                        .HostControlImportObjTaskRequest(
+                                            prepared.ConversionTaskId,
+                                            prepared.Name,
+                                            prepared.DocumentSessionId,
+                                            prepared.OperationId,
+                                            prepared.ImportMode,
+                                            prepared.ApplyMaterials),
+                                    token)
+                                .ConfigureAwait(false);
+                        receipt = objReceipt;
+                    }
+                    else
+                    {
+                        throw new InvalidOperationException(
+                            "The prepared import format is not supported.");
+                    }
+                }
+                catch (Tripo.Bridge.HostControlCallException exception)
+                    when (string.Equals(
+                        exception.Code,
+                        Tripo.Bridge.HostControlConstants.CredentialInvalidError,
+                        StringComparison.Ordinal))
+                {
+                    UpdateState(state => state with
+                    {
+                        ImportDispatchAttempted = false,
+                        ImportReceipt = null,
+                        ImportFailureCode = null,
+                    });
+                    throw;
+                }
+                catch (Tripo.Bridge.HostControlCallException exception)
+                    when (string.Equals(
+                        exception.Code,
+                        Tripo.Bridge.BridgeConstants
+                            .MutationStateUncertainError,
+                        StringComparison.Ordinal))
+                {
+                    UpdateState(state => state with
+                    {
+                        ImportFailureCode = exception.Code,
+                    });
+                    throw;
+                }
+
                 UpdateState(state => state with
                 {
                     ImportReceipt = receipt,
                     LastError = null,
+                    ImportFailureCode = null,
                 });
             },
             cancellationToken);
@@ -848,6 +1034,7 @@ public sealed class TripoPanelSession : IAsyncDisposable
                 ImportDispatchAttempted = false,
                 ImportReceipt = null,
                 LastError = null,
+                ImportFailureCode = null,
             });
         }
         finally
@@ -1524,6 +1711,7 @@ public sealed class TripoPanelSession : IAsyncDisposable
             PreparedImport = null,
             ImportDispatchAttempted = false,
             ImportReceipt = null,
+            ImportFailureCode = null,
         });
     }
 
@@ -1539,6 +1727,7 @@ public sealed class TripoPanelSession : IAsyncDisposable
             PreparedImport = null,
             ImportDispatchAttempted = false,
             ImportReceipt = null,
+            ImportFailureCode = null,
         });
     }
 
@@ -1668,10 +1857,12 @@ public sealed class TripoPanelSession : IAsyncDisposable
         if (normalized is not "native" and
             not "mesh" and
             not "instance" and
-            not "family")
+            not "family" and
+            not "glb_instance")
         {
             throw new ArgumentException(
-                "Import mode must be native, mesh, instance, or family.",
+                "Import mode must be native, mesh, instance, family, or " +
+                "glb_instance.",
                 nameof(importMode));
         }
 

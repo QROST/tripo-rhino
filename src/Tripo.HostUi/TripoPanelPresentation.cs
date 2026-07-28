@@ -287,6 +287,10 @@ public sealed class TripoPanelPresentation
 
     public string ImportText { get; private init; } = string.Empty;
 
+    public bool ImportSourceEnabled { get; private init; }
+
+    public string ImportGuidance { get; private init; } = string.Empty;
+
     public bool ResetEnabled { get; private init; }
 
     public bool PromptEnabled { get; private init; }
@@ -306,7 +310,8 @@ public sealed class TripoPanelPresentation
         TripoPanelRecoveryLoadResult recovery,
         string? recoveryInspection,
         string? prompt,
-        string? objectName)
+        string? objectName,
+        string? importSource = null)
     {
         ArgumentNullException.ThrowIfNull(state);
         ArgumentNullException.ThrowIfNull(recovery);
@@ -318,6 +323,26 @@ public sealed class TripoPanelPresentation
         bool conversionPrepared = state.PreparedConversion is not null;
         bool conversionSucceeded =
             state.ConversionStatus?.Status == "success";
+        bool directGlbSelected =
+            !string.Equals(
+                importSource,
+                "obj",
+                StringComparison.OrdinalIgnoreCase);
+        bool directGlbRoute =
+            state.PreparedImport?.IsDirectGlb ?? directGlbSelected;
+        bool directGlbSupported =
+            state.Context is { } activeContext &&
+            string.Equals(
+                activeContext.Host,
+                "rhino",
+                StringComparison.OrdinalIgnoreCase) &&
+            activeContext.Capabilities.Contains(
+                Tripo.Bridge.BridgeConstants.ImportGlbMethod,
+                StringComparer.Ordinal);
+        bool importPrerequisite =
+            directGlbRoute
+                ? generationSucceeded && directGlbSupported
+                : conversionSucceeded;
         bool recoveryBlocked = recovery.HasBlock;
         bool hasPrompt = !string.IsNullOrWhiteSpace(prompt);
         bool hasObjectName = !string.IsNullOrWhiteSpace(objectName);
@@ -468,17 +493,35 @@ public sealed class TripoPanelPresentation
             ImportEnabled =
                 ready &&
                 !recoveryBlocked &&
-                conversionSucceeded &&
+                importPrerequisite &&
                 (state.PreparedImport is null
                     ? hasObjectName
                     : state.CanDispatchPreparedImport),
             ImportText = state.PreparedImport is null
-                ? "Import into Rhino"
+                ? directGlbRoute
+                    ? "Import GLB (recommended)"
+                    : "Import OBJ into Rhino"
+                : state.ImportRequiresManualReview
+                    ? "Manual review required"
                 : state.ImportRetryRequired
                     ? "Retry same UUID"
                     : state.CanDispatchPreparedImport
                         ? "Import prepared"
                         : "Imported",
+            ImportSourceEnabled =
+                ready && state.PreparedImport is null,
+            ImportGuidance = state.ImportRequiresManualReview
+                ? "Rhino could not prove the final document state. Do not " +
+                  "retry this import; inspect the document and recovery " +
+                  "operation ID manually."
+                : directGlbRoute
+                    ? directGlbSupported
+                    ? "Recommended: import the generation GLB directly with " +
+                      "Rhino-native PBR materials. No OBJ conversion task is created."
+                    : "Direct GLB is unavailable in this plugin/sidecar pair. " +
+                      "Install the matching build or select OBJ compatibility."
+                : "Compatibility path: create and finish a separate OBJ " +
+                  "conversion before importing.",
             ResetEnabled =
                 ready &&
                 !recoveryBlocked &&
@@ -487,9 +530,14 @@ public sealed class TripoPanelPresentation
             FaceLimitEnabled = ready && !generationPrepared,
             WithMaterialsEnabled = ready && !generationPrepared,
             NameEnabled = ready && state.PreparedImport is null,
-            ImportModeEnabled = ready && state.PreparedImport is null,
+            ImportModeEnabled =
+                ready &&
+                state.PreparedImport is null &&
+                !directGlbRoute,
             ApplyMaterialsEnabled =
-                ready && state.PreparedImport is null,
+                ready &&
+                state.PreparedImport is null &&
+                !directGlbRoute,
         };
     }
 

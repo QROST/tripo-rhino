@@ -751,6 +751,15 @@ public sealed class TripoPanelSessionTests
         Assert.True(importRetry.CanDispatchPreparedImport);
         Assert.True(importRetry.ImportRetryRequired);
 
+        Tripo.HostUi.TripoPanelState importUncertain = importRetry with
+        {
+            ImportFailureCode =
+                Tripo.Bridge.BridgeConstants.MutationStateUncertainError,
+        };
+        Assert.False(importUncertain.CanDispatchPreparedImport);
+        Assert.False(importUncertain.ImportRetryRequired);
+        Assert.True(importUncertain.ImportRequiresManualReview);
+
         Tripo.HostUi.TripoPanelState importComplete = importRetry with
         {
             ImportReceipt = new Tripo.Bridge.HostControlObjTaskImportReceipt(
@@ -2507,6 +2516,147 @@ public sealed class TripoPanelSessionTests
     }
 
     [Fact]
+    public async Task DirectGlbImportUsesGenerationTaskWithoutObjConversion()
+    {
+        FakeHostControlClient client = new();
+        await using Tripo.HostUi.TripoPanelSession session =
+            new(new FakeConnector(client));
+        await session.ConnectAsync();
+        session.PrepareGeneration(
+            "a PBR chair",
+            10_000,
+            withMaterials: true);
+        await session.DispatchPreparedGenerationAsync(
+            userConfirmedExternalCost: true);
+        await session.RefreshGenerationStatusAsync();
+
+        Tripo.HostUi.PreparedObjImport prepared =
+            session.PrepareGlbImport("PBR Chair");
+        await session.ImportPreparedAsync();
+
+        Assert.True(prepared.IsDirectGlb);
+        Assert.Equal("glb", prepared.ArtifactFormat);
+        Assert.Equal("task_source123", prepared.ConversionTaskId);
+        Assert.Equal("glb_instance", prepared.ImportMode);
+        Assert.True(prepared.ApplyMaterials);
+        Assert.Equal(0, client.CreateConversionCalls);
+        Assert.Equal(1, client.GlbImportCalls);
+        Assert.Equal(
+            prepared.OperationId,
+            client.LastGlbImportRequest?.OperationId);
+        Assert.Equal("glb", session.State.ImportReceipt?.ArtifactFormat);
+        Assert.Equal(
+            "task_source123",
+            session.State.ImportReceipt?.SourceTaskId);
+    }
+
+    [Fact]
+    public async Task DirectGlbIsDisabledForPluginSidecarCapabilitySkew()
+    {
+        FakeHostControlClient client = new()
+        {
+            AdvertiseGlbWorkflowCapability = false,
+        };
+        await using Tripo.HostUi.TripoPanelSession session =
+            new(new FakeConnector(client));
+        await session.ConnectAsync();
+        session.PrepareGeneration(
+            "a PBR chair",
+            10_000,
+            withMaterials: true);
+        await session.DispatchPreparedGenerationAsync(
+            userConfirmedExternalCost: true);
+        await session.RefreshGenerationStatusAsync();
+
+        InvalidOperationException exception =
+            Assert.Throws<InvalidOperationException>(
+                () => session.PrepareGlbImport("PBR Chair"));
+
+        Assert.DoesNotContain(
+            Tripo.Bridge.BridgeConstants.ImportGlbMethod,
+            session.State.Context!.Capabilities);
+        Assert.Contains("does not advertise", exception.Message);
+        Assert.Equal(0, client.GlbImportCalls);
+    }
+
+    [Fact]
+    public async Task DirectGlbCredentialFailureClearsFalseImportOccupancy()
+    {
+        FakeHostControlClient client = new()
+        {
+            GlbImportFailureCode =
+                Tripo.Bridge.HostControlConstants.CredentialInvalidError,
+        };
+        await using Tripo.HostUi.TripoPanelSession session =
+            new(new FakeConnector(client));
+        await session.ConnectAsync();
+        session.PrepareGeneration(
+            "a PBR chair",
+            10_000,
+            withMaterials: true);
+        await session.DispatchPreparedGenerationAsync(
+            userConfirmedExternalCost: true);
+        await session.RefreshGenerationStatusAsync();
+        Tripo.HostUi.PreparedObjImport prepared =
+            session.PrepareGlbImport("PBR Chair");
+
+        await Assert.ThrowsAsync<Tripo.Bridge.HostControlCallException>(
+            () => session.ImportPreparedAsync());
+
+        Assert.False(session.State.ImportDispatchAttempted);
+        Assert.False(session.State.HasUnresolvedDispatch);
+        Assert.Equal(prepared, session.State.PreparedImport);
+        Assert.Null(session.State.ImportReceipt);
+        await session.SetApiKeyAsync("replacement-key", persist: false);
+        client.GlbImportFailureCode = null;
+        await session.ImportPreparedAsync();
+
+        Assert.Equal("replacement-key", client.LastApiKey);
+        Assert.Equal(2, client.GlbImportCalls);
+        Assert.Equal(
+            prepared.OperationId,
+            session.State.ImportReceipt?.OperationId);
+    }
+
+    [Fact]
+    public async Task UncertainDirectGlbImportCannotBeRetriedOrReset()
+    {
+        FakeHostControlClient client = new()
+        {
+            GlbImportFailureCode =
+                Tripo.Bridge.BridgeConstants.MutationStateUncertainError,
+        };
+        await using Tripo.HostUi.TripoPanelSession session =
+            new(new FakeConnector(client));
+        await session.ConnectAsync();
+        session.PrepareGeneration(
+            "a PBR chair",
+            10_000,
+            withMaterials: true);
+        await session.DispatchPreparedGenerationAsync(
+            userConfirmedExternalCost: true);
+        await session.RefreshGenerationStatusAsync();
+        Tripo.HostUi.PreparedObjImport prepared =
+            session.PrepareGlbImport("PBR Chair");
+
+        await Assert.ThrowsAsync<Tripo.Bridge.HostControlCallException>(
+            () => session.ImportPreparedAsync());
+        InvalidOperationException retry =
+            await Assert.ThrowsAsync<InvalidOperationException>(
+                () => session.ImportPreparedAsync());
+        InvalidOperationException reset =
+            Assert.Throws<InvalidOperationException>(session.ResetWorkflow);
+
+        Assert.True(session.State.ImportRequiresManualReview);
+        Assert.False(session.State.CanDispatchPreparedImport);
+        Assert.False(session.State.ImportRetryRequired);
+        Assert.Equal(prepared.OperationId, session.State.PreparedImport?.OperationId);
+        Assert.Equal(1, client.GlbImportCalls);
+        Assert.Contains("manual document review", retry.Message);
+        Assert.Contains("unresolved", reset.Message);
+    }
+
+    [Fact]
     public async Task ImportReceiptHintPersistsUntilExplicitWorkflowReset()
     {
         string root = CreateTemporaryRoot();
@@ -2931,6 +3081,8 @@ public sealed class TripoPanelSessionTests
 
         public string Host { get; set; } = "rhino";
 
+        public bool AdvertiseGlbWorkflowCapability { get; set; } = true;
+
         public bool FailFirstTextResponse { get; set; }
 
         public string FirstTextFailureCode { get; set; } =
@@ -2942,6 +3094,8 @@ public sealed class TripoPanelSessionTests
 
         public string FirstConversionFailureCode { get; set; } =
             "sidecar_unavailable";
+
+        public string? GlbImportFailureCode { get; set; }
 
         public Action<Tripo.Bridge.HostControlCreateTextTaskRequest>?
             BeforeCreateTextCall { get; set; }
@@ -2986,6 +3140,8 @@ public sealed class TripoPanelSessionTests
 
         public int ImportCalls { get; private set; }
 
+        public int GlbImportCalls { get; private set; }
+
         public string? LastApiKey { get; private set; }
 
         public Tripo.Bridge.HostControlOperationStatusReceipt? OperationStatus
@@ -3011,14 +3167,33 @@ public sealed class TripoPanelSessionTests
         public Tripo.Bridge.HostControlCreateObjConversionRequest?
             LastConversionRequest { get; private set; }
 
+        public Tripo.Bridge.HostControlImportGenerationGlbRequest?
+            LastGlbImportRequest { get; private set; }
+
         public Task<Tripo.Bridge.HostControlHealthReceipt> GetHealthAsync(
-            CancellationToken cancellationToken) =>
-            Task.FromResult(
+            CancellationToken cancellationToken)
+        {
+            IReadOnlyList<string> capabilities =
+                Tripo.Bridge.HostControlConstants
+                    .GetWorkflowCapabilities(Host);
+            if (!AdvertiseGlbWorkflowCapability)
+            {
+                capabilities = capabilities
+                    .Where(capability => !string.Equals(
+                        capability,
+                        Tripo.Bridge.HostControlConstants
+                            .ImportGenerationGlbMethod,
+                        StringComparison.Ordinal))
+                    .ToArray();
+            }
+
+            return Task.FromResult(
                 new Tripo.Bridge.HostControlHealthReceipt(
                     Host,
                     _hostProcessId,
                     Environment.ProcessId,
-                    Tripo.Bridge.HostControlConstants.WorkflowCapabilities));
+                    capabilities));
+        }
 
         public Task<Tripo.Bridge.HostControlCredentialStatusReceipt>
             GetCredentialStatusAsync(CancellationToken cancellationToken) =>
@@ -3068,7 +3243,21 @@ public sealed class TripoPanelSessionTests
                 CurrentSessionId,
                 "Test.3dm",
                 "Meters",
-                []);
+                string.Equals(
+                    Host,
+                    "rhino",
+                    StringComparison.OrdinalIgnoreCase)
+                    ?
+                    [
+                        Tripo.Bridge.BridgeConstants.ContextMethod,
+                        Tripo.Bridge.BridgeConstants.ImportMeshMethod,
+                        Tripo.Bridge.BridgeConstants.ImportGlbMethod,
+                    ]
+                    :
+                    [
+                        Tripo.Bridge.BridgeConstants.ContextMethod,
+                        Tripo.Bridge.BridgeConstants.ImportMeshMethod,
+                    ]);
         }
 
         public Task<Tripo.Bridge.HostControlTextTaskCreationReceipt>
@@ -3195,6 +3384,40 @@ public sealed class TripoPanelSessionTests
                         request.ImportMode,
                         request.ApplyMaterials ? 1 : 0,
                         request.ApplyMaterials ? 1 : 0,
+                        null)));
+        }
+
+        public Task<Tripo.Bridge.HostControlGenerationGlbImportReceipt>
+            ImportGenerationGlbAsync(
+                Tripo.Bridge.HostControlImportGenerationGlbRequest request,
+                CancellationToken cancellationToken)
+        {
+            GlbImportCalls++;
+            LastGlbImportRequest = request;
+            if (GlbImportFailureCode is not null)
+            {
+                throw new Tripo.Bridge.HostControlCallException(
+                    GlbImportFailureCode,
+                    "The provider rejected the GLB task read.");
+            }
+
+            return Task.FromResult(
+                new Tripo.Bridge.HostControlGenerationGlbImportReceipt(
+                    request.OperationId,
+                    request.GenerationTaskId,
+                    2.5m,
+                    new Tripo.Bridge.HostImportReceipt(
+                        Host,
+                        request.DocumentSessionId,
+                        request.OperationId,
+                        "created-glb-1",
+                        3,
+                        1,
+                        0,
+                        "committed",
+                        "glb_instance",
+                        1,
+                        1,
                         null)));
         }
 

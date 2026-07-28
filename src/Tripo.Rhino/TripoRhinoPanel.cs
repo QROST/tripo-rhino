@@ -39,13 +39,26 @@ public sealed class TripoRhinoPanel : Panel, IPanel
     };
     private readonly CheckBox _withMaterials = new()
     {
+        Checked = true,
         Text = "Generate materials",
-        ToolTip = "Request generated materials from Tripo.",
+        ToolTip =
+            "Request generated materials from Tripo. This is the recommended " +
+            "setting for direct GLB import.",
     };
     private readonly TextBox _name = new()
     {
         Text = "Tripo Model",
     };
+    private readonly DropDown _importSource = new()
+    {
+        DataStore = new[]
+        {
+            "Direct GLB (recommended)",
+            "OBJ compatibility",
+        },
+        SelectedIndex = 0,
+    };
+    private readonly Label _importGuidance = StatusLabel();
     private readonly DropDown _importMode = new()
     {
         DataStore = new[] { "native", "mesh", "instance" },
@@ -53,8 +66,10 @@ public sealed class TripoRhinoPanel : Panel, IPanel
     };
     private readonly CheckBox _applyMaterials = new()
     {
-        Text = "Apply diffuse materials",
-        ToolTip = "Apply baked diffuse materials when available.",
+        Text = "Apply diffuse materials (OBJ fallback)",
+        ToolTip =
+            "Apply baked OBJ/MTL diffuse materials when available. Direct GLB " +
+            "always preserves Rhino-native PBR materials.",
     };
     private readonly Label _documentStatus = StatusLabel();
     private readonly TextBox _documentSession = OperationStatusBox();
@@ -178,6 +193,7 @@ public sealed class TripoRhinoPanel : Panel, IPanel
         _reset.Click += OnReset;
         _prompt.TextChanged += OnFormInputChanged;
         _name.TextChanged += OnFormInputChanged;
+        _importSource.SelectedIndexChanged += OnFormInputChanged;
         Load += OnLoaded;
         ApplyControls(_session.State, _session.Recovery);
     }
@@ -307,7 +323,7 @@ public sealed class TripoRhinoPanel : Panel, IPanel
                     _generationProgress,
                     ActionColumn(_generate, _refreshGeneration)),
                 Section(
-                    "2 · Convert to OBJ",
+                    "2 · Optional OBJ fallback",
                     _conversionTask,
                     _conversionProgress,
                     ActionColumn(_convert, _refreshConversion)),
@@ -316,6 +332,11 @@ public sealed class TripoRhinoPanel : Panel, IPanel
                     FieldBlock(
                         "Object name",
                         _name),
+                    FieldBlock(
+                        "Import source",
+                        _importSource,
+                        stretchControl: false),
+                    _importGuidance,
                     FieldBlock(
                         "Import mode",
                         _importMode,
@@ -1211,11 +1232,16 @@ public sealed class TripoRhinoPanel : Panel, IPanel
         try
         {
             EnsurePanelDocumentIsActive();
-            _ = _session.State.PreparedImport ??
-                _session.PrepareImport(
-                    _name.Text,
-                    _importMode.SelectedValue?.ToString() ?? "native",
-                    _applyMaterials.Checked == true);
+            if (_session.State.PreparedImport is null)
+            {
+                _ = IsDirectGlbSelected()
+                    ? _session.PrepareGlbImport(_name.Text)
+                    : _session.PrepareImport(
+                        _name.Text,
+                        _importMode.SelectedValue?.ToString() ?? "native",
+                        _applyMaterials.Checked == true);
+            }
+
             RequestRender();
             await _session.ImportPreparedAsync();
         }
@@ -1353,7 +1379,8 @@ public sealed class TripoRhinoPanel : Panel, IPanel
                     ? _recoveryInspection
                     : null,
                 _prompt.Text,
-                _name.Text);
+                _name.Text,
+                IsDirectGlbSelected() ? "glb" : "obj");
 
         _documentStatus.Text = presentation.DocumentStatus;
         _documentSession.Text = presentation.DocumentSessionId;
@@ -1443,6 +1470,8 @@ public sealed class TripoRhinoPanel : Panel, IPanel
             presentation.RefreshConversionEnabled;
         _import.Enabled = presentation.ImportEnabled;
         _import.Text = presentation.ImportText;
+        _importSource.Enabled = presentation.ImportSourceEnabled;
+        _importGuidance.Text = presentation.ImportGuidance;
         _reset.Enabled = presentation.ResetEnabled;
         _prompt.Enabled = presentation.PromptEnabled;
         _faceLimit.Enabled = presentation.FaceLimitEnabled;
@@ -1455,6 +1484,9 @@ public sealed class TripoRhinoPanel : Panel, IPanel
                 state,
                 recovery));
     }
+
+    private bool IsDirectGlbSelected() =>
+        _importSource.SelectedIndex != 1;
 
     private static void SetProgress(ProgressBar control, int? progress)
     {

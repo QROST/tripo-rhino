@@ -53,6 +53,7 @@ public sealed class TripoRhinoPlugin : PlugIn, IDisposable
                 [
                     Tripo.Bridge.BridgeConstants.ContextMethod,
                     Tripo.Bridge.BridgeConstants.ImportMeshMethod,
+                    Tripo.Bridge.BridgeConstants.ImportGlbMethod,
                 ],
                 _dispatcher);
             using CancellationTokenSource startupTimeout = new(TimeSpan.FromSeconds(10));

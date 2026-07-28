@@ -1017,7 +1017,8 @@ public sealed class TripoPanelRecoveryStore : IDisposable
         if (value is not "native" and
             not "mesh" and
             not "instance" and
-            not "family")
+            not "family" and
+            not "glb_instance")
         {
             throw new InvalidDataException(
                 "The recovery hint contains an invalid import mode.");

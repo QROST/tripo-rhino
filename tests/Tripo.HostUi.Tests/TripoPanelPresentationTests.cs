@@ -397,14 +397,16 @@ public sealed class TripoPanelPresentationTests
                 Tripo.HostUi.TripoPanelRecoveryLoadResult.Empty,
                 recoveryInspection: null,
                 prompt: "a chair",
-                objectName: " ");
+                objectName: " ",
+                importSource: "obj");
         Tripo.HostUi.TripoPanelPresentation validName =
             Tripo.HostUi.TripoPanelPresentation.Create(
                 conversionReady,
                 Tripo.HostUi.TripoPanelRecoveryLoadResult.Empty,
                 recoveryInspection: null,
                 prompt: "a chair",
-                objectName: "Chair");
+                objectName: "Chair",
+                importSource: "obj");
 
         Assert.False(blankPrompt.GenerateEnabled);
         Assert.False(blankName.ImportEnabled);
@@ -759,6 +761,114 @@ public sealed class TripoPanelPresentationTests
     }
 
     [Fact]
+    public void DirectGlbIsRecommendedAfterGenerationWithoutObjConversion()
+    {
+        Tripo.HostUi.TripoPanelState state =
+            ReadyState() with
+            {
+                Context = ReadyState().Context! with
+                {
+                    Capabilities =
+                    [
+                        Tripo.Bridge.BridgeConstants.ContextMethod,
+                        Tripo.Bridge.BridgeConstants.ImportMeshMethod,
+                        Tripo.Bridge.BridgeConstants.ImportGlbMethod,
+                    ],
+                },
+                GenerationStatus = TaskStatus(
+                    "task_source123",
+                    "text_to_model",
+                    "success"),
+            };
+
+        Tripo.HostUi.TripoPanelPresentation presentation =
+            Present(state, importSource: "glb");
+
+        Assert.True(presentation.ImportEnabled);
+        Assert.Equal(
+            "Import GLB (recommended)",
+            presentation.ImportText);
+        Assert.True(presentation.ImportSourceEnabled);
+        Assert.False(presentation.ImportModeEnabled);
+        Assert.False(presentation.ApplyMaterialsEnabled);
+        Assert.Contains("No OBJ conversion", presentation.ImportGuidance);
+    }
+
+    [Fact]
+    public void UncertainDirectGlbImportRequiresManualReviewWithoutRetry()
+    {
+        Tripo.HostUi.TripoPanelState state =
+            ReadyState() with
+            {
+                Context = ReadyState().Context! with
+                {
+                    Capabilities =
+                    [
+                        Tripo.Bridge.BridgeConstants.ContextMethod,
+                        Tripo.Bridge.BridgeConstants.ImportMeshMethod,
+                        Tripo.Bridge.BridgeConstants.ImportGlbMethod,
+                    ],
+                },
+                GenerationStatus = TaskStatus(
+                    "task_source123",
+                    "text_to_model",
+                    "success"),
+                PreparedImport = new Tripo.HostUi.PreparedObjImport(
+                    "task_source123",
+                    "Chair",
+                    ReadyState().Context!.DocumentSessionId,
+                    "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+                    "glb_instance",
+                    ApplyMaterials: true,
+                    ArtifactFormat: "glb"),
+                ImportDispatchAttempted = true,
+                ImportFailureCode =
+                    Tripo.Bridge.BridgeConstants.MutationStateUncertainError,
+            };
+
+        Tripo.HostUi.TripoPanelPresentation presentation =
+            Present(state, importSource: "glb");
+
+        Assert.False(presentation.ImportEnabled);
+        Assert.Equal("Manual review required", presentation.ImportText);
+        Assert.Contains("Do not retry", presentation.ImportGuidance);
+        Assert.False(presentation.ResetEnabled);
+    }
+
+    [Fact]
+    public void ObjCompatibilityStillRequiresSuccessfulConversion()
+    {
+        Tripo.HostUi.TripoPanelState generated =
+            ReadyState() with
+            {
+                GenerationStatus = TaskStatus(
+                    "task_source123",
+                    "text_to_model",
+                    "success"),
+            };
+        Tripo.HostUi.TripoPanelPresentation beforeConversion =
+            Present(generated, importSource: "obj");
+        Tripo.HostUi.TripoPanelPresentation afterConversion =
+            Present(
+                generated with
+                {
+                    ConversionStatus = TaskStatus(
+                        "task_convert123",
+                        "convert_model",
+                        "success"),
+                },
+                importSource: "obj");
+
+        Assert.False(beforeConversion.ImportEnabled);
+        Assert.True(afterConversion.ImportEnabled);
+        Assert.Equal(
+            "Import OBJ into Rhino",
+            afterConversion.ImportText);
+        Assert.True(afterConversion.ImportModeEnabled);
+        Assert.True(afterConversion.ApplyMaterialsEnabled);
+    }
+
+    [Fact]
     public void RecoveryIssuesRequireManualRepairAndCannotBeUnlocked()
     {
         Tripo.HostUi.TripoPanelRecoveryLoadResult recovery =
@@ -819,14 +929,16 @@ public sealed class TripoPanelPresentationTests
         Tripo.HostUi.TripoPanelState state,
         Tripo.HostUi.TripoPanelRecoveryLoadResult? recovery = null,
         string prompt = "a chair",
-        string objectName = "Chair") =>
+        string objectName = "Chair",
+        string importSource = "obj") =>
         Tripo.HostUi.TripoPanelPresentation.Create(
             state,
             recovery ??
                 Tripo.HostUi.TripoPanelRecoveryLoadResult.Empty,
             recoveryInspection: null,
             prompt,
-            objectName);
+            objectName,
+            importSource);
 
     private static Tripo.HostUi.TripoPanelRecoveryLoadResult
         BlockingGenerationRecovery() =>
