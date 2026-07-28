@@ -156,7 +156,8 @@ public sealed record TripoPanelState(
     bool ImportDispatchAttempted,
     TripoPanelImportReceipt? ImportReceipt,
     string? LastError,
-    string? ImportFailureCode = null)
+    string? ImportFailureCode = null,
+    string? LastErrorCode = null)
 {
     public static TripoPanelState Initial { get; } = new(
         Connected: false,
@@ -177,7 +178,8 @@ public sealed record TripoPanelState(
         ImportDispatchAttempted: false,
         ImportReceipt: null,
         LastError: null,
-        ImportFailureCode: null);
+        ImportFailureCode: null,
+        LastErrorCode: null);
 
     public bool HasWorkflowState =>
         PreparedGeneration is not null ||
@@ -226,6 +228,16 @@ public sealed record TripoPanelState(
     public bool HasDurableGenerationTask =>
         GenerationReceipt is not null ||
         GenerationOperationStatus?.TaskIdDurable == true;
+
+    public bool HasCredentialRefreshFailure =>
+        string.Equals(
+            LastErrorCode,
+            Tripo.Bridge.HostControlConstants.CredentialInvalidError,
+            StringComparison.Ordinal) ||
+        string.Equals(
+            LastErrorCode,
+            Tripo.Bridge.HostControlConstants.CredentialRejectedError,
+            StringComparison.Ordinal);
 
     public bool CanDispatchPreparedGeneration =>
         PreparedGeneration is not null &&
@@ -397,6 +409,7 @@ public sealed class TripoPanelSession : IAsyncDisposable
                     Context = context,
                     CredentialStatus = credentials,
                     LastError = null,
+                    LastErrorCode = null,
                 });
             },
             cancellationToken);
@@ -429,6 +442,7 @@ public sealed class TripoPanelSession : IAsyncDisposable
                 {
                     CredentialStatus = receipt.Status,
                     LastError = null,
+                    LastErrorCode = null,
                 });
             },
             cancellationToken);
@@ -450,6 +464,7 @@ public sealed class TripoPanelSession : IAsyncDisposable
                 {
                     CredentialStatus = receipt.Status,
                     LastError = null,
+                    LastErrorCode = null,
                 });
             },
             cancellationToken);
@@ -495,6 +510,7 @@ public sealed class TripoPanelSession : IAsyncDisposable
                 ImportDispatchAttempted = false,
                 ImportReceipt = null,
                 LastError = null,
+                LastErrorCode = null,
                 ImportFailureCode = null,
             });
             return prepared;
@@ -507,7 +523,45 @@ public sealed class TripoPanelSession : IAsyncDisposable
 
     public Task DispatchPreparedGenerationAsync(
         bool userConfirmedExternalCost,
+        CancellationToken cancellationToken = default) =>
+        DispatchPreparedGenerationCoreAsync(
+            userConfirmedExternalCost,
+            requiredHostCapability: null,
+            requiredSidecarCapability: null,
+            cancellationToken);
+
+    internal Task DispatchPreparedGenerationRequiringCapabilityAsync(
+        bool userConfirmedExternalCost,
+        string requiredHostCapability,
+        string requiredSidecarCapability,
         CancellationToken cancellationToken = default)
+    {
+        if (string.IsNullOrWhiteSpace(requiredHostCapability))
+        {
+            throw new ArgumentException(
+                "The required host capability is missing.",
+                nameof(requiredHostCapability));
+        }
+
+        if (string.IsNullOrWhiteSpace(requiredSidecarCapability))
+        {
+            throw new ArgumentException(
+                "The required sidecar capability is missing.",
+                nameof(requiredSidecarCapability));
+        }
+
+        return DispatchPreparedGenerationCoreAsync(
+            userConfirmedExternalCost,
+            requiredHostCapability,
+            requiredSidecarCapability,
+            cancellationToken);
+    }
+
+    private Task DispatchPreparedGenerationCoreAsync(
+        bool userConfirmedExternalCost,
+        string? requiredHostCapability,
+        string? requiredSidecarCapability,
+        CancellationToken cancellationToken)
     {
         if (!userConfirmedExternalCost)
         {
@@ -535,6 +589,8 @@ public sealed class TripoPanelSession : IAsyncDisposable
                 await EnsureSessionStillActiveAsync(
                         client,
                         prepared.DocumentSessionId,
+                        requiredHostCapability,
+                        requiredSidecarCapability,
                         token)
                     .ConfigureAwait(false);
                 UpdateState(state => state with
@@ -597,6 +653,7 @@ public sealed class TripoPanelSession : IAsyncDisposable
                     GenerationReceipt = receipt,
                     GenerationOperationStatus = null,
                     LastError = null,
+                    LastErrorCode = null,
                 });
             },
             cancellationToken);
@@ -618,6 +675,7 @@ public sealed class TripoPanelSession : IAsyncDisposable
                 {
                     GenerationStatus = status,
                     LastError = null,
+                    LastErrorCode = null,
                 });
             },
             cancellationToken);
@@ -661,6 +719,7 @@ public sealed class TripoPanelSession : IAsyncDisposable
                 ImportDispatchAttempted = false,
                 ImportReceipt = null,
                 LastError = null,
+                LastErrorCode = null,
                 ImportFailureCode = null,
             });
             return prepared;
@@ -701,7 +760,9 @@ public sealed class TripoPanelSession : IAsyncDisposable
                 await EnsureSessionStillActiveAsync(
                         client,
                         prepared.DocumentSessionId,
-                        token)
+                        requiredHostCapability: null,
+                        requiredSidecarCapability: null,
+                        cancellationToken: token)
                     .ConfigureAwait(false);
                 UpdateState(state => state with
                 {
@@ -764,6 +825,7 @@ public sealed class TripoPanelSession : IAsyncDisposable
                     ConversionReceipt = receipt,
                     ConversionOperationStatus = null,
                     LastError = null,
+                    LastErrorCode = null,
                 });
             },
             cancellationToken);
@@ -785,6 +847,7 @@ public sealed class TripoPanelSession : IAsyncDisposable
                 {
                     ConversionStatus = status,
                     LastError = null,
+                    LastErrorCode = null,
                 });
             },
             cancellationToken);
@@ -824,6 +887,7 @@ public sealed class TripoPanelSession : IAsyncDisposable
                 ImportDispatchAttempted = false,
                 ImportReceipt = null,
                 LastError = null,
+                LastErrorCode = null,
                 ImportFailureCode = null,
             });
             return prepared;
@@ -883,6 +947,7 @@ public sealed class TripoPanelSession : IAsyncDisposable
                 ImportDispatchAttempted = false,
                 ImportReceipt = null,
                 LastError = null,
+                LastErrorCode = null,
                 ImportFailureCode = null,
             });
             return prepared;
@@ -916,7 +981,9 @@ public sealed class TripoPanelSession : IAsyncDisposable
                 await EnsureSessionStillActiveAsync(
                         client,
                         prepared.DocumentSessionId,
-                        token)
+                        requiredHostCapability: null,
+                        requiredSidecarCapability: null,
+                        cancellationToken: token)
                     .ConfigureAwait(false);
                 UpdateState(state => state with
                 {
@@ -999,6 +1066,7 @@ public sealed class TripoPanelSession : IAsyncDisposable
                 {
                     ImportReceipt = receipt,
                     LastError = null,
+                    LastErrorCode = null,
                     ImportFailureCode = null,
                 });
             },
@@ -1034,6 +1102,7 @@ public sealed class TripoPanelSession : IAsyncDisposable
                 ImportDispatchAttempted = false,
                 ImportReceipt = null,
                 LastError = null,
+                LastErrorCode = null,
                 ImportFailureCode = null,
             });
         }
@@ -1491,6 +1560,7 @@ public sealed class TripoPanelSession : IAsyncDisposable
             {
                 Busy = true,
                 LastError = null,
+                LastErrorCode = null,
             });
             await operation(linked.Token).ConfigureAwait(false);
         }
@@ -1502,6 +1572,7 @@ public sealed class TripoPanelSession : IAsyncDisposable
             UpdateTransientState(state => state with
             {
                 LastError = BoundError(exception.Message),
+                LastErrorCode = BoundErrorCode(exception),
             });
             throw;
         }
@@ -1546,11 +1617,25 @@ public sealed class TripoPanelSession : IAsyncDisposable
     private async Task EnsureSessionStillActiveAsync(
         Tripo.Bridge.IHostControlClient client,
         string expectedSessionId,
+        string? requiredHostCapability,
+        string? requiredSidecarCapability,
         CancellationToken cancellationToken)
     {
+        Tripo.Bridge.HostControlHealthReceipt? health = null;
+        if (!string.IsNullOrWhiteSpace(requiredSidecarCapability))
+        {
+            health = await client.GetHealthAsync(cancellationToken)
+                .ConfigureAwait(false);
+        }
+
         Tripo.Bridge.HostContextReceipt current =
             await client.GetHostContextAsync(cancellationToken)
                 .ConfigureAwait(false);
+        if (health is not null)
+        {
+            EnsureHealthMatchesContext(health, current);
+        }
+
         Tripo.Bridge.HostContextReceipt original = RequireContext();
         if (current.ProcessId != original.ProcessId ||
             !string.Equals(
@@ -1565,6 +1650,29 @@ public sealed class TripoPanelSession : IAsyncDisposable
             throw new InvalidOperationException(
                 "The active host document changed. The prepared operation was " +
                 "not dispatched; refresh the panel and prepare a new operation.");
+        }
+
+        if (!string.IsNullOrWhiteSpace(requiredHostCapability) &&
+            !current.Capabilities.Contains(
+                requiredHostCapability,
+                StringComparer.Ordinal))
+        {
+            throw new InvalidOperationException(
+                "The active host no longer advertises the required " +
+                $"'{requiredHostCapability}' capability. The prepared operation " +
+                "was not dispatched.");
+        }
+
+        if (!string.IsNullOrWhiteSpace(requiredSidecarCapability) &&
+            (health is null ||
+             !health.Capabilities.Contains(
+                 requiredSidecarCapability,
+                 StringComparer.Ordinal)))
+        {
+            throw new InvalidOperationException(
+                "The active sidecar no longer advertises the required " +
+                $"'{requiredSidecarCapability}' capability. The prepared " +
+                "operation was not dispatched.");
         }
     }
 
@@ -1936,5 +2044,17 @@ public sealed class TripoPanelSession : IAsyncDisposable
 
         string trimmed = message.Trim();
         return trimmed.Length <= 512 ? trimmed : trimmed[..512];
+    }
+
+    private static string? BoundErrorCode(Exception exception)
+    {
+        if (exception is not Tripo.Bridge.HostControlCallException call ||
+            string.IsNullOrWhiteSpace(call.Code))
+        {
+            return null;
+        }
+
+        string code = call.Code.Trim();
+        return code.Length <= 128 ? code : code[..128];
     }
 }

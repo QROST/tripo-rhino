@@ -200,6 +200,128 @@ public static class TripoPanelRecoveryReviewFormatter
     }
 }
 
+internal enum DirectGlbCreateUiStage
+{
+    Inactive,
+    Preflighting,
+    WaitingForGeneration,
+    Importing,
+    Completed,
+    TerminalWithoutImport,
+    Refused,
+    ImportFailed,
+    ImportRetryRequired,
+    ManualReviewRequired,
+}
+
+internal sealed record DirectGlbCreateConfirmation(
+    string Title,
+    string Message,
+    bool DefaultToNo)
+{
+    internal static DirectGlbCreateConfirmation Create(
+        string operationId,
+        string documentTitle,
+        string objectName)
+    {
+        if (string.IsNullOrWhiteSpace(operationId))
+        {
+            throw new ArgumentException(
+                "The operation ID is required.",
+                nameof(operationId));
+        }
+
+        if (string.IsNullOrWhiteSpace(documentTitle))
+        {
+            throw new ArgumentException(
+                "The document title is required.",
+                nameof(documentTitle));
+        }
+
+        if (string.IsNullOrWhiteSpace(objectName))
+        {
+            throw new ArgumentException(
+                "The object name is required.",
+                nameof(objectName));
+        }
+        return new DirectGlbCreateConfirmation(
+            "Create model and import direct GLB?",
+            "This sends one Tripo text-to-model generation request, which can " +
+            "consume Tripo credits. " +
+            "After that task reports success, this panel will import its GLB " +
+            $"directly into \"{documentTitle}\" as \"{objectName}\".\n\n" +
+            "No separate OBJ conversion request is sent.\n\n" +
+            $"Durable generation operation ID:\n{operationId}\n\n" +
+            "Keep this ID if the response is lost. Hiding the panel does not " +
+            "cancel the remote Tripo task.",
+            DefaultToNo: true);
+    }
+}
+
+internal static class DirectGlbFirstDispatchGuard
+{
+    internal static string? GetBlockingReason(
+        TripoPanelState state,
+        TripoPanelRecoveryLoadResult recovery,
+        PreparedTextGeneration prepared,
+        bool directGlbSelected)
+    {
+        ArgumentNullException.ThrowIfNull(state);
+        ArgumentNullException.ThrowIfNull(recovery);
+        ArgumentNullException.ThrowIfNull(prepared);
+        if (recovery.HasBlock)
+        {
+            return "Review recovered operation IDs before starting a " +
+                   "generation request that can consume credits.";
+        }
+
+        if (!directGlbSelected)
+        {
+            return "Direct GLB is no longer selected. Nothing was sent.";
+        }
+
+        if (!state.Connected ||
+            state.Busy ||
+            state.CredentialStatus?.HasApiKey != true)
+        {
+            return "The refreshed Rhino connection is not ready for generation.";
+        }
+
+        Tripo.Bridge.HostContextReceipt? context = state.Context;
+        if (context is null)
+        {
+            return "The active Rhino document context is unavailable.";
+        }
+
+        if (!string.Equals(
+                context.Host,
+                "rhino",
+                StringComparison.OrdinalIgnoreCase) ||
+            !context.Capabilities.Contains(
+                Tripo.Bridge.BridgeConstants.ImportGlbMethod,
+                StringComparer.Ordinal))
+        {
+            return "Direct GLB is unavailable in the refreshed plugin/sidecar " +
+                   "pair. No generation request was sent.";
+        }
+
+        if (!string.Equals(
+                context.DocumentSessionId,
+                prepared.DocumentSessionId,
+                StringComparison.Ordinal) ||
+            state.PreparedGeneration is not { } current ||
+            !Equals(current, prepared) ||
+            state.GenerationDispatchAttempted ||
+            !state.CanDispatchPreparedGeneration)
+        {
+            return "The prepared generation no longer matches the confirmed " +
+                   "direct GLB workflow. Nothing was sent.";
+        }
+
+        return null;
+    }
+}
+
 public sealed class TripoPanelPresentation
 {
     private TripoPanelPresentation()
@@ -277,6 +399,15 @@ public sealed class TripoPanelPresentation
 
     public bool ReviewRecoveryEnabled { get; private init; }
 
+    public bool CreateInRhinoEnabled { get; private init; }
+
+    internal bool CanStartDirectGlbCreate { get; private init; }
+
+    public string CreateInRhinoText { get; private init; } =
+        "Create in Rhino";
+
+    public string CreateInRhinoHelp { get; private init; } = string.Empty;
+
     public bool GenerateEnabled { get; private init; }
 
     public string GenerateText { get; private init; } = string.Empty;
@@ -317,12 +448,35 @@ public sealed class TripoPanelPresentation
         string? recoveryInspection,
         string? prompt,
         string? objectName,
-        string? importSource = null)
+        string? importSource = null) =>
+        Create(
+            state,
+            recovery,
+            recoveryInspection,
+            prompt,
+            objectName,
+            importSource,
+            DirectGlbCreateUiStage.Inactive);
+
+    internal static TripoPanelPresentation Create(
+        TripoPanelState state,
+        TripoPanelRecoveryLoadResult recovery,
+        string? recoveryInspection,
+        string? prompt,
+        string? objectName,
+        string? importSource,
+        DirectGlbCreateUiStage directGlbCreateStage)
     {
         ArgumentNullException.ThrowIfNull(state);
         ArgumentNullException.ThrowIfNull(recovery);
 
         bool ready = state.Connected && !state.Busy;
+        bool automaticCreateActive =
+            directGlbCreateStage is
+                DirectGlbCreateUiStage.Preflighting or
+                DirectGlbCreateUiStage.WaitingForGeneration or
+                DirectGlbCreateUiStage.Importing;
+        bool controlsReady = ready && !automaticCreateActive;
         bool generationPrepared = state.PreparedGeneration is not null;
         bool generationSucceeded =
             state.GenerationStatus?.Status == "success";
@@ -350,30 +504,89 @@ public sealed class TripoPanelPresentation
                 ? generationSucceeded && directGlbSupported
                 : conversionSucceeded;
         bool recoveryBlocked = recovery.HasBlock;
+        bool directGlbCredentialRecoveryReady =
+            ready &&
+            !recoveryBlocked &&
+            directGlbCreateStage ==
+                DirectGlbCreateUiStage.WaitingForGeneration &&
+            state.HasDurableGenerationTask &&
+            state.HasCredentialRefreshFailure;
+        bool normalApiKeyInteractionReady =
+            controlsReady &&
+            (!recoveryBlocked ||
+             (recovery.Hints.Count > 0 && recovery.Issues.Count == 0));
         bool environmentOverridesPanelKey =
             state.CredentialStatus is
             {
                 HasApiKey: true,
                 Source: "environment",
             };
-        bool hasPrompt = !string.IsNullOrWhiteSpace(prompt);
-        bool hasObjectName = !string.IsNullOrWhiteSpace(objectName);
+        bool hasPrompt =
+            !string.IsNullOrWhiteSpace(prompt) &&
+            prompt.Length <= 1024;
+        bool hasObjectName =
+            !string.IsNullOrWhiteSpace(objectName) &&
+            objectName.Length <= 128;
+        bool canStartDirectGlbCreate =
+            ready &&
+            !recoveryBlocked &&
+            state.CredentialStatus?.HasApiKey == true &&
+            directGlbSelected &&
+            directGlbSupported &&
+            !state.HasWorkflowState &&
+            hasPrompt &&
+            hasObjectName;
         string? generationTaskId =
             state.GenerationReceipt?.TaskId ??
             state.GenerationOperationStatus?.CreatedTaskId;
         string? conversionTaskId =
             state.ConversionReceipt?.ConversionTaskId ??
             state.ConversionOperationStatus?.CreatedTaskId;
-        string resultStatus = state.LastError is not null
-            ? state.LastError
-            : state.Busy
-                ? "Working…"
-                : state.ImportReceipt is not null
-                    ? FriendlyImportResult(
-                        state.ImportReceipt
-                            .HostReceipt
-                            .TransactionStatus)
-                    : "Ready.";
+        string resultStatus = directGlbCreateStage switch
+        {
+            DirectGlbCreateUiStage.Preflighting =>
+                "Checking the active Rhino document and direct GLB support…",
+            DirectGlbCreateUiStage.WaitingForGeneration
+                when state.LastError is not null =>
+                "Generation refresh paused: " + state.LastError +
+                " Click Refresh generation to continue. No import has run.",
+            DirectGlbCreateUiStage.WaitingForGeneration =>
+                "Waiting for Tripo generation… Rhino will import the GLB " +
+                "automatically when it is ready.",
+            DirectGlbCreateUiStage.Importing =>
+                "Generation complete. Importing GLB into Rhino…",
+            DirectGlbCreateUiStage.Completed
+                when state.ImportReceipt is not null =>
+                FriendlyImportResult(
+                    state.ImportReceipt.HostReceipt.TransactionStatus),
+            DirectGlbCreateUiStage.TerminalWithoutImport =>
+                "Generation ended with " +
+                (state.GenerationStatus?.Status ?? "an unknown status") +
+                ". Nothing was imported.",
+            DirectGlbCreateUiStage.Refused =>
+                "Automatic import was refused because the generation evidence " +
+                "did not match this workflow. Nothing was imported; review " +
+                "Workflow details.",
+            DirectGlbCreateUiStage.ImportFailed =>
+                state.LastError is null
+                    ? "Automatic direct GLB import stopped before Rhino saved " +
+                      "a durable import receipt. Nothing was imported by this " +
+                      "attempt."
+                    : "Automatic direct GLB import stopped: " + state.LastError,
+            DirectGlbCreateUiStage.ImportRetryRequired =>
+                "Rhino did not receive a durable import receipt. The same " +
+                "operation ID may already have been applied; use Retry same " +
+                "UUID instead of creating a replacement operation.",
+            DirectGlbCreateUiStage.ManualReviewRequired =>
+                "Rhino could not prove the final document state. Do not retry " +
+                "this import; inspect the document and recovery operation ID.",
+            _ when state.LastError is not null => state.LastError,
+            _ when state.Busy => "Working…",
+            _ when state.ImportReceipt is not null =>
+                FriendlyImportResult(
+                    state.ImportReceipt.HostReceipt.TransactionStatus),
+            _ => "Ready.",
+        };
 
         return new TripoPanelPresentation
         {
@@ -444,16 +657,17 @@ public sealed class TripoPanelPresentation
             ResultVisible =
                 state.LastError is not null ||
                 state.Busy ||
-                state.ImportReceipt is not null,
-            ConnectEnabled = !state.Busy,
+                state.ImportReceipt is not null ||
+                directGlbCreateStage != DirectGlbCreateUiStage.Inactive,
+            ConnectEnabled =
+                !state.Busy &&
+                !automaticCreateActive,
             ApiKeyEnabled =
-                ready &&
-                !environmentOverridesPanelKey &&
-                (!recoveryBlocked ||
-                 (recovery.Hints.Count > 0 &&
-                  recovery.Issues.Count == 0)),
+                (normalApiKeyInteractionReady ||
+                 directGlbCredentialRecoveryReady) &&
+                !environmentOverridesPanelKey,
             ClearApiKeyEnabled =
-                ready &&
+                controlsReady &&
                 !recoveryBlocked &&
                 !environmentOverridesPanelKey &&
                 !state.RequiresCredentialRecovery &&
@@ -464,13 +678,52 @@ public sealed class TripoPanelPresentation
                 BuildClearApiKeyHelp(state, recoveryBlocked),
             CheckRecoveryEnabled =
                 !state.Busy &&
+                !automaticCreateActive &&
                 recovery.HasBlock,
             ReviewRecoveryEnabled =
                 !state.Busy &&
+                !automaticCreateActive &&
                 recovery.Hints.Count > 0 &&
                 recovery.Issues.Count == 0,
+            CreateInRhinoEnabled =
+                directGlbCreateStage == DirectGlbCreateUiStage.Inactive &&
+                canStartDirectGlbCreate,
+            CanStartDirectGlbCreate = canStartDirectGlbCreate,
+            CreateInRhinoText = directGlbCreateStage switch
+            {
+                DirectGlbCreateUiStage.Preflighting =>
+                    "Checking…",
+                DirectGlbCreateUiStage.WaitingForGeneration =>
+                    "Generating…",
+                DirectGlbCreateUiStage.Importing =>
+                    "Importing GLB…",
+                DirectGlbCreateUiStage.Completed =>
+                    state.ImportReceipt?.HostReceipt.TransactionStatus switch
+                    {
+                        "committed" => "Created in Rhino",
+                        "already_exists" => "Already in Rhino",
+                        _ => "Review required",
+                    },
+                DirectGlbCreateUiStage.TerminalWithoutImport or
+                DirectGlbCreateUiStage.Refused or
+                DirectGlbCreateUiStage.ImportFailed or
+                DirectGlbCreateUiStage.ImportRetryRequired =>
+                    "Review required",
+                DirectGlbCreateUiStage.ManualReviewRequired =>
+                    "Manual review required",
+                _ => "Create in Rhino",
+            },
+            CreateInRhinoHelp =
+                BuildCreateInRhinoHelp(
+                    state,
+                    recoveryBlocked,
+                    directGlbSelected,
+                    directGlbSupported,
+                    hasPrompt,
+                    hasObjectName,
+                    directGlbCreateStage),
             GenerateEnabled =
-                ready &&
+                controlsReady &&
                 !recoveryBlocked &&
                 state.CredentialStatus?.HasApiKey == true &&
                 ((!generationPrepared && hasPrompt) ||
@@ -490,10 +743,11 @@ public sealed class TripoPanelPresentation
             RefreshGenerationEnabled =
                 ready &&
                 !recoveryBlocked &&
+                !generationSucceeded &&
                 (state.GenerationReceipt is not null ||
                  state.GenerationDispatchAttempted),
             ConvertEnabled =
-                ready &&
+                controlsReady &&
                 !recoveryBlocked &&
                 generationSucceeded &&
                 (!conversionPrepared ||
@@ -515,7 +769,7 @@ public sealed class TripoPanelPresentation
                 (state.ConversionReceipt is not null ||
                  state.ConversionDispatchAttempted),
             ImportEnabled =
-                ready &&
+                controlsReady &&
                 !recoveryBlocked &&
                 importPrerequisite &&
                 (state.PreparedImport is null
@@ -533,7 +787,7 @@ public sealed class TripoPanelPresentation
                         ? "Import prepared"
                         : "Imported",
             ImportSourceEnabled =
-                ready && state.PreparedImport is null,
+                controlsReady && state.PreparedImport is null,
             ImportGuidance = state.ImportRequiresManualReview
                 ? "Rhino could not prove the final document state. Do not " +
                   "retry this import; inspect the document and recovery " +
@@ -541,28 +795,158 @@ public sealed class TripoPanelPresentation
                 : directGlbRoute
                     ? directGlbSupported
                     ? "Recommended: import the generation GLB directly with " +
-                      "Rhino-native PBR materials. No OBJ conversion task is created."
+                      "Rhino-native materials when available. No OBJ conversion " +
+                      "task is created."
                     : "Direct GLB is unavailable in this plugin/sidecar pair. " +
                       "Install the matching build or select OBJ compatibility."
                 : "Compatibility path: create and finish a separate OBJ " +
                   "conversion before importing.",
             ResetEnabled =
-                ready &&
+                controlsReady &&
                 !recoveryBlocked &&
                 !state.HasUnresolvedDispatch,
-            PromptEnabled = ready && !generationPrepared,
-            FaceLimitEnabled = ready && !generationPrepared,
-            WithMaterialsEnabled = ready && !generationPrepared,
-            NameEnabled = ready && state.PreparedImport is null,
+            PromptEnabled = controlsReady && !generationPrepared,
+            FaceLimitEnabled = controlsReady && !generationPrepared,
+            WithMaterialsEnabled = controlsReady && !generationPrepared,
+            NameEnabled =
+                controlsReady && state.PreparedImport is null,
             ImportModeEnabled =
-                ready &&
+                controlsReady &&
                 state.PreparedImport is null &&
                 !directGlbRoute,
             ApplyMaterialsEnabled =
-                ready &&
+                controlsReady &&
                 state.PreparedImport is null &&
                 !directGlbRoute,
         };
+    }
+
+    private static string BuildCreateInRhinoHelp(
+        TripoPanelState state,
+        bool recoveryBlocked,
+        bool directGlbSelected,
+        bool directGlbSupported,
+        bool hasPrompt,
+        bool hasObjectName,
+        DirectGlbCreateUiStage directGlbCreateStage)
+    {
+        if (directGlbCreateStage == DirectGlbCreateUiStage.Preflighting)
+        {
+            return "Refreshing the active document, credential, and direct " +
+                   "GLB capability before any request that can consume credits.";
+        }
+
+        if (directGlbCreateStage ==
+            DirectGlbCreateUiStage.WaitingForGeneration)
+        {
+            if (state.LastError is not null)
+            {
+                return state.HasCredentialRefreshFailure
+                    ? "Generation refresh is paused. Restore a same-account " +
+                      "API key for this workflow, or click Refresh generation " +
+                      "to retry. The key remains session-only; no import has run."
+                    : "Generation refresh is paused. Click Refresh generation " +
+                      "to retry. API-key changes remain locked because the " +
+                      "sidecar did not report a credential failure; no import " +
+                      "has run.";
+            }
+
+            return "Waiting for the same generation task. Rhino will " +
+                   "import its GLB directly when it reports success; no OBJ " +
+                   "conversion task is created.";
+        }
+
+        if (directGlbCreateStage == DirectGlbCreateUiStage.Importing)
+        {
+            return "The generation succeeded and Rhino is importing that " +
+                   "task's GLB directly.";
+        }
+
+        if (directGlbCreateStage == DirectGlbCreateUiStage.Completed)
+        {
+            return "The confirmed generation GLB has a durable Rhino import " +
+                   "receipt.";
+        }
+
+        if (directGlbCreateStage ==
+            DirectGlbCreateUiStage.ManualReviewRequired)
+        {
+            return "Rhino could not prove whether the document mutation " +
+                   "committed. Do not retry; inspect the owning document and " +
+                   "recovery operation ID.";
+        }
+
+        if (directGlbCreateStage ==
+            DirectGlbCreateUiStage.ImportRetryRequired)
+        {
+            return "The import receipt is missing. The existing import action " +
+                   "can retry the same durable UUID; do not create a replacement " +
+                   "operation.";
+        }
+
+        if (directGlbCreateStage is
+            DirectGlbCreateUiStage.TerminalWithoutImport or
+            DirectGlbCreateUiStage.Refused or
+            DirectGlbCreateUiStage.ImportFailed)
+        {
+            return "Nothing was imported. Review the generation status and " +
+                   "Workflow details, then start a new workflow when safe.";
+        }
+
+        if (state.Busy)
+        {
+            return "Wait for the current panel operation to finish.";
+        }
+
+        if (!state.Connected)
+        {
+            return "Connect to the active Rhino document first.";
+        }
+
+        if (recoveryBlocked)
+        {
+            return "Review the recovered operation IDs before starting new " +
+                   "generation work that can consume credits.";
+        }
+
+        if (state.CredentialStatus?.HasApiKey != true)
+        {
+            return "Set a Tripo API key before starting generation that can " +
+                   "consume credits.";
+        }
+
+        if (!directGlbSelected)
+        {
+            return "Select Direct GLB to use the one-click Rhino workflow. " +
+                   "OBJ compatibility remains a separate manual path.";
+        }
+
+        if (!directGlbSupported)
+        {
+            return "Direct GLB is unavailable in this plugin/sidecar pair. " +
+                   "Install the matching build before starting generation that " +
+                   "can consume credits.";
+        }
+
+        if (state.HasWorkflowState)
+        {
+            return "Finish or reset the current workflow before starting " +
+                   "another model.";
+        }
+
+        if (!hasPrompt)
+        {
+            return "The prompt must contain 1 to 1024 characters.";
+        }
+
+        if (!hasObjectName)
+        {
+            return "The Rhino object name must contain 1 to 128 characters.";
+        }
+
+        return "Creates one Tripo generation task, which can consume credits, " +
+               "waits for it to finish, then imports its GLB directly into " +
+               "Rhino. No separate OBJ conversion request is sent.";
     }
 
     private static string BuildApiKeyHelp(

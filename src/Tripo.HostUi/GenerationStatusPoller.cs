@@ -11,6 +11,7 @@ internal sealed class GenerationStatusPoller : IDisposable
     private Task? _runTask;
     private string? _activeTaskId;
     private string? _failedTaskId;
+    private string? _resumeRequestedTaskId;
     private bool _disposed;
 
     public GenerationStatusPoller(
@@ -121,6 +122,7 @@ internal sealed class GenerationStatusPoller : IDisposable
             _disposed = true;
             _activeTaskId = null;
             _failedTaskId = null;
+            _resumeRequestedTaskId = null;
             cancellation = _runCancellation;
             _runCancellation = null;
             _runTask = null;
@@ -149,6 +151,7 @@ internal sealed class GenerationStatusPoller : IDisposable
                 cancellation = _runCancellation;
                 _activeTaskId = null;
                 _failedTaskId = null;
+                _resumeRequestedTaskId = null;
                 _runCancellation = null;
                 _runTask = null;
             }
@@ -159,6 +162,11 @@ internal sealed class GenerationStatusPoller : IDisposable
             {
                 if (_runTask is { IsCompleted: false })
                 {
+                    if (resumeAfterFailure)
+                    {
+                        _resumeRequestedTaskId = taskId;
+                    }
+
                     return;
                 }
 
@@ -172,6 +180,7 @@ internal sealed class GenerationStatusPoller : IDisposable
                 }
 
                 _failedTaskId = null;
+                _resumeRequestedTaskId = null;
                 StartRun(taskId);
             }
             else
@@ -179,6 +188,7 @@ internal sealed class GenerationStatusPoller : IDisposable
                 cancellation = _runCancellation;
                 _activeTaskId = taskId;
                 _failedTaskId = null;
+                _resumeRequestedTaskId = null;
                 StartRun(taskId);
             }
         }
@@ -208,6 +218,9 @@ internal sealed class GenerationStatusPoller : IDisposable
                 cancellation.Token.ThrowIfCancellationRequested();
                 await _refresh(taskId, cancellation.Token)
                     .ConfigureAwait(false);
+                ClearResumeRequestAfterSuccessfulRefresh(
+                    taskId,
+                    cancellation);
             }
         }
         catch (OperationCanceledException)
@@ -253,12 +266,41 @@ internal sealed class GenerationStatusPoller : IDisposable
                         _activeTaskId,
                         StringComparison.Ordinal))
                 {
-                    _failedTaskId = taskId;
+                    if (string.Equals(
+                            taskId,
+                            _resumeRequestedTaskId,
+                            StringComparison.Ordinal))
+                    {
+                        _failedTaskId = null;
+                        _resumeRequestedTaskId = null;
+                        StartRun(taskId);
+                    }
+                    else
+                    {
+                        _failedTaskId = taskId;
+                    }
                 }
             }
         }
 
         cancellation.Dispose();
+    }
+
+    private void ClearResumeRequestAfterSuccessfulRefresh(
+        string taskId,
+        CancellationTokenSource cancellation)
+    {
+        lock (_gate)
+        {
+            if (ReferenceEquals(_runCancellation, cancellation) &&
+                string.Equals(
+                    taskId,
+                    _resumeRequestedTaskId,
+                    StringComparison.Ordinal))
+            {
+                _resumeRequestedTaskId = null;
+            }
+        }
     }
 
     private static void CancelSafely(

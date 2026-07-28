@@ -69,7 +69,7 @@ public sealed class TripoRhinoPanel : Panel, IPanel
         Text = "Apply diffuse materials (OBJ fallback)",
         ToolTip =
             "Apply baked OBJ/MTL diffuse materials when available. Direct GLB " +
-            "always preserves Rhino-native PBR materials.",
+            "imports generated materials when they are available.",
     };
     private readonly Label _documentStatus = StatusLabel();
     private readonly TextBox _documentSession = OperationStatusBox();
@@ -113,6 +113,8 @@ public sealed class TripoRhinoPanel : Panel, IPanel
         ToolTip =
             "Inspect recovered operations, review the risk, and unlock Tripo.",
     };
+    private readonly Button _createInRhino =
+        new() { Text = "Create in Rhino" };
     private readonly Button _generate = new() { Text = "Generate" };
     private readonly Button _refreshGeneration = new()
     {
@@ -136,8 +138,13 @@ public sealed class TripoRhinoPanel : Panel, IPanel
     private string? _displayedPreparedOperationId;
     private string _lastValidObjectName =
         Tripo.HostUi.RhinoPanelUserSettings.DefaultObjectName;
+    private Tripo.HostUi.DirectGlbAutoImportIntent?
+        _directGlbAutoImportIntent;
+    private Tripo.HostUi.DirectGlbCreateUiStage _directGlbCreateUiStage =
+        Tripo.HostUi.DirectGlbCreateUiStage.Inactive;
     private bool _recoveryWasBlocked;
     private bool _recoveryReviewInProgress;
+    private bool _createInRhinoStarting;
     private bool _closing;
     private long _sessionGeneration = 1;
 
@@ -191,6 +198,7 @@ public sealed class TripoRhinoPanel : Panel, IPanel
         _clearApiKey.Click += OnClearApiKey;
         _checkRecovery.Click += OnCheckRecovery;
         _reviewRecovery.Click += OnReviewRecovery;
+        _createInRhino.Click += OnCreateInRhino;
         _generate.Click += OnGenerate;
         _refreshGeneration.Click += OnRefreshGeneration;
         _convert.Click += OnConvert;
@@ -329,7 +337,10 @@ public sealed class TripoRhinoPanel : Panel, IPanel
                     _withMaterials,
                     _generationTask,
                     _generationProgress,
-                    ActionColumn(_generate, _refreshGeneration)),
+                    ActionColumn(
+                        _createInRhino,
+                        _generate,
+                        _refreshGeneration)),
                 Section(
                     "2 · Optional OBJ fallback",
                     _conversionTask,
@@ -500,6 +511,7 @@ public sealed class TripoRhinoPanel : Panel, IPanel
 
         try
         {
+            EnsureNoAutomaticDirectGlbCreateMutation("reconnect the panel");
             EnsurePanelDocumentIsActive();
             await _session.ConnectAsync(_panelLifetime.Token);
             if (_closing)
@@ -529,6 +541,7 @@ public sealed class TripoRhinoPanel : Panel, IPanel
     {
         try
         {
+            EnsureDirectGlbCredentialMutationAllowed();
             if (!_session.State.Connected)
             {
                 await _session.ConnectAsync(_panelLifetime.Token);
@@ -566,6 +579,8 @@ public sealed class TripoRhinoPanel : Panel, IPanel
     {
         try
         {
+            EnsureNoAutomaticDirectGlbCreateMutation(
+                "remove the saved API key");
             if (_closing ||
                 MessageBox.Show(
                     this,
@@ -604,6 +619,7 @@ public sealed class TripoRhinoPanel : Panel, IPanel
         }
 
         Tripo.HostUi.TripoPanelSession ownerSession = _session;
+        long ownerGeneration = _sessionGeneration;
         Tripo.HostUi.TripoApiKeyPromptPolicy policy =
             Tripo.HostUi.TripoApiKeyPromptPolicy.Create(
                 ownerSession.State);
@@ -631,6 +647,23 @@ public sealed class TripoRhinoPanel : Panel, IPanel
                     submission.Persist,
                     _panelLifetime.Token)
                 .ConfigureAwait(false);
+            if (!_closing &&
+                ownerGeneration == _sessionGeneration &&
+                ReferenceEquals(ownerSession, _session) &&
+                _directGlbAutoImportIntent is not null &&
+                _directGlbCreateUiStage ==
+                    Tripo.HostUi.DirectGlbCreateUiStage
+                        .WaitingForGeneration)
+            {
+                string? pendingTaskId =
+                    Tripo.HostUi.GenerationStatusPoller.GetPendingTaskId(
+                        ownerSession.State,
+                        ownerSession.Recovery);
+                _generationStatusPoller.Resume(pendingTaskId);
+                QueueDirectGlbAutoImportContinuation(
+                    ownerSession,
+                    ownerGeneration);
+            }
         }
         finally
         {
@@ -794,10 +827,12 @@ public sealed class TripoRhinoPanel : Panel, IPanel
             return;
         }
 
-        _recoveryReviewInProgress = true;
-        RequestRender();
         try
         {
+            EnsureNoAutomaticDirectGlbCreateMutation(
+                "inspect recovery records");
+            _recoveryReviewInProgress = true;
+            RequestRender();
             Tripo.HostUi.TripoPanelRecoveryLoadResult recovery =
                 _session.RefreshRecovery();
             if (recovery.Hints.Count == 0)
@@ -853,6 +888,8 @@ public sealed class TripoRhinoPanel : Panel, IPanel
     {
         try
         {
+            EnsureNoAutomaticDirectGlbCreateMutation(
+                "review recovery records");
             await ReviewAndUnlockRecoveryAsync();
         }
         catch (OperationCanceledException) when (_closing)
@@ -1022,6 +1059,9 @@ public sealed class TripoRhinoPanel : Panel, IPanel
     private async Task ReloadPanelSessionForRecoveryAsync()
     {
         Tripo.HostUi.TripoPanelSession previous = _session;
+        _directGlbAutoImportIntent = null;
+        _directGlbCreateUiStage =
+            Tripo.HostUi.DirectGlbCreateUiStage.Inactive;
         _generationStatusPoller.Stop();
         _renderQueue.CancelPending();
         previous.StateChanged -= OnStateChanged;
@@ -1126,10 +1166,207 @@ public sealed class TripoRhinoPanel : Panel, IPanel
         }
     }
 
+    private async void OnCreateInRhino(object? sender, EventArgs args)
+    {
+        if (_closing ||
+            _createInRhinoStarting ||
+            _directGlbAutoImportIntent is not null ||
+            _directGlbCreateUiStage !=
+                Tripo.HostUi.DirectGlbCreateUiStage.Inactive)
+        {
+            return;
+        }
+
+        _createInRhinoStarting = true;
+        _directGlbCreateUiStage =
+            Tripo.HostUi.DirectGlbCreateUiStage.Preflighting;
+        RequestRender();
+        Tripo.HostUi.TripoPanelSession ownerSession = _session;
+        long ownerGeneration = _sessionGeneration;
+        Tripo.HostUi.PreparedTextGeneration? prepared = null;
+        Tripo.HostUi.DirectGlbAutoImportIntent? intent = null;
+        try
+        {
+            EnsurePanelDocumentIsActive();
+            await ownerSession.ConnectAsync(_panelLifetime.Token);
+            if (_closing ||
+                ownerGeneration != _sessionGeneration ||
+                !ReferenceEquals(ownerSession, _session))
+            {
+                return;
+            }
+
+            EnsurePanelDocumentIsActive();
+            Tripo.HostUi.TripoPanelState state = ownerSession.State;
+            Tripo.HostUi.TripoPanelPresentation presentation =
+                CreatePresentation(state, ownerSession.Recovery);
+            if (!presentation.CanStartDirectGlbCreate)
+            {
+                throw new InvalidOperationException(
+                    presentation.CreateInRhinoHelp);
+            }
+
+            if (!Tripo.HostUi.RhinoPanelUserSettings.TryNormalizeObjectName(
+                    _name.Text,
+                    out string normalizedObjectName))
+            {
+                throw new InvalidOperationException(
+                    "The Rhino object name must contain 1 to 128 characters.");
+            }
+
+            prepared = ownerSession.PrepareGeneration(
+                    _prompt.Text,
+                    checked((int)_faceLimit.Value),
+                    _withMaterials.Checked == true);
+            PersistUserSettings();
+            RequestRender();
+            if (!ConfirmDirectGlbCreate(
+                    prepared.OperationId,
+                    state.Context?.DocumentTitle ?? "the active document",
+                    normalizedObjectName))
+            {
+                if (!_closing &&
+                    ownerGeneration == _sessionGeneration &&
+                    ReferenceEquals(ownerSession, _session) &&
+                    !ownerSession.State.GenerationDispatchAttempted)
+                {
+                    ownerSession.ResetWorkflow();
+                    _directGlbCreateUiStage =
+                        Tripo.HostUi.DirectGlbCreateUiStage.Inactive;
+                    RequestRender();
+                }
+
+                return;
+            }
+
+            EnsurePanelDocumentIsActive();
+            await ownerSession.ConnectAsync(_panelLifetime.Token);
+            if (_closing ||
+                ownerGeneration != _sessionGeneration ||
+                !ReferenceEquals(ownerSession, _session))
+            {
+                return;
+            }
+
+            EnsurePanelDocumentIsActive();
+            EnsureDirectGlbFirstDispatchAvailable(
+                ownerSession.State,
+                ownerSession.Recovery,
+                prepared);
+            intent = new Tripo.HostUi.DirectGlbAutoImportIntent(
+                ownerGeneration,
+                prepared.OperationId,
+                prepared.DocumentSessionId,
+                normalizedObjectName);
+            _directGlbAutoImportIntent = intent;
+            _directGlbCreateUiStage =
+                Tripo.HostUi.DirectGlbCreateUiStage.WaitingForGeneration;
+            RequestRender();
+            await ownerSession
+                .DispatchPreparedGenerationRequiringCapabilityAsync(
+                userConfirmedExternalCost: true,
+                requiredHostCapability:
+                    Tripo.Bridge.BridgeConstants.ImportGlbMethod,
+                requiredSidecarCapability:
+                    Tripo.Bridge.HostControlConstants
+                        .ImportGenerationGlbMethod,
+                cancellationToken: _panelLifetime.Token);
+            if (!_closing &&
+                ownerGeneration == _sessionGeneration &&
+                ReferenceEquals(ownerSession, _session))
+            {
+                RequestRender(
+                    ownerSession,
+                    ownerSession.State,
+                    ownerSession.Recovery);
+                QueueDirectGlbAutoImportContinuation(
+                    ownerSession,
+                    ownerGeneration);
+            }
+        }
+        catch (OperationCanceledException) when (_closing)
+        {
+        }
+        catch (ObjectDisposedException) when (
+            _closing ||
+            ownerGeneration != _sessionGeneration ||
+            !ReferenceEquals(ownerSession, _session))
+        {
+        }
+        catch (Exception exception)
+        {
+            if (ownerGeneration == _sessionGeneration &&
+                ReferenceEquals(ownerSession, _session))
+            {
+                Tripo.HostUi.TripoPanelState failedState =
+                    ownerSession.State;
+                bool matchingUnsentGeneration =
+                    prepared is not null &&
+                    failedState.PreparedGeneration is { } failedPrepared &&
+                    string.Equals(
+                        failedPrepared.OperationId,
+                        prepared.OperationId,
+                        StringComparison.Ordinal) &&
+                    !failedState.GenerationDispatchAttempted &&
+                    !failedState.HasDurableGenerationTask;
+                if (matchingUnsentGeneration)
+                {
+                    if (intent is not null &&
+                        ReferenceEquals(
+                            _directGlbAutoImportIntent,
+                            intent))
+                    {
+                        _directGlbAutoImportIntent = null;
+                    }
+
+                    _directGlbCreateUiStage =
+                        Tripo.HostUi.DirectGlbCreateUiStage.Inactive;
+                    TryResetUnsentGeneration(
+                        ownerSession,
+                        prepared!.OperationId);
+                    RequestRender();
+                }
+                else if (intent is not null &&
+                         ReferenceEquals(
+                             _directGlbAutoImportIntent,
+                             intent) &&
+                         failedState.PreparedGeneration is null)
+                {
+                    _directGlbAutoImportIntent = null;
+                    _directGlbCreateUiStage =
+                        Tripo.HostUi.DirectGlbCreateUiStage.Inactive;
+                    RequestRender();
+                }
+            }
+
+            ShowError(exception);
+        }
+        finally
+        {
+            _createInRhinoStarting = false;
+            if (intent is null &&
+                _directGlbCreateUiStage ==
+                    Tripo.HostUi.DirectGlbCreateUiStage.Preflighting)
+            {
+                _directGlbCreateUiStage =
+                    Tripo.HostUi.DirectGlbCreateUiStage.Inactive;
+            }
+
+            if (!_closing &&
+                ownerGeneration == _sessionGeneration &&
+                ReferenceEquals(ownerSession, _session))
+            {
+                RequestRender();
+            }
+        }
+    }
+
     private async void OnGenerate(object? sender, EventArgs args)
     {
         try
         {
+            EnsureNoAutomaticDirectGlbCreateMutation(
+                "start or retry generation");
             EnsurePanelDocumentIsActive();
             bool retry = _session.State.GenerationRetryAllowed;
             Tripo.HostUi.PreparedTextGeneration prepared =
@@ -1161,17 +1398,24 @@ public sealed class TripoRhinoPanel : Panel, IPanel
 
     private async void OnRefreshGeneration(object? sender, EventArgs args)
     {
+        Tripo.HostUi.TripoPanelSession ownerSession = _session;
+        long ownerGeneration = _sessionGeneration;
         try
         {
-            Tripo.HostUi.TripoPanelSession ownerSession = _session;
+            EnsureDirectGlbGenerationRefreshAllowed();
             await ownerSession.RefreshGenerationStatusAsync(
                 _panelLifetime.Token);
-            if (!_closing && ReferenceEquals(ownerSession, _session))
+            if (!_closing &&
+                ownerGeneration == _sessionGeneration &&
+                ReferenceEquals(ownerSession, _session))
             {
                 _generationStatusPoller.Resume(
                     Tripo.HostUi.GenerationStatusPoller.GetPendingTaskId(
                         ownerSession.State,
                         ownerSession.Recovery));
+                QueueDirectGlbAutoImportContinuation(
+                    ownerSession,
+                    ownerGeneration);
             }
         }
         catch (OperationCanceledException) when (_closing)
@@ -1182,7 +1426,31 @@ public sealed class TripoRhinoPanel : Panel, IPanel
         }
         catch (Exception exception)
         {
+            bool ownsCurrentSession =
+                !_closing &&
+                ownerGeneration == _sessionGeneration &&
+                ReferenceEquals(ownerSession, _session);
+            if (ownsCurrentSession &&
+                _directGlbAutoImportIntent is not null)
+            {
+                if (!ownerSession.State.HasDurableGenerationTask)
+                {
+                    _directGlbAutoImportIntent = null;
+                    _directGlbCreateUiStage =
+                        Tripo.HostUi.DirectGlbCreateUiStage.Inactive;
+                    RequestRender();
+                }
+            }
+
             ShowError(exception);
+            if (ownsCurrentSession &&
+                _directGlbAutoImportIntent is not null &&
+                ownerSession.State.HasDurableGenerationTask)
+            {
+                QueueDirectGlbAutoImportContinuation(
+                    ownerSession,
+                    ownerGeneration);
+            }
         }
     }
 
@@ -1216,6 +1484,10 @@ public sealed class TripoRhinoPanel : Panel, IPanel
         {
             return;
         }
+
+        QueueDirectGlbAutoImportContinuation(
+            ownerSession,
+            ownerGeneration);
     }
 
     private void ReportAutomaticGenerationRefreshFailure(
@@ -1227,14 +1499,27 @@ public sealed class TripoRhinoPanel : Panel, IPanel
             return;
         }
 
+        Tripo.HostUi.TripoPanelSession ownerSession = _session;
+        long ownerGeneration = _sessionGeneration;
+        Tripo.HostUi.TripoPanelState state = ownerSession.State;
         string? pendingTaskId =
             Tripo.HostUi.GenerationStatusPoller.GetPendingTaskId(
-                _session.State,
-                _session.Recovery);
+                state,
+                ownerSession.Recovery);
+        Tripo.HostUi.DirectGlbAutoImportIntent? intent =
+            _directGlbAutoImportIntent;
+        bool automaticIntentOwnsTask =
+            intent is not null &&
+            intent.TryBindDurableTask(ownerGeneration, state) &&
+            string.Equals(
+                intent.TaskId,
+                expectedTaskId,
+                StringComparison.Ordinal);
         if (!string.Equals(
                 pendingTaskId,
                 expectedTaskId,
-                StringComparison.Ordinal))
+                StringComparison.Ordinal) &&
+            !automaticIntentOwnsTask)
         {
             return;
         }
@@ -1244,12 +1529,20 @@ public sealed class TripoRhinoPanel : Panel, IPanel
                 "Automatic generation refresh stopped. Click Refresh " +
                 $"generation to retry.\n\n{exception.Message}",
                 exception));
+        if (automaticIntentOwnsTask)
+        {
+            QueueDirectGlbAutoImportContinuation(
+                ownerSession,
+                ownerGeneration);
+        }
     }
 
     private async void OnConvert(object? sender, EventArgs args)
     {
         try
         {
+            EnsureNoAutomaticDirectGlbCreateMutation(
+                "use OBJ compatibility");
             EnsurePanelDocumentIsActive();
             bool retry = _session.State.ConversionRetryAllowed;
             Tripo.HostUi.PreparedObjConversion prepared =
@@ -1281,6 +1574,8 @@ public sealed class TripoRhinoPanel : Panel, IPanel
     {
         try
         {
+            EnsureNoAutomaticDirectGlbCreateMutation(
+                "refresh OBJ conversion");
             await _session.RefreshConversionStatusAsync();
         }
         catch (Exception exception)
@@ -1293,6 +1588,8 @@ public sealed class TripoRhinoPanel : Panel, IPanel
     {
         try
         {
+            EnsureNoAutomaticDirectGlbCreateMutation(
+                "start a manual import");
             EnsurePanelDocumentIsActive();
             if (_session.State.PreparedImport is null)
             {
@@ -1318,12 +1615,91 @@ public sealed class TripoRhinoPanel : Panel, IPanel
     {
         try
         {
+            EnsureNoAutomaticDirectGlbCreateMutation("reset the workflow");
             _session.ResetWorkflow();
+            _directGlbAutoImportIntent = null;
+            _directGlbCreateUiStage =
+                Tripo.HostUi.DirectGlbCreateUiStage.Inactive;
+            _generationStatusPoller.Stop();
         }
         catch (Exception exception)
         {
             ShowError(exception);
         }
+    }
+
+    private bool IsAutomaticDirectGlbCreateActive =>
+        _createInRhinoStarting ||
+        _directGlbAutoImportIntent is not null ||
+        _directGlbCreateUiStage is
+            Tripo.HostUi.DirectGlbCreateUiStage.Preflighting or
+            Tripo.HostUi.DirectGlbCreateUiStage.WaitingForGeneration or
+            Tripo.HostUi.DirectGlbCreateUiStage.Importing;
+
+    private void EnsureNoAutomaticDirectGlbCreateMutation(string action)
+    {
+        if (IsAutomaticDirectGlbCreateActive)
+        {
+            throw new InvalidOperationException(
+                "The confirmed one-click direct GLB workflow is active and " +
+                $"cannot {action}. Refresh its generation status or wait for " +
+                "its durable outcome instead.");
+        }
+    }
+
+    private void EnsureDirectGlbCredentialMutationAllowed()
+    {
+        if (!IsAutomaticDirectGlbCreateActive)
+        {
+            return;
+        }
+
+        Tripo.HostUi.TripoPanelState state = _session.State;
+        Tripo.HostUi.TripoPanelRecoveryLoadResult recovery =
+            _session.Recovery;
+        bool environmentOverride =
+            state.CredentialStatus is
+            {
+                HasApiKey: true,
+                Source: "environment",
+            };
+        if (_directGlbAutoImportIntent is not null &&
+            _directGlbCreateUiStage ==
+                Tripo.HostUi.DirectGlbCreateUiStage.WaitingForGeneration &&
+            state.Connected &&
+            !state.Busy &&
+            state.HasDurableGenerationTask &&
+            state.HasCredentialRefreshFailure &&
+            !environmentOverride &&
+            !recovery.HasBlock)
+        {
+            return;
+        }
+
+        throw new InvalidOperationException(
+            "The API key cannot change while the one-click direct GLB " +
+            "workflow is active. If generation refresh fails after a durable " +
+            "task exists, restore a same-account session-only key from the " +
+            "enabled API-key action.");
+    }
+
+    private void EnsureDirectGlbGenerationRefreshAllowed()
+    {
+        if (!IsAutomaticDirectGlbCreateActive)
+        {
+            return;
+        }
+
+        if (_directGlbAutoImportIntent is not null &&
+            _directGlbCreateUiStage ==
+                Tripo.HostUi.DirectGlbCreateUiStage.WaitingForGeneration)
+        {
+            return;
+        }
+
+        throw new InvalidOperationException(
+            "Generation refresh is available for the one-click workflow only " +
+            "while it is waiting for the confirmed task.");
     }
 
     private bool ConfirmPaidDispatch(
@@ -1344,6 +1720,73 @@ public sealed class TripoRhinoPanel : Panel, IPanel
             MessageBoxButtons.YesNo,
             MessageBoxType.Warning,
             MessageBoxDefaultButton.No) == DialogResult.Yes;
+
+    private bool ConfirmDirectGlbCreate(
+        string operationId,
+        string documentTitle,
+        string objectName)
+    {
+        Tripo.HostUi.DirectGlbCreateConfirmation confirmation =
+            Tripo.HostUi.DirectGlbCreateConfirmation.Create(
+                operationId,
+                documentTitle,
+                objectName);
+        if (!confirmation.DefaultToNo)
+        {
+            throw new InvalidOperationException(
+                "Direct GLB creation confirmation must fail closed.");
+        }
+
+        return MessageBox.Show(
+            this,
+            confirmation.Message,
+            confirmation.Title,
+            MessageBoxButtons.YesNo,
+            MessageBoxType.Warning,
+            MessageBoxDefaultButton.No) == DialogResult.Yes;
+    }
+
+    private void EnsureDirectGlbFirstDispatchAvailable(
+        Tripo.HostUi.TripoPanelState state,
+        Tripo.HostUi.TripoPanelRecoveryLoadResult recovery,
+        Tripo.HostUi.PreparedTextGeneration prepared)
+    {
+        string? blockingReason =
+            Tripo.HostUi.DirectGlbFirstDispatchGuard.GetBlockingReason(
+                state,
+                recovery,
+                prepared,
+                IsDirectGlbSelected());
+        if (blockingReason is not null)
+        {
+            throw new InvalidOperationException(blockingReason);
+        }
+    }
+
+    private static void TryResetUnsentGeneration(
+        Tripo.HostUi.TripoPanelSession ownerSession,
+        string operationId)
+    {
+        try
+        {
+            Tripo.HostUi.TripoPanelState state = ownerSession.State;
+            if (state.PreparedGeneration is { } prepared &&
+                string.Equals(
+                    prepared.OperationId,
+                    operationId,
+                    StringComparison.Ordinal) &&
+                !state.GenerationDispatchAttempted &&
+                !state.HasDurableGenerationTask &&
+                !state.HasUnresolvedDispatch)
+            {
+                ownerSession.ResetWorkflow();
+            }
+        }
+        catch
+        {
+            // Preserve the original failure and any recovery evidence.
+        }
+    }
 
     private void OnStateChanged(
         object? sender,
@@ -1432,18 +1875,7 @@ public sealed class TripoRhinoPanel : Panel, IPanel
         }
 
         Tripo.HostUi.TripoPanelPresentation presentation =
-            Tripo.HostUi.TripoPanelPresentation.Create(
-                state,
-                recovery,
-                string.Equals(
-                    _recoveryInspectionToken,
-                    recovery.PresentationToken,
-                    StringComparison.Ordinal)
-                    ? _recoveryInspection
-                    : null,
-                _prompt.Text,
-                _name.Text,
-                IsDirectGlbSelected() ? "glb" : "obj");
+            CreatePresentation(state, recovery);
 
         _documentStatus.Text = presentation.DocumentStatus;
         _documentSession.Text = presentation.DocumentSessionId;
@@ -1519,6 +1951,13 @@ public sealed class TripoRhinoPanel : Panel, IPanel
         _checkRecovery.Enabled =
             presentation.CheckRecoveryEnabled &&
             !_recoveryReviewInProgress;
+        _createInRhino.Enabled =
+            presentation.CreateInRhinoEnabled &&
+            !_createInRhinoStarting;
+        _createInRhino.Text =
+            presentation.CreateInRhinoText;
+        _createInRhino.ToolTip =
+            presentation.CreateInRhinoHelp;
         _generate.Enabled = presentation.GenerateEnabled;
         _generate.Text = presentation.GenerateText;
         _refreshGeneration.Enabled =
@@ -1543,6 +1982,243 @@ public sealed class TripoRhinoPanel : Panel, IPanel
                 state,
                 recovery));
     }
+
+    private Tripo.HostUi.TripoPanelPresentation CreatePresentation(
+        Tripo.HostUi.TripoPanelState state,
+        Tripo.HostUi.TripoPanelRecoveryLoadResult recovery) =>
+        Tripo.HostUi.TripoPanelPresentation.Create(
+            state,
+            recovery,
+            string.Equals(
+                _recoveryInspectionToken,
+                recovery.PresentationToken,
+                StringComparison.Ordinal)
+                ? _recoveryInspection
+                : null,
+            _prompt.Text,
+            _name.Text,
+            IsDirectGlbSelected() ? "glb" : "obj",
+            _directGlbCreateUiStage);
+
+    private void QueueDirectGlbAutoImportContinuation(
+        Tripo.HostUi.TripoPanelSession ownerSession,
+        long ownerGeneration)
+    {
+        if (_closing)
+        {
+            return;
+        }
+
+        Application.Instance.AsyncInvoke(
+            () =>
+            {
+                Tripo.HostUi.DirectGlbAutoImportIntent? intent =
+                    _directGlbAutoImportIntent;
+                if (_closing ||
+                    intent is null ||
+                    ownerGeneration != _sessionGeneration ||
+                    !ReferenceEquals(ownerSession, _session))
+                {
+                    return;
+                }
+
+                PanelRenderFrame frame = new(
+                    ownerSession,
+                    ownerGeneration,
+                    ownerSession.State,
+                    ownerSession.Recovery);
+                if (!IntentOwnsState(intent, frame))
+                {
+                    _directGlbAutoImportIntent = null;
+                    _directGlbCreateUiStage =
+                        Tripo.HostUi.DirectGlbCreateUiStage.Refused;
+                    RequestRender();
+                    return;
+                }
+
+                TryContinueDirectGlbAutoImport(frame, intent);
+            });
+    }
+
+    private void TryContinueDirectGlbAutoImport(
+        PanelRenderFrame frame,
+        Tripo.HostUi.DirectGlbAutoImportIntent intent)
+    {
+        if (_closing ||
+            frame.State.Busy ||
+            frame.State.HasCredentialRefreshFailure ||
+            !ReferenceEquals(_directGlbAutoImportIntent, intent))
+        {
+            return;
+        }
+
+        Tripo.HostUi.DirectGlbAutoImportDecision decision =
+            intent.ObserveState(frame.SessionGeneration, frame.State);
+        switch (decision)
+        {
+            case Tripo.HostUi.DirectGlbAutoImportDecision.BeginImport:
+                _directGlbCreateUiStage =
+                    Tripo.HostUi.DirectGlbCreateUiStage.Importing;
+                _ = ImportDirectGlbFromIntentAsync(
+                    frame.OwnerSession,
+                    frame.SessionGeneration,
+                    intent);
+                break;
+            case Tripo.HostUi.DirectGlbAutoImportDecision
+                .TerminalWithoutImport:
+                _directGlbAutoImportIntent = null;
+                _directGlbCreateUiStage =
+                    Tripo.HostUi.DirectGlbCreateUiStage
+                        .TerminalWithoutImport;
+                RequestRender();
+                break;
+            case Tripo.HostUi.DirectGlbAutoImportDecision.Refused:
+                _directGlbAutoImportIntent = null;
+                _directGlbCreateUiStage =
+                    Tripo.HostUi.DirectGlbCreateUiStage.Refused;
+                RequestRender();
+                ShowError(
+                    new InvalidOperationException(
+                        "Automatic direct GLB import was refused because the " +
+                        "generation evidence did not match this workflow. " +
+                        "Nothing was imported; review Workflow details."));
+                break;
+        }
+    }
+
+    private async Task ImportDirectGlbFromIntentAsync(
+        Tripo.HostUi.TripoPanelSession ownerSession,
+        long ownerGeneration,
+        Tripo.HostUi.DirectGlbAutoImportIntent intent)
+    {
+        bool imported = false;
+        bool deferred = false;
+        try
+        {
+            if (_closing ||
+                ownerGeneration != _sessionGeneration ||
+                !ReferenceEquals(ownerSession, _session) ||
+                !ReferenceEquals(_directGlbAutoImportIntent, intent))
+            {
+                return;
+            }
+
+            EnsurePanelDocumentIsActive();
+            PanelRenderFrame current = new(
+                ownerSession,
+                ownerGeneration,
+                ownerSession.State,
+                ownerSession.Recovery);
+            if (!IntentOwnsState(intent, current) ||
+                current.State.PreparedImport is not null)
+            {
+                throw new InvalidOperationException(
+                    "Automatic direct GLB import stopped because the current " +
+                    "panel state no longer matches the confirmed workflow.");
+            }
+
+            if (current.State.Busy &&
+                intent.TryDeferImport(
+                    ownerGeneration,
+                    current.State))
+            {
+                deferred = true;
+                return;
+            }
+
+            try
+            {
+                ownerSession.PrepareGlbImport(intent.ObjectName);
+            }
+            catch (InvalidOperationException)
+                when (ownerSession.State.Busy &&
+                      ownerSession.State.PreparedImport is null &&
+                      intent.TryDeferImport(
+                          ownerGeneration,
+                          ownerSession.State))
+            {
+                deferred = true;
+                return;
+            }
+
+            RequestRender(
+                ownerSession,
+                ownerSession.State,
+                ownerSession.Recovery);
+            await ownerSession.ImportPreparedAsync(_panelLifetime.Token);
+            imported = true;
+        }
+        catch (OperationCanceledException) when (_closing)
+        {
+        }
+        catch (ObjectDisposedException) when (
+            _closing ||
+            ownerGeneration != _sessionGeneration ||
+            !ReferenceEquals(ownerSession, _session))
+        {
+        }
+        catch (Exception exception)
+        {
+            ShowError(exception);
+        }
+        finally
+        {
+            if (!_closing &&
+                ownerGeneration == _sessionGeneration &&
+                ReferenceEquals(ownerSession, _session) &&
+                ReferenceEquals(_directGlbAutoImportIntent, intent))
+            {
+                if (deferred)
+                {
+                    _directGlbCreateUiStage =
+                        Tripo.HostUi.DirectGlbCreateUiStage
+                            .WaitingForGeneration;
+                }
+                else
+                {
+                    Tripo.HostUi.TripoPanelState finalState =
+                        ownerSession.State;
+                    _ = intent.TryFinishImport(
+                        ownerGeneration,
+                        finalState);
+                    _directGlbAutoImportIntent = null;
+                    _directGlbCreateUiStage = imported
+                        ? Tripo.HostUi.DirectGlbCreateUiStage.Completed
+                        : finalState.ImportRequiresManualReview
+                            ? Tripo.HostUi.DirectGlbCreateUiStage
+                                .ManualReviewRequired
+                            : finalState.ImportDispatchAttempted &&
+                              finalState.ImportReceipt is null
+                                ? Tripo.HostUi.DirectGlbCreateUiStage
+                                    .ImportRetryRequired
+                                : Tripo.HostUi.DirectGlbCreateUiStage
+                                    .ImportFailed;
+                }
+
+                RequestRender();
+            }
+        }
+    }
+
+    private static bool IntentOwnsState(
+        Tripo.HostUi.DirectGlbAutoImportIntent intent,
+        PanelRenderFrame frame) =>
+        frame.SessionGeneration == intent.SessionGeneration &&
+        frame.State.Connected &&
+        frame.State.Context is { } context &&
+        frame.State.PreparedGeneration is { } prepared &&
+        string.Equals(
+            context.DocumentSessionId,
+            intent.DocumentSessionId,
+            StringComparison.Ordinal) &&
+        string.Equals(
+            prepared.DocumentSessionId,
+            intent.DocumentSessionId,
+            StringComparison.Ordinal) &&
+        string.Equals(
+            prepared.OperationId,
+            intent.GenerationOperationId,
+            StringComparison.Ordinal);
 
     private bool IsDirectGlbSelected() =>
         _importSource.SelectedIndex != 1;
@@ -1622,6 +2298,9 @@ public sealed class TripoRhinoPanel : Panel, IPanel
         }
 
         _closing = true;
+        _directGlbAutoImportIntent = null;
+        _directGlbCreateUiStage =
+            Tripo.HostUi.DirectGlbCreateUiStage.Inactive;
         _generationStatusPoller.Dispose();
         _renderQueue.Dispose();
         _panelLifetime.Cancel();

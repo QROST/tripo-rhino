@@ -199,6 +199,49 @@ public sealed class GenerationStatusPollerTests
     }
 
     [Fact]
+    public async Task ResumeDuringFailureReportRestartsAfterUnwind()
+    {
+        ControlledDelay delay = new();
+        TaskCompletionSource<bool> failureReporterEntered =
+            NewCompletionSource();
+        TaskCompletionSource<bool> releaseFailureReporter =
+            NewCompletionSource();
+        TaskCompletionSource<bool> resumedRefreshEntered =
+            NewCompletionSource();
+        int calls = 0;
+        using Tripo.HostUi.GenerationStatusPoller poller = new(
+            Interval,
+            (_, _) =>
+            {
+                if (Interlocked.Increment(ref calls) == 1)
+                {
+                    throw new InvalidOperationException("status unavailable");
+                }
+
+                resumedRefreshEntered.TrySetResult(true);
+                return Task.CompletedTask;
+            },
+            (_, _) =>
+            {
+                failureReporterEntered.TrySetResult(true);
+                releaseFailureReporter.Task.GetAwaiter().GetResult();
+            },
+            delay.WaitAsync);
+
+        poller.Reconcile("task-id");
+        (await delay.NextAsync()).Release();
+        await failureReporterEntered.Task.WaitAsync(TimeSpan.FromSeconds(5));
+
+        poller.Resume("task-id");
+        releaseFailureReporter.TrySetResult(true);
+        (await delay.NextAsync()).Release();
+        await resumedRefreshEntered.Task.WaitAsync(
+            TimeSpan.FromSeconds(5));
+
+        Assert.Equal(2, Volatile.Read(ref calls));
+    }
+
+    [Fact]
     public async Task StopCancelsInFlightRefreshWithoutReportingFailure()
     {
         ControlledDelay delay = new();

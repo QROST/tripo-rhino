@@ -180,6 +180,34 @@ public sealed class HostControlDispatcherTests
         Assert.Equal(expectedCode, exception.Code);
     }
 
+    [Theory]
+    [InlineData(System.Net.HttpStatusCode.Unauthorized, "credential_invalid")]
+    [InlineData(System.Net.HttpStatusCode.Forbidden, "credential_invalid")]
+    [InlineData(System.Net.HttpStatusCode.BadGateway, "tripo_api_error")]
+    public async Task TaskStatusReadFailureDistinguishesCredentialRejection(
+        System.Net.HttpStatusCode statusCode,
+        string expectedCode)
+    {
+        FakeWorkflow workflow = new()
+        {
+            TaskStatusFailureStatusCode = statusCode,
+        };
+        Tripo.Mcp.HostControlDispatcher dispatcher = CreateDispatcher(
+            new FakeCredentialService(),
+            workflow);
+
+        Tripo.Bridge.HostControlCallException exception =
+            await Assert.ThrowsAsync<Tripo.Bridge.HostControlCallException>(
+                () => dispatcher.DispatchAsync(
+                    Tripo.Bridge.HostControlConstants.TaskStatusMethod,
+                    Tripo.Bridge.BridgeJson.ToElement(
+                        new Tripo.Bridge.HostControlTaskStatusRequest(
+                            "task_generation123")),
+                    CancellationToken.None));
+
+        Assert.Equal(expectedCode, exception.Code);
+    }
+
     [Fact]
     public void DirectGlbCapabilityIsAdvertisedOnlyForRhino()
     {
@@ -414,6 +442,12 @@ public sealed class HostControlDispatcherTests
             init;
         }
 
+        public System.Net.HttpStatusCode? TaskStatusFailureStatusCode
+        {
+            get;
+            init;
+        }
+
         public Tripo.Bridge.HostControlCreateTextTaskRequest? LastTextRequest
         {
             get;
@@ -453,8 +487,16 @@ public sealed class HostControlDispatcherTests
 
         public Task<Tripo.Mcp.TaskStatusReceipt> GetTaskStatusAsync(
             string taskId,
-            CancellationToken cancellationToken) =>
-            Task.FromResult(
+            CancellationToken cancellationToken)
+        {
+            if (TaskStatusFailureStatusCode is { } statusCode)
+            {
+                throw new Tripo.Mcp.TripoApiException(
+                    "The provider rejected the task-status read.",
+                    statusCode);
+            }
+
+            return Task.FromResult(
                 new Tripo.Mcp.TaskStatusReceipt(
                     taskId,
                     "text_to_model",
@@ -465,6 +507,7 @@ public sealed class HostControlDispatcherTests
                     null,
                     null,
                     null));
+        }
 
         public Task<Tripo.Mcp.PaidOperationStatusReceipt>
             GetPaidOperationStatusAsync(

@@ -140,7 +140,7 @@ internal sealed class HostControlDispatcher :
                 ? string.Empty
                 : $" Request ID: {exception.RequestId}.";
             throw new Tripo.Bridge.HostControlCallException(
-                IsCredentialRejectedBeforeHostMutation(method, exception)
+                IsCredentialFailureSafeToExpose(method, exception)
                     ? Tripo.Bridge.HostControlConstants.CredentialInvalidError
                     : "tripo_api_error",
                 exception.Message + requestSuffix,
@@ -162,13 +162,17 @@ internal sealed class HostControlDispatcher :
             Environment.ProcessId,
             _capabilities);
 
-    private static bool IsCredentialRejectedBeforeHostMutation(
+    private static bool IsCredentialFailureSafeToExpose(
         string method,
         TripoApiException exception) =>
         exception.StatusCode is
             System.Net.HttpStatusCode.Unauthorized or
             System.Net.HttpStatusCode.Forbidden &&
         (string.Equals(
+             method,
+             Tripo.Bridge.HostControlConstants.TaskStatusMethod,
+             StringComparison.Ordinal) ||
+         string.Equals(
              method,
              Tripo.Bridge.HostControlConstants.ImportGenerationGlbMethod,
              StringComparison.Ordinal) ||

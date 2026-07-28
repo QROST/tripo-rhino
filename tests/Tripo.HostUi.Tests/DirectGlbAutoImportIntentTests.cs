@@ -198,6 +198,111 @@ public sealed class DirectGlbAutoImportIntentTests
             intent.Phase);
     }
 
+    [Fact]
+    public void BusySuccessCannotConsumeImportAuthorization()
+    {
+        Tripo.HostUi.DirectGlbAutoImportIntent intent = CreateBoundIntent();
+        Tripo.HostUi.TripoPanelState success = PanelState(
+            taskStatus: TaskStatus("success"),
+            receipt: Receipt());
+
+        Assert.Equal(
+            Tripo.HostUi.DirectGlbAutoImportDecision.NoAction,
+            intent.ObserveState(
+                SessionGeneration,
+                success with { Busy = true }));
+        Assert.Equal(
+            Tripo.HostUi.DirectGlbAutoImportPhase.Waiting,
+            intent.Phase);
+        Assert.Equal(
+            Tripo.HostUi.DirectGlbAutoImportDecision.BeginImport,
+            intent.ObserveState(SessionGeneration, success));
+    }
+
+    [Fact]
+    public void CredentialRefreshFailureHoldsSuccessUntilKeyRecovery()
+    {
+        Tripo.HostUi.DirectGlbAutoImportIntent intent = CreateBoundIntent();
+        Tripo.HostUi.TripoPanelState credentialFailure = PanelState(
+            taskStatus: TaskStatus("success"),
+            receipt: Receipt()) with
+        {
+            LastError = "The provider rejected the credential.",
+            LastErrorCode =
+                Tripo.Bridge.HostControlConstants.CredentialInvalidError,
+        };
+
+        Assert.Equal(
+            Tripo.HostUi.DirectGlbAutoImportDecision.Waiting,
+            intent.ObserveState(SessionGeneration, credentialFailure));
+        Assert.Equal(
+            Tripo.HostUi.DirectGlbAutoImportPhase.Waiting,
+            intent.Phase);
+        Assert.Equal(
+            Tripo.HostUi.DirectGlbAutoImportDecision.BeginImport,
+            intent.ObserveState(
+                SessionGeneration,
+                credentialFailure with
+                {
+                    LastError = null,
+                    LastErrorCode = null,
+                }));
+    }
+
+    [Fact]
+    public void ImportCanBeDeferredBeforeAnyImportMutation()
+    {
+        Tripo.HostUi.DirectGlbAutoImportIntent intent = CreateBoundIntent();
+        Tripo.HostUi.TripoPanelState success = PanelState(
+            taskStatus: TaskStatus("success"),
+            receipt: Receipt());
+
+        Assert.Equal(
+            Tripo.HostUi.DirectGlbAutoImportDecision.BeginImport,
+            intent.ObserveState(SessionGeneration, success));
+        Assert.True(
+            intent.TryDeferImport(
+                SessionGeneration,
+                success with { Busy = true }));
+        Assert.Equal(
+            Tripo.HostUi.DirectGlbAutoImportPhase.Waiting,
+            intent.Phase);
+        Assert.Equal(
+            Tripo.HostUi.DirectGlbAutoImportDecision.BeginImport,
+            intent.ObserveState(SessionGeneration, success));
+    }
+
+    [Fact]
+    public void ImportCannotBeDeferredAfterImportPreparation()
+    {
+        Tripo.HostUi.DirectGlbAutoImportIntent intent = CreateBoundIntent();
+        Tripo.HostUi.TripoPanelState success = PanelState(
+            taskStatus: TaskStatus("success"),
+            receipt: Receipt());
+        Assert.Equal(
+            Tripo.HostUi.DirectGlbAutoImportDecision.BeginImport,
+            intent.ObserveState(SessionGeneration, success));
+
+        Assert.False(
+            intent.TryDeferImport(
+                SessionGeneration,
+                success with
+                {
+                    PreparedImport =
+                        new Tripo.HostUi.PreparedObjImport(
+                            TaskId,
+                            "Pavilion Study",
+                            DocumentSessionId,
+                            "77777777-7777-4777-8777-777777777777",
+                            "glb_instance",
+                            ApplyMaterials: true,
+                            ArtifactFormat: "glb"),
+                }));
+        Assert.Equal(
+            Tripo.HostUi.DirectGlbAutoImportPhase.Importing,
+            intent.Phase);
+    }
+
     [Theory]
     [InlineData("failed")]
     [InlineData("cancelled")]

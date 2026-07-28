@@ -132,6 +132,18 @@ internal sealed class DirectGlbAutoImportIntent
                 return DirectGlbAutoImportDecision.NoAction;
             }
 
+            if (state.Busy)
+            {
+                return DirectGlbAutoImportDecision.NoAction;
+            }
+
+            if (state.HasCredentialRefreshFailure)
+            {
+                return _phase == DirectGlbAutoImportPhase.Stopped
+                    ? DirectGlbAutoImportDecision.Stopped
+                    : DirectGlbAutoImportDecision.Waiting;
+            }
+
             if (_phase is
                 DirectGlbAutoImportPhase.Importing or
                 DirectGlbAutoImportPhase.Finished)
@@ -301,6 +313,41 @@ internal sealed class DirectGlbAutoImportIntent
             }
 
             _phase = DirectGlbAutoImportPhase.Finished;
+            return true;
+        }
+    }
+
+    internal bool TryDeferImport(
+        long sessionGeneration,
+        TripoPanelState state)
+    {
+        ArgumentNullException.ThrowIfNull(state);
+        lock (_gate)
+        {
+            if (!MatchesStateIdentity(sessionGeneration, state) ||
+                _phase != DirectGlbAutoImportPhase.Importing ||
+                state.PreparedImport is not null ||
+                state.ImportDispatchAttempted)
+            {
+                return false;
+            }
+
+            DurableTaskEvidence evidence = ResolveDurableTaskEvidence(state);
+            if (evidence.Invalid ||
+                evidence.TaskId is null ||
+                !TryBindResolvedTask(evidence.TaskId) ||
+                state.GenerationStatus is not { } status ||
+                !StatusMatchesBoundTask(status) ||
+                !string.Equals(
+                    status.Status?.Trim(),
+                    "success",
+                    StringComparison.OrdinalIgnoreCase))
+            {
+                _phase = DirectGlbAutoImportPhase.Finished;
+                return false;
+            }
+
+            _phase = DirectGlbAutoImportPhase.Waiting;
             return true;
         }
     }
