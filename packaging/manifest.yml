@@ -31,6 +31,7 @@ description: >-
   for agentic clients. Not an official Tripo or McNeel product; users bring
   their own Tripo API key (BYOK).
 url: https://github.com/QROST/tripo-rhino
+platform: any
 icon: icon.png
 keywords:
   - tripo

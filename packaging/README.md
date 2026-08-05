@@ -42,3 +42,56 @@ matching the convention `yak spec` follows for Grasshopper assemblies.
 Food4Rhino listing. The mark is an original geometric "T" lifting into an
 isometric 3D plane; it avoids the Tripo wordmark and any McNeel/Rhino
 trademarks. Re-render from the SVG after any design change.
+
+### Building a Yak package
+
+The same manifest drives the Rhino Package Manager (Yak) distribution channel.
+Yak is bundled with Rhino 8 on macOS at
+`/Applications/Rhino 8.app/Contents/Resources/bin/yak`; on Windows it ships at
+`C:\Program Files\Rhino 8\System\yak.exe`. A standalone build is also documented
+in the [Yak CLI reference](https://developer.rhino3d.com/guides/yak/yak-cli-reference/).
+
+One Yak package contains the full host deployment: the `.rhp`, its `sidecar/`
+directory, the optional `.gha`, and the icon set. The standalone MCP server
+(`src/Tripo.Rhino.Mcp/bin/Release/net8.0/`) is **not** part of the Yak package;
+it is a sidecar process, not a Rhino plug-in assembly, and is distributed via
+the Food4Rhino download or the `.rhp`-adjacent `sidecar/` directory.
+
+To build the `.yak` file from a fresh Release output:
+
+```bash
+# 1. Assemble a flat package directory
+PKG=/tmp/yak-pkg
+rm -rf "$PKG" && mkdir -p "$PKG"
+cp -R src/Tripo.Rhino/bin/Release/net7.0/. "$PKG/"
+cp src/Tripo.Rhino.Grasshopper/bin/Release/net7.0/Tripo.Rhino.Grasshopper.gha "$PKG/"
+cp packaging/icon.png packaging/icon-128.png packaging/icon-256.png "$PKG/"
+cp packaging/manifest.yml "$PKG/"
+
+# 2. Build (platform=any declares Windows + macOS; see note below)
+YAK="/Applications/Rhino 8.app/Contents/Resources/bin/yak"
+( cd "$PKG" && "$YAK" build --platform any )
+# → produces tripo-for-rhino-<version>-rh8_32-any.yak
+```
+
+`yak build` emits two informational warnings that do not block packaging:
+
+- *Content version doesn't match manifest* — the assembly carries a
+  SourceLink-derived `0.1.0+<git-sha>` while the manifest declares `0.1.0`.
+  This is expected under `Deterministic=true`; the manifest version wins for
+  the Yak index.
+- *Content name doesn't match manifest* — the assembly is `Tripo.Rhino` but
+  the Yak package name is the lowercase-dashed `tripo-for-rhino` required by
+  the Yak naming rule.
+
+**Platform scope.** `platform: any` declares both Windows and macOS. The
+`sidecar/runtimes/` directory ships `win/` (for `System.Diagnostics.EventLog`)
+and relies on the .NET 8 framework fallback elsewhere. Only declare `any`
+when both platforms have been exercised; otherwise use `--platform win` or
+`--platform mac` to narrow the claim.
+
+**Publishing.** `yak push <file.yak>` uploads to the central Yak repository
+(`https://yak.rhino3d.com/`) after a one-time `yak login` with the same Rhino
+Account used for the Food4Rhino listing. A pushed package can be linked to the
+Food4Rhino page so users get an "Install via Package Manager" entry point
+instead of a manual download.
