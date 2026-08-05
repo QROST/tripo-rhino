@@ -13,6 +13,9 @@ internal sealed record RhinoPanelUserSettings(
     internal const string DefaultObjectName = "Tripo Model";
     internal const int MaximumSettingsBytes = 16 * 1024;
 
+    private const int SaveContentionAttempts = 8;
+    private const int SaveContentionMaxDelayMilliseconds = 25;
+
     public int SchemaVersion { get; init; } = CurrentSchemaVersion;
 
     private static readonly JsonSerializerOptions JsonOptions = new()
@@ -133,11 +136,41 @@ internal sealed record RhinoPanelUserSettings(
             string json = JsonSerializer.Serialize(Normalize(), JsonOptions);
             File.WriteAllText(temporaryPath, json);
             Tripo.Bridge.BridgePaths.SetPrivateFileMode(temporaryPath);
-            File.Move(temporaryPath, resolvedPath, overwrite: true);
+            MoveWithContentionRetry(temporaryPath, resolvedPath);
         }
         finally
         {
             Tripo.Bridge.BridgePaths.TryDelete(temporaryPath);
+        }
+    }
+
+    // File.Move across an existing file occasionally surfaces
+    // UnauthorizedAccessException on Windows when a concurrent reader or an
+    // antivirus scanner still holds the destination for an instant. The
+    // write-then-move contract is already atomic; this retries the transient
+    // contention only, without weakening any of the security validation.
+    private static void MoveWithContentionRetry(
+        string sourcePath,
+        string destinationPath)
+    {
+        int delay = 1;
+        for (int attempt = 0; ; attempt++)
+        {
+            try
+            {
+                File.Move(sourcePath, destinationPath, overwrite: true);
+                return;
+            }
+            catch (IOException) when (attempt < SaveContentionAttempts)
+            {
+                Thread.Sleep(delay);
+                delay = Math.Min(delay * 2, SaveContentionMaxDelayMilliseconds);
+            }
+            catch (UnauthorizedAccessException) when (attempt < SaveContentionAttempts)
+            {
+                Thread.Sleep(delay);
+                delay = Math.Min(delay * 2, SaveContentionMaxDelayMilliseconds);
+            }
         }
     }
 
