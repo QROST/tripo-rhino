@@ -14,5 +14,5 @@ dotnet test Tripo.Rhino.sln --configuration Release --no-build
 
 The tag workflow uploads only a short-lived GitHub Actions artifact. It does
 not create a GitHub Release, publish a package, sign, notarize, or establish
-real Rhino acceptance. Do not redistribute a candidate until this repository
-has an explicit distribution license.
+real Rhino acceptance. Candidate redistribution is governed by the Apache License, Version 2.0;
+see the repository root [`LICENSE`](../LICENSE) and [`NOTICE`](../NOTICE).

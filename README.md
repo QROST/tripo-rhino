@@ -737,6 +737,10 @@ documented under [`packaging/`](./packaging/README.md).
 
 ## License
 
-No distribution license has been selected. Until one is added, do not treat
-this source as licensed for redistribution. The Blender reference informed
-repository and product structure only; no upstream source code was copied.
+Licensed under the Apache License, Version 2.0 (`Apache-2.0`). See
+[`LICENSE`](./LICENSE) and [`NOTICE`](./NOTICE).
+
+This product is not affiliated with or endorsed by Tripo or McNeel. Users bring
+their own Tripo API key (BYOK) and remain subject to Tripo's terms of service
+for API usage. The Blender reference informed repository and product structure
+only; no upstream source code was copied.

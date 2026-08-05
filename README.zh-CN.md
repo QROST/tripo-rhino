@@ -645,5 +645,9 @@ Tripo task/billing history；不要自动发送另一个付费请求。进程被
 
 ## 许可证
 
-尚未选择发布许可证。在许可证落定前，请不要把当前源码视为已授权再分发。Blender
-参考项目只用于学习仓库与产品结构，没有复制其源码。
+本仓库采用 Apache License, Version 2.0（`Apache-2.0`）。详见
+[`LICENSE`](./LICENSE) 与 [`NOTICE`](./NOTICE)。
+
+本产品与 Tripo、McNeel 均无隶属或背书关系。用户需自备 Tripo API key（BYOK），
+API 使用仍受 Tripo 服务条款约束。Blender 参考项目只用于学习仓库与产品结构，
+没有复制其源码。
