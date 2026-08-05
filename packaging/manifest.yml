@@ -1,0 +1,47 @@
+# Yak package manifest for Tripo for Rhino.
+#
+# Field sources (kept in sync with repository facts):
+#   - Rhino .rhp GUID 626D164C-A15C-45DE-B8A1-0718C81305DE
+#     (src/Tripo.Rhino/TripoRhinoPlugin.cs, AssemblyInfo.cs)
+#   - Grasshopper .gha GUID CC53B1D7-60D0-4F6A-A43C-BB1F4B68112D
+#     (src/Tripo.Rhino.Grasshopper/TripoGrasshopperInfo.cs)
+#   - version: root VERSION file
+#   - authors/contacts: NOTICE + TripoGrasshopperInfo.cs
+#
+# The plug-in GUIDs are listed under keywords so that Yak's search and the
+# Food4Rhino listing can resolve an installed assembly back to this package,
+# matching the convention `yak spec` follows for Grasshopper assemblies.
+#
+# Food4Rhino/Yak constraints honored:
+#   - name: lowercase, letters/digits/dashes only (case locked at first upload)
+#   - version: SemVer 2.0.0
+#   - icon: PNG, ~64x64 recommended (see icon.png; larger sizes ship alongside)
+#   - description: YAML folded style for multi-line
+
+name: tripo-for-rhino
+version: 0.1.0
+authors:
+  - QROST / Zhongding Cui (addincui)
+  - tripo-rhino contributors
+description: >-
+  Tripo for Rhino is an independent community adapter that brings Tripo's
+  text-to-3D and image-to-3D generation workflow into Rhino 8. Generate
+  models from a per-document Eto panel or optional Grasshopper components,
+  and import the result as a native PBR block. An MCP server is included
+  for agentic clients. Not an official Tripo or McNeel product; users bring
+  their own Tripo API key (BYOK).
+url: https://github.com/QROST/tripo-rhino
+icon: icon.png
+keywords:
+  - tripo
+  - text-to-3d
+  - image-to-3d
+  - ai
+  - generative
+  - glb
+  - pbr
+  - grasshopper
+  - mcp
+  # Assembly GUIDs for install-resolution (matches `yak spec` convention).
+  - 626D164C-A15C-45DE-B8A1-0718C81305DE
+  - CC53B1D7-60D0-4F6A-A43C-BB1F4B68112D

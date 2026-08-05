@@ -1,0 +1,47 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Tripo for Rhino — plugin icon (vector source).
+
+  Design: rounded-square dark background with a geometric "T" mark whose
+  right facet lifts into an isometric 3D plane, signalling text-to-3D
+  generation. Palette: charcoal base + warm orange accent (Tripo AI) and
+  a cool slate facet (Rhino / AEC). Avoids the Tripo wordmark and any
+  McNeel/Rhino trademarks; the mark is original.
+
+  Render权威输出: icon.png (64), icon-128.png, icon-256.png.
+  Food4Rhino / Yak manifest references icon.png.
+-->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" width="256" height="256">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#2b2f36"/>
+      <stop offset="1" stop-color="#1a1d22"/>
+    </linearGradient>
+    <linearGradient id="topFacet" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#ff8a3d"/>
+      <stop offset="1" stop-color="#f25f1b"/>
+    </linearGradient>
+    <linearGradient id="sideFacet" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#8a93a3"/>
+      <stop offset="1" stop-color="#566070"/>
+    </linearGradient>
+  </defs>
+
+  <!-- Rounded-square background -->
+  <rect x="8" y="8" width="240" height="240" rx="52" ry="52" fill="url(#bg)"/>
+
+  <!-- T crossbar (top), full width band -->
+  <rect x="72" y="64" width="112" height="26" rx="6" fill="url(#topFacet)"/>
+
+  <!-- T stem with isometric lift: front face (orange) + side face (slate) -->
+  <!-- Front face -->
+  <polygon points="115,90 141,90 141,150 168,176 115,176" fill="url(#topFacet)"/>
+  <!-- Side / lifted facet turning up-right into 3D -->
+  <polygon points="141,90 141,150 168,176 168,116" fill="url(#sideFacet)"/>
+
+  <!-- Soft top highlight to read as a raised plane -->
+  <polygon points="141,90 168,116 168,90" fill="#ffb37a" opacity="0.55"/>
+
+  <!-- Base line notch suggesting a ground / AEC base -->
+  <rect x="84" y="184" width="88" height="8" rx="4" fill="#3a414b"/>
+</svg>
