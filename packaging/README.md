@@ -71,7 +71,7 @@ cp packaging/manifest.yml "$PKG/"
 # 2. Build (platform=any declares Windows + macOS; see note below)
 YAK="/Applications/Rhino 8.app/Contents/Resources/bin/yak"
 ( cd "$PKG" && "$YAK" build --platform any )
-# → produces tripo-for-rhino-<version>-rh8_32-any.yak
+# → produces tripo-rhino-<version>-rh8_32-any.yak
 ```
 
 `yak build` emits two informational warnings that do not block packaging:
@@ -81,7 +81,7 @@ YAK="/Applications/Rhino 8.app/Contents/Resources/bin/yak"
   This is expected under `Deterministic=true`; the manifest version wins for
   the Yak index.
 - *Content name doesn't match manifest* — the assembly is `Tripo.Rhino` but
-  the Yak package name is the lowercase-dashed `tripo-for-rhino` required by
+  the Yak package name is the lowercase-dashed `tripo-rhino` required by
   the Yak naming rule.
 
 **Platform scope.** `platform: any` declares both Windows and macOS. The

@@ -18,7 +18,7 @@
 #   - icon: PNG, ~64x64 recommended (see icon.png; larger sizes ship alongside)
 #   - description: YAML folded style for multi-line
 
-name: tripo-for-rhino
+name: tripo-rhino
 version: 0.1.0
 authors:
   - QROST / Zhongding Cui (addincui)
