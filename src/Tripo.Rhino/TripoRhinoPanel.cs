@@ -138,6 +138,32 @@ public sealed class TripoRhinoPanel : Panel, IPanel
     };
     private readonly Button _import = new() { Text = "Import into Rhino" };
     private readonly Button _reset = new() { Text = "New workflow" };
+    private readonly RadioButtonList _inputMode = new()
+    {
+        Orientation = Orientation.Horizontal,
+        Spacing = new Eto.Drawing.Size(16, 0),
+        Items = { "Text", "Image" },
+        SelectedIndex = 0,
+    };
+    private readonly StackLayout _promptBlock;
+    private readonly Button _pickImage = new()
+    {
+        Text = "Choose image\u2026",
+        ToolTip =
+            "Select a PNG or JPEG on disk. The file is copied into private " +
+            "staging and then uploaded to Tripo; the original is not retained.",
+    };
+    private readonly ImageView _imagePreview = new()
+    {
+        Size = new Eto.Drawing.Size(96, 96),
+    };
+    private readonly Label _imageName = StatusLabel();
+    private readonly Button _clearImage = new()
+    {
+        Text = "Remove image",
+        Visible = false,
+    };
+    private readonly StackLayout _imageBlock;
     private readonly StackLayout _generationDiagnosticBlock;
     private readonly StackLayout _conversionDiagnosticBlock;
     private readonly StackLayout _importReceiptDetails;
@@ -150,6 +176,10 @@ public sealed class TripoRhinoPanel : Panel, IPanel
         _directGlbAutoImportIntent;
     private Tripo.HostUi.DirectGlbCreateUiStage _directGlbCreateUiStage =
         Tripo.HostUi.DirectGlbCreateUiStage.Inactive;
+    private bool _imageMode;
+    private Tripo.Bridge.StagedImageTransfer? _stagedImage;
+    private string? _stagedImageName;
+    private string? _stagedImageSourcePath;
     private bool _recoveryWasBlocked;
     private bool _recoveryReviewInProgress;
     private bool _createInRhinoStarting;
@@ -170,6 +200,39 @@ public sealed class TripoRhinoPanel : Panel, IPanel
             RefreshGenerationStatusAutomaticallyAsync,
             ReportAutomaticGenerationRefreshFailure);
         ApplyUserSettings(Tripo.HostUi.RhinoPanelUserSettings.Load());
+        _promptBlock = FieldBlock("Describe the model", _prompt);
+        _imageBlock = new StackLayout
+        {
+            AlignLabels = false,
+            Spacing = 6,
+            HorizontalContentAlignment = HorizontalAlignment.Stretch,
+            Items =
+            {
+                _pickImage,
+                new StackLayout
+                {
+                    Orientation = Orientation.Horizontal,
+                    Spacing = 8,
+                    HorizontalContentAlignment = HorizontalAlignment.Left,
+                    Items =
+                    {
+                        _imagePreview,
+                        new StackLayout
+                        {
+                            Spacing = 4,
+                            HorizontalContentAlignment =
+                                HorizontalAlignment.Stretch,
+                            Items =
+                            {
+                                _imageName,
+                                _clearImage,
+                            },
+                        },
+                    },
+                },
+            },
+        };
+        _imageBlock.Visible = false;
         _generationDiagnosticBlock = FieldBlock(
             "Generation diagnostic",
             _generationDiagnostic);
@@ -217,9 +280,13 @@ public sealed class TripoRhinoPanel : Panel, IPanel
         _prompt.TextChanged += OnFormInputChanged;
         _name.TextChanged += OnObjectNameChanged;
         _importSource.SelectedIndexChanged += OnFormInputChanged;
+        _inputMode.SelectedIndexChanged += OnInputModeChanged;
+        _pickImage.Click += OnPickImage;
+        _clearImage.Click += OnClearImage;
         _faceLimit.ValueChanged += OnSettingsChanged;
         _withMaterials.CheckedChanged += OnSettingsChanged;
         Load += OnLoaded;
+        KeyDown += OnPanelKeyDown;
         ApplyControls(_session.State, _session.Recovery);
     }
 
@@ -391,7 +458,9 @@ public sealed class TripoRhinoPanel : Panel, IPanel
                         },
                     }),
                 Stretch(_recoveryExpander),
-                FieldBlock("Describe the model", _prompt),
+                FieldBlock("Input mode", _inputMode),
+                _promptBlock,
+                _imageBlock,
                 Stretch(_createInRhino),
                 Stretch(_createGuidance),
                 Stretch(_resultStatus),
@@ -524,6 +593,163 @@ public sealed class TripoRhinoPanel : Panel, IPanel
     {
         PersistUserSettings();
         RequestRender();
+    }
+
+    private void OnInputModeChanged(object? sender, EventArgs args)
+    {
+        bool image = _inputMode.SelectedIndex == 1;
+        if (_imageMode == image)
+        {
+            return;
+        }
+
+        _imageMode = image;
+        _promptBlock.Visible = !image;
+        _imageBlock.Visible = image;
+        RequestRender();
+    }
+
+    private async void OnPickImage(object? sender, EventArgs args)
+    {
+        try
+        {
+            EnsurePanelDocumentIsActive();
+            string? path = PickImagePath();
+            if (path is null)
+            {
+                return;
+            }
+
+            await StageSelectedImageAsync(path);
+        }
+        catch (Exception exception)
+        {
+            ShowError(exception);
+        }
+    }
+
+    private void OnClearImage(object? sender, EventArgs args)
+    {
+        if (_stagedImage is null)
+        {
+            return;
+        }
+
+        _stagedImage = null;
+        _stagedImageName = null;
+        _stagedImageSourcePath = null;
+        _imagePreview.Image = null;
+        _imageName.Text = string.Empty;
+        RequestRender();
+    }
+
+    private void OnPanelKeyDown(object? sender, KeyEventArgs args)
+    {
+        if (!_imageMode || args.Handled)
+        {
+            return;
+        }
+
+        bool paste =
+            args.Key == Keys.V &&
+            (args.Modifiers & Application.Instance.CommonModifier) != Keys.None;
+        if (!paste)
+        {
+            return;
+        }
+
+        args.Handled = true;
+        _ = StageClipboardImageAsync();
+    }
+
+    private async Task StageClipboardImageAsync()
+    {
+        try
+        {
+            EnsurePanelDocumentIsActive();
+            Eto.Drawing.Image? data = Clipboard.Instance.Image;
+            if (data is null)
+            {
+                return;
+            }
+
+            string path = Path.Combine(
+                Path.GetTempPath(),
+                $"tripo-clipboard-{Guid.NewGuid():N}.png");
+            using (Eto.Drawing.Bitmap bitmap =
+                data is Eto.Drawing.Bitmap existing
+                    ? existing
+                    : new Eto.Drawing.Bitmap(data))
+            {
+                await using FileStream stream = new(
+                    path,
+                    FileMode.CreateNew,
+                    FileAccess.Write,
+                    FileShare.None,
+                    64 * 1024,
+                    useAsync: true);
+                using Eto.Drawing.Bitmap png = bitmap;
+                png.Save(stream, Eto.Drawing.ImageFormat.Png);
+            }
+
+            await StageSelectedImageAsync(path, isClipboardTemp: true);
+        }
+        catch (Exception exception)
+        {
+            ShowError(exception);
+        }
+    }
+
+    private async Task StageSelectedImageAsync(
+        string path,
+        bool isClipboardTemp = false)
+    {
+        Tripo.Bridge.StagedImageTransfer transfer =
+            await Tripo.Bridge.ImageTransferStore.StageAsync(
+                    path,
+                    _panelLifetime.Token)
+                .ConfigureAwait(true);
+        _stagedImage = transfer;
+        _stagedImageName = Path.GetFileName(path);
+        _stagedImageSourcePath = isClipboardTemp ? null : path;
+        try
+        {
+            _imagePreview.Image = new Eto.Drawing.Bitmap(path);
+        }
+        catch
+        {
+            // A non-fatal preview failure must not block staging. The label
+            // still identifies the file; the user can proceed or clear it.
+            _imagePreview.Image = null;
+        }
+
+        _imageName.Text = _stagedImageName;
+        RequestRender();
+    }
+
+    private string? PickImagePath()
+    {
+        EnsurePanelDocumentIsActive();
+        global::Rhino.RhinoDoc rhinoDocument = global::Rhino.RhinoDoc.ActiveDoc!;
+        Eto.Forms.OpenFileDialog dialog = new()
+        {
+            CheckFileExists = true,
+            MultiSelect = false,
+            Title = "Choose a PNG or JPEG for Tripo",
+            Filters =
+            {
+                new Eto.Forms.FileFilter(
+                    "PNG or JPEG",
+                    "*.png",
+                    "*.jpg",
+                    "*.jpeg"),
+            },
+        };
+        return dialog.ShowDialog(
+                global::Rhino.UI.RhinoEtoApp.MainWindowForDocument(
+                    rhinoDocument)) == Eto.Forms.DialogResult.Ok
+            ? dialog.FileName
+            : null;
     }
 
     private void OnObjectNameChanged(object? sender, EventArgs args)
@@ -1544,32 +1770,75 @@ public sealed class TripoRhinoPanel : Panel, IPanel
             EnsureNoAutomaticDirectGlbCreateMutation(
                 "start or retry generation");
             EnsurePanelDocumentIsActive();
-            bool retry = _session.State.GenerationRetryAllowed;
-            Tripo.HostUi.PreparedTextGeneration prepared =
-                _session.State.PreparedGeneration ??
-                _session.PrepareGeneration(
-                    _prompt.Text,
-                    checked((int)_faceLimit.Value),
-                    _withMaterials.Checked == true);
-            PersistUserSettings();
-            RequestRender();
-            if (!ConfirmPaidDispatch(
-                    retry
-                        ? "Retry same generation operation?"
-                        : "Create Tripo generation task?",
-                    prepared.OperationId,
-                    retry))
+            if (_imageMode)
             {
-                return;
+                await GenerateFromImageAsync();
             }
-
-            await _session.DispatchPreparedGenerationAsync(
-                userConfirmedExternalCost: true);
+            else
+            {
+                await GenerateFromTextAsync();
+            }
         }
         catch (Exception exception)
         {
             ShowError(exception);
         }
+    }
+
+    private async Task GenerateFromTextAsync()
+    {
+        bool retry = _session.State.GenerationRetryAllowed;
+        Tripo.HostUi.PreparedTextGeneration prepared =
+            _session.State.PreparedGeneration ??
+            _session.PrepareGeneration(
+                _prompt.Text,
+                checked((int)_faceLimit.Value),
+                _withMaterials.Checked == true);
+        PersistUserSettings();
+        RequestRender();
+        if (!ConfirmPaidDispatch(
+                retry
+                    ? "Retry same generation operation?"
+                    : "Create Tripo generation task?",
+                prepared.OperationId,
+                retry))
+        {
+            return;
+        }
+
+        await _session.DispatchPreparedGenerationAsync(
+            userConfirmedExternalCost: true);
+    }
+
+    private async Task GenerateFromImageAsync()
+    {
+        if (_stagedImage is null)
+        {
+            throw new InvalidOperationException(
+                "Choose an image before generating from it.");
+        }
+
+        bool retry = _session.State.GenerationRetryAllowed;
+        Tripo.HostUi.PreparedImageGeneration prepared =
+            _session.State.PreparedImageGeneration ??
+            _session.PrepareImageGeneration(
+                _stagedImage,
+                checked((int)_faceLimit.Value),
+                _withMaterials.Checked == true);
+        PersistUserSettings();
+        RequestRender();
+        if (!ConfirmPaidDispatch(
+                retry
+                    ? "Retry same image generation operation?"
+                    : "Create Tripo image generation task?",
+                prepared.OperationId,
+                retry))
+        {
+            return;
+        }
+
+        await _session.DispatchPreparedImageGenerationAsync(
+            userConfirmedExternalCost: true);
     }
 
     private async void OnRefreshGeneration(object? sender, EventArgs args)
@@ -1837,6 +2106,15 @@ public sealed class TripoRhinoPanel : Panel, IPanel
             _directGlbAutoImportIntent = null;
             _directGlbCreateUiStage =
                 Tripo.HostUi.DirectGlbCreateUiStage.Inactive;
+            _stagedImage = null;
+            _stagedImageName = null;
+            _stagedImageSourcePath = null;
+            _imagePreview.Image = null;
+            _imageName.Text = string.Empty;
+            _imageMode = false;
+            _inputMode.SelectedIndex = 0;
+            _promptBlock.Visible = true;
+            _imageBlock.Visible = false;
             _generationStatusPoller.Stop();
         }
         catch (Exception exception)
@@ -2224,6 +2502,17 @@ public sealed class TripoRhinoPanel : Panel, IPanel
         _name.Enabled = presentation.NameEnabled;
         _importMode.Enabled = presentation.ImportModeEnabled;
         _applyMaterials.Enabled = presentation.ApplyMaterialsEnabled;
+        // Keep the input-mode selector authoritative for prompt/image block
+        // visibility during normal editing; presentation only flips the enabled
+        // state of the image controls so they lock once a generation is prepared.
+        _promptBlock.Visible = !presentation.ImageMode;
+        _imageBlock.Visible = presentation.ImageMode;
+        _pickImage.Enabled = presentation.PickImageEnabled;
+        _clearImage.Visible = presentation.ClearImageVisible;
+        if (presentation.ImageName is not null)
+        {
+            _imageName.Text = presentation.ImageName;
+        }
         string? pendingGenerationTaskId =
             Tripo.HostUi.DirectGlbGenerationPollingPolicy.GetPendingTaskId(
                 state,
@@ -2247,7 +2536,10 @@ public sealed class TripoRhinoPanel : Panel, IPanel
             _prompt.Text,
             _name.Text,
             IsDirectGlbSelected() ? "glb" : "obj",
-            _directGlbCreateUiStage);
+            _directGlbCreateUiStage,
+            imageMode: _imageMode,
+            hasImage: _stagedImage is not null,
+            imageName: _stagedImageName);
 
     private void QueueDirectGlbAutoImportContinuation(
         Tripo.HostUi.TripoPanelSession ownerSession,

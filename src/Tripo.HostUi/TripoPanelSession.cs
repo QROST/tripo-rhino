@@ -7,6 +7,13 @@ public sealed record PreparedTextGeneration(
     string DocumentSessionId,
     string OperationId);
 
+public sealed record PreparedImageGeneration(
+    Tripo.Bridge.StagedImageTransfer Image,
+    int FaceLimit,
+    bool WithMaterials,
+    string DocumentSessionId,
+    string OperationId);
+
 public sealed record PreparedObjConversion(
     string SourceTaskId,
     int FaceLimit,
@@ -143,8 +150,10 @@ public sealed record TripoPanelState(
     Tripo.Bridge.HostContextReceipt? Context,
     Tripo.Bridge.HostControlCredentialStatusReceipt? CredentialStatus,
     PreparedTextGeneration? PreparedGeneration,
+    PreparedImageGeneration? PreparedImageGeneration,
     bool GenerationDispatchAttempted,
     Tripo.Bridge.HostControlTextTaskCreationReceipt? GenerationReceipt,
+    Tripo.Bridge.HostControlImageTaskCreationReceipt? ImageGenerationReceipt,
     Tripo.Bridge.HostControlOperationStatusReceipt? GenerationOperationStatus,
     Tripo.Bridge.HostControlTaskStatusReceipt? GenerationStatus,
     PreparedObjConversion? PreparedConversion,
@@ -165,8 +174,10 @@ public sealed record TripoPanelState(
         Context: null,
         CredentialStatus: null,
         PreparedGeneration: null,
+        PreparedImageGeneration: null,
         GenerationDispatchAttempted: false,
         GenerationReceipt: null,
+        ImageGenerationReceipt: null,
         GenerationOperationStatus: null,
         GenerationStatus: null,
         PreparedConversion: null,
@@ -183,8 +194,10 @@ public sealed record TripoPanelState(
 
     public bool HasWorkflowState =>
         PreparedGeneration is not null ||
+        PreparedImageGeneration is not null ||
         GenerationDispatchAttempted ||
         GenerationReceipt is not null ||
+        ImageGenerationReceipt is not null ||
         GenerationOperationStatus is not null ||
         GenerationStatus is not null ||
         PreparedConversion is not null ||
@@ -243,6 +256,7 @@ public sealed record TripoPanelState(
 
     public bool HasDurableGenerationTask =>
         GenerationReceipt is not null ||
+        ImageGenerationReceipt is not null ||
         GenerationOperationStatus?.TaskIdDurable == true;
 
     public bool HasCredentialRefreshFailure =>
@@ -256,7 +270,8 @@ public sealed record TripoPanelState(
             StringComparison.Ordinal);
 
     public bool CanDispatchPreparedGeneration =>
-        PreparedGeneration is not null &&
+        (PreparedGeneration is not null ||
+         PreparedImageGeneration is not null) &&
         !HasDurableGenerationTask &&
         !IsDefinitiveRequestRejection(GenerationOperationStatus);
 
@@ -300,18 +315,31 @@ public sealed record TripoPanelState(
 
     private bool IsGenerationResetBlocked()
     {
-        PreparedTextGeneration? prepared = PreparedGeneration;
-        Tripo.Bridge.HostControlTextTaskCreationReceipt? receipt =
+        // Generation can be either text-to-model or image-to-model. Both share
+        // the same dispatch/operation-status/task-status slots downstream; only
+        // the prepare source, the receipt type, the operation Kind, and the task
+        // Type differ. Resolve the active prepare/receipt once and validate the
+        // identity symmetry for whichever source is present.
+        PreparedTextGeneration? preparedText = PreparedGeneration;
+        PreparedImageGeneration? preparedImage = PreparedImageGeneration;
+        string? preparedOperationId = PreparedGenerationOperationId;
+        Tripo.Bridge.HostControlTextTaskCreationReceipt? textReceipt =
             GenerationReceipt;
+        Tripo.Bridge.HostControlImageTaskCreationReceipt? imageReceipt =
+            ImageGenerationReceipt;
         Tripo.Bridge.HostControlOperationStatusReceipt? operation =
             GenerationOperationStatus;
-        if (receipt is not null &&
-            (prepared is null ||
+        string? receiptTaskId =
+            textReceipt?.TaskId ?? imageReceipt?.TaskId;
+        string? receiptOperationId =
+            textReceipt?.OperationId ?? imageReceipt?.OperationId;
+        if (receiptOperationId is not null &&
+            (preparedOperationId is null ||
              !string.Equals(
-                 receipt.OperationId,
-                 prepared.OperationId,
-                 StringComparison.Ordinal) ||
-             !Tripo.Bridge.TripoTaskId.IsValid(receipt.TaskId)))
+                receiptOperationId,
+                preparedOperationId,
+                StringComparison.Ordinal) ||
+             !Tripo.Bridge.TripoTaskId.IsValid(receiptTaskId)))
         {
             return true;
         }
@@ -320,34 +348,48 @@ public sealed record TripoPanelState(
             operation?.TaskIdDurable == true
                 ? operation.CreatedTaskId
                 : null;
+        bool operationKindMatches =
+            operation is null ||
+            (preparedText is not null &&
+             string.Equals(
+                operation.Kind,
+                "text_task_creation",
+                StringComparison.Ordinal)) ||
+            (preparedImage is not null &&
+             string.Equals(
+                operation.Kind,
+                "image_task_creation",
+                StringComparison.Ordinal));
         if (operation is not null &&
-            (prepared is null ||
+            (preparedOperationId is null ||
              !string.Equals(
-                 operation.OperationId,
-                 prepared.OperationId,
-                 StringComparison.Ordinal) ||
-             !string.Equals(
-                 operation.Kind,
-                 "text_task_creation",
-                 StringComparison.Ordinal) ||
+                operation.OperationId,
+                preparedOperationId,
+                StringComparison.Ordinal) ||
+             !operationKindMatches ||
              operation.SourceTaskId is not null ||
              (operation.TaskIdDurable &&
              !Tripo.Bridge.TripoTaskId.IsValid(operationTaskId)) ||
-             (receipt?.TaskId is not null &&
+             (receiptTaskId is not null &&
              operationTaskId is not null &&
              !string.Equals(
-                 receipt.TaskId,
-                 operationTaskId,
-                 StringComparison.Ordinal))))
+                receiptTaskId,
+                operationTaskId,
+                StringComparison.Ordinal))))
         {
             return true;
         }
 
-        string? expectedTaskId = receipt?.TaskId ?? operationTaskId;
+        string? expectedTaskId = receiptTaskId ?? operationTaskId;
+        // A generation task is text_to_model for text input and
+        // image_to_model for image input; accept either when the prepared
+        // source matches.
+        string expectedTaskType =
+            preparedImage is not null ? "image_to_model" : "text_to_model";
         return IsTaskTerminalUnconfirmed(
             expectedTaskId,
             GenerationStatus,
-            "text_to_model");
+            expectedTaskType);
     }
 
     private bool IsConversionResetBlocked()
@@ -527,9 +569,37 @@ public sealed record TripoPanelState(
 
     private string? GetDurableGenerationTaskId() =>
         GenerationReceipt?.TaskId ??
+        ImageGenerationReceipt?.TaskId ??
         (GenerationOperationStatus?.TaskIdDurable == true
             ? GenerationOperationStatus.CreatedTaskId
             : null);
+
+    /// <summary>
+    /// Unified generation task id across text and image sources, for callers
+    /// that consume state externally (poller, presentation, recovery store).
+    /// </summary>
+    public string? GenerationTaskId =>
+        GenerationReceipt?.TaskId ??
+        ImageGenerationReceipt?.TaskId ??
+        (GenerationOperationStatus?.TaskIdDurable == true
+            ? GenerationOperationStatus.CreatedTaskId
+            : null);
+
+    /// <summary>
+    /// Unified prepared-generation operation id across text and image sources.
+    /// Null when neither has been prepared.
+    /// </summary>
+    public string? PreparedGenerationOperationId =>
+        PreparedGeneration?.OperationId ??
+        PreparedImageGeneration?.OperationId;
+
+    /// <summary>
+    /// Unified generation-receipt operation id across text and image sources.
+    /// Null when no receipt has been recorded.
+    /// </summary>
+    public string? GenerationReceiptOperationId =>
+        GenerationReceipt?.OperationId ??
+        ImageGenerationReceipt?.OperationId;
 
     private string? GetDurableConversionTaskId() =>
         ConversionReceipt?.ConversionTaskId ??
@@ -760,8 +830,65 @@ public sealed class TripoPanelSession : IAsyncDisposable
             UpdateState(state => state with
             {
                 PreparedGeneration = prepared,
+                PreparedImageGeneration = null,
                 GenerationDispatchAttempted = false,
                 GenerationReceipt = null,
+                ImageGenerationReceipt = null,
+                GenerationOperationStatus = null,
+                GenerationStatus = null,
+                PreparedConversion = null,
+                ConversionDispatchAttempted = false,
+                ConversionReceipt = null,
+                ConversionOperationStatus = null,
+                ConversionStatus = null,
+                PreparedImport = null,
+                ImportDispatchAttempted = false,
+                ImportReceipt = null,
+                LastError = null,
+                LastErrorCode = null,
+                ImportFailureCode = null,
+            });
+            return prepared;
+        }
+        finally
+        {
+            _operationGate.Release();
+        }
+    }
+
+    public PreparedImageGeneration PrepareImageGeneration(
+        Tripo.Bridge.StagedImageTransfer image,
+        int faceLimit,
+        bool withMaterials)
+    {
+        EnterSynchronousMutation();
+        try
+        {
+            EnsureNoStaleRecovery();
+            ArgumentNullException.ThrowIfNull(image);
+            Tripo.Bridge.ImageTransferStore.ValidateDescriptor(image);
+            ValidateFaceLimit(faceLimit);
+            if (State.HasWorkflowState)
+            {
+                throw new InvalidOperationException(
+                    "Use the prepared generation operation or start a new workflow " +
+                    "before creating another operation ID.");
+            }
+
+            Tripo.Bridge.HostContextReceipt context = RequireContext();
+            PreparedImageGeneration prepared = new(
+                image,
+                faceLimit,
+                withMaterials,
+                context.DocumentSessionId,
+                Guid.NewGuid().ToString("D"));
+            UpdateState(state => state with
+            {
+                PreparedGeneration = null,
+                PreparedImageGeneration = prepared,
+                GenerationDispatchAttempted = false,
+                GenerationReceipt = null,
+                ImageGenerationReceipt = null,
                 GenerationOperationStatus = null,
                 GenerationStatus = null,
                 PreparedConversion = null,
@@ -914,6 +1041,106 @@ public sealed class TripoPanelSession : IAsyncDisposable
                 UpdateState(state => state with
                 {
                     GenerationReceipt = receipt,
+                    GenerationOperationStatus = null,
+                    LastError = null,
+                    LastErrorCode = null,
+                });
+            },
+            cancellationToken);
+    }
+
+    public Task DispatchPreparedImageGenerationAsync(
+        bool userConfirmedExternalCost,
+        CancellationToken cancellationToken = default)
+    {
+        if (!userConfirmedExternalCost)
+        {
+            throw new InvalidOperationException(
+                "Generation was not sent because external cost was not confirmed.");
+        }
+
+        return RunExclusiveAsync(
+            async token =>
+            {
+                using IDisposable? lease =
+                    _recoveryStore?.AcquireCredentialWorkflowLease();
+                EnsureNoStaleRecovery();
+                Tripo.Bridge.IHostControlClient client = RequireClient();
+                TripoPanelState current = State;
+                PreparedImageGeneration prepared =
+                    current.PreparedImageGeneration ??
+                    throw new InvalidOperationException(
+                        "Prepare an image generation operation before dispatch.");
+                EnsurePaidDispatchAllowed(
+                    current.CanDispatchPreparedGeneration,
+                    current.GenerationRetryRequired,
+                    current.GenerationOperationStatus,
+                    "generation");
+                await EnsureSessionStillActiveAsync(
+                        client,
+                        prepared.DocumentSessionId,
+                        requiredHostCapability: null,
+                        requiredSidecarCapability: null,
+                        token)
+                    .ConfigureAwait(false);
+                UpdateState(state => state with
+                {
+                    GenerationDispatchAttempted = true,
+                });
+                Tripo.Bridge.HostControlImageTaskCreationReceipt receipt;
+                try
+                {
+                    receipt = await client.CreateImageTaskAsync(
+                                new Tripo.Bridge.HostControlCreateImageTaskRequest(
+                                    prepared.Image,
+                                    prepared.FaceLimit,
+                                    prepared.WithMaterials,
+                                    prepared.DocumentSessionId,
+                                    prepared.OperationId,
+                                    ConfirmExternalCost: true,
+                                    RequireExistingOperation:
+                                        current.GenerationRetryRequired),
+                                token)
+                            .ConfigureAwait(false);
+                }
+                catch (Tripo.Bridge.HostControlCallException exception)
+                    when (string.Equals(
+                        exception.Code,
+                        Tripo.Bridge.HostControlConstants.CredentialInvalidError,
+                        StringComparison.Ordinal) &&
+                        !current.GenerationRetryRequired)
+                {
+                    UpdateState(state => state with
+                    {
+                        GenerationDispatchAttempted = false,
+                        GenerationOperationStatus = null,
+                    });
+                    throw;
+                }
+                catch (Tripo.Bridge.HostControlCallException exception)
+                    when (string.Equals(
+                        exception.Code,
+                        Tripo.Bridge.HostControlConstants.CredentialRejectedError,
+                        StringComparison.Ordinal))
+                {
+                    Tripo.Bridge.HostControlOperationStatusReceipt? status =
+                        await TryGetDefinitiveRequestRejectionAsync(
+                                client,
+                                prepared.OperationId,
+                                "image_task_creation",
+                                token)
+                            .ConfigureAwait(false);
+                    if (status is not null)
+                    {
+                        ClearRejectedGenerationStage();
+                    }
+
+                    throw;
+                }
+
+                UpdateState(state => state with
+                {
+                    ImageGenerationReceipt = receipt,
                     GenerationOperationStatus = null,
                     LastError = null,
                     LastErrorCode = null,
@@ -1383,8 +1610,10 @@ public sealed class TripoPanelSession : IAsyncDisposable
             UpdateState(state => state with
             {
                 PreparedGeneration = null,
+                PreparedImageGeneration = null,
                 GenerationDispatchAttempted = false,
                 GenerationReceipt = null,
+                ImageGenerationReceipt = null,
                 GenerationOperationStatus = null,
                 GenerationStatus = null,
                 PreparedConversion = null,
@@ -1980,25 +2209,38 @@ public sealed class TripoPanelSession : IAsyncDisposable
             return state.GenerationReceipt.TaskId;
         }
 
-        PreparedTextGeneration prepared =
-            state.PreparedGeneration ??
+        if (state.ImageGenerationReceipt is not null)
+        {
+            return state.ImageGenerationReceipt.TaskId;
+        }
+
+        PreparedTextGeneration? preparedText = state.PreparedGeneration;
+        PreparedImageGeneration? preparedImage = state.PreparedImageGeneration;
+        if (preparedText is null && preparedImage is null)
+        {
             throw new InvalidOperationException(
                 "No generation operation is available to refresh.");
+        }
         if (!state.GenerationDispatchAttempted)
         {
             throw new InvalidOperationException(
                 "Dispatch the prepared generation before refreshing it.");
         }
 
+        string operationId = state.PreparedGenerationOperationId!;
+        string operationKind =
+            preparedImage is not null
+                ? "image_task_creation"
+                : "text_task_creation";
         Tripo.Bridge.HostControlOperationStatusReceipt operationStatus =
             await client.GetOperationStatusAsync(
-                    prepared.OperationId,
+                    operationId,
                     cancellationToken)
                 .ConfigureAwait(false);
         EnsurePaidOperationStatusIdentity(
             operationStatus,
-            prepared.OperationId,
-            "text_task_creation");
+            operationId,
+            operationKind);
         if (TripoPanelState.IsDefinitiveRequestRejection(operationStatus))
         {
             ClearRejectedGenerationStage();
@@ -2101,8 +2343,10 @@ public sealed class TripoPanelSession : IAsyncDisposable
         UpdateState(state => state with
         {
             PreparedGeneration = null,
+            PreparedImageGeneration = null,
             GenerationDispatchAttempted = false,
             GenerationReceipt = null,
+            ImageGenerationReceipt = null,
             GenerationOperationStatus = null,
             GenerationStatus = null,
             PreparedConversion = null,

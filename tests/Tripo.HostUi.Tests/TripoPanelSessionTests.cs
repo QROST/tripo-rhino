@@ -3394,7 +3394,7 @@ public sealed class TripoPanelSessionTests
         }
     }
 
-    private static Tripo.HostUi.TripoPanelSession CreateSession(
+    internal static Tripo.HostUi.TripoPanelSession CreateSession(
         FakeHostControlClient client) =>
         new(new FakeConnector(client));
 
@@ -3540,7 +3540,7 @@ public sealed class TripoPanelSessionTests
             Task.FromResult(_client);
     }
 
-    private sealed class FakeHostControlClient :
+    internal sealed class FakeHostControlClient :
         Tripo.Bridge.IHostControlClient
     {
         private readonly int _hostProcessId = Environment.ProcessId;
@@ -3631,6 +3631,8 @@ public sealed class TripoPanelSessionTests
 
         public int CreateTextCalls { get; private set; }
 
+        public int CreateImageCalls { get; private set; }
+
         public int CreateConversionCalls { get; private set; }
 
         public int TaskStatusCalls { get; private set; }
@@ -3662,6 +3664,12 @@ public sealed class TripoPanelSessionTests
 
         public Tripo.Bridge.HostControlCreateTextTaskRequest? LastTextRequest =>
             TextRequests.LastOrDefault();
+
+        public List<Tripo.Bridge.HostControlCreateImageTaskRequest>
+            ImageRequests { get; } = [];
+
+        public Tripo.Bridge.HostControlCreateImageTaskRequest? LastImageRequest =>
+            ImageRequests.LastOrDefault();
 
         public Tripo.Bridge.HostControlCreateObjConversionRequest?
             LastConversionRequest
@@ -3796,6 +3804,29 @@ public sealed class TripoPanelSessionTests
                     "v3.1-20260211"));
         }
 
+        public Task<Tripo.Bridge.HostControlImageTaskCreationReceipt>
+            CreateImageTaskAsync(
+                Tripo.Bridge.HostControlCreateImageTaskRequest request,
+                CancellationToken cancellationToken)
+        {
+            CreateImageCalls++;
+            ImageRequests.Add(request);
+            if (TextFailureCode is not null ||
+                FailFirstTextResponse && CreateImageCalls == 1)
+            {
+                throw new Tripo.Bridge.HostControlCallException(
+                    TextFailureCode ?? FirstTextFailureCode,
+                    "The response was lost.");
+            }
+
+            return Task.FromResult(
+                new Tripo.Bridge.HostControlImageTaskCreationReceipt(
+                    request.OperationId,
+                    "task_image456",
+                    "v3.1-20260211",
+                    request.Image.Sha256));
+        }
+
         public async Task<Tripo.Bridge.HostControlTaskStatusReceipt>
             GetTaskStatusAsync(
                 string taskId,
@@ -3820,7 +3851,9 @@ public sealed class TripoPanelSessionTests
                 taskId,
                 taskId == "task_source123"
                     ? "text_to_model"
-                    : "convert_model",
+                    : taskId == "task_image456"
+                        ? "image_to_model"
+                        : "convert_model",
                 TaskStatusValue,
                 string.Equals(
                     TaskStatusValue,

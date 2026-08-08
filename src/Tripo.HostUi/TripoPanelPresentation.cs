@@ -460,6 +460,34 @@ public sealed class TripoPanelPresentation
 
     public bool ApplyMaterialsEnabled { get; private init; }
 
+    /// <summary>
+    /// True when the panel is in image-input mode (image picker visible, prompt
+    /// box hidden). Drives input-control visibility in the panel.
+    /// </summary>
+    public bool ImageMode { get; private init; }
+
+    /// <summary>
+    /// True when an image has been staged locally and is ready to prepare, or a
+    /// prepared image generation exists. Used to enable the Generate button in
+    /// image mode (analogous to a non-empty prompt in text mode).
+    /// </summary>
+    public bool HasImage { get; private init; }
+
+    /// <summary>
+    /// Filename of the currently staged image, for the preview label.
+    /// </summary>
+    public string? ImageName { get; private init; }
+
+    /// <summary>
+    /// True when the "Choose image" button should accept input.
+    /// </summary>
+    public bool PickImageEnabled { get; private init; }
+
+    /// <summary>
+    /// True when a staged image can be cleared (image present and editing allowed).
+    /// </summary>
+    public bool ClearImageVisible { get; private init; }
+
     public static TripoPanelPresentation Create(
         TripoPanelState state,
         TripoPanelRecoveryLoadResult recovery,
@@ -483,7 +511,10 @@ public sealed class TripoPanelPresentation
         string? prompt,
         string? objectName,
         string? importSource,
-        DirectGlbCreateUiStage directGlbCreateStage)
+        DirectGlbCreateUiStage directGlbCreateStage,
+        bool imageMode = false,
+        bool hasImage = false,
+        string? imageName = null)
     {
         ArgumentNullException.ThrowIfNull(state);
         ArgumentNullException.ThrowIfNull(recovery);
@@ -496,7 +527,9 @@ public sealed class TripoPanelPresentation
                 DirectGlbCreateUiStage.WaitingPaused or
                 DirectGlbCreateUiStage.Importing;
         bool controlsReady = ready && !automaticCreateActive;
-        bool generationPrepared = state.PreparedGeneration is not null;
+        bool generationPrepared =
+            state.PreparedGeneration is not null ||
+            state.PreparedImageGeneration is not null;
         bool generationSucceeded =
             state.GenerationStatus?.Status == "success";
         bool conversionPrepared = state.PreparedConversion is not null;
@@ -821,13 +854,16 @@ public sealed class TripoPanelPresentation
                 controlsReady &&
                 !recoveryBlocked &&
                 state.CredentialStatus?.HasApiKey == true &&
-                ((!generationPrepared && hasPrompt) ||
+                ((!generationPrepared &&
+                  (imageMode ? hasImage : hasPrompt)) ||
                  (generationPrepared &&
                   state.CanDispatchPreparedGeneration &&
                   (!state.GenerationDispatchAttempted ||
                    state.GenerationRetryAllowed))),
             GenerateText = !generationPrepared
-                ? "Generate"
+                ? imageMode
+                    ? "Generate from image"
+                    : "Generate"
                 : state.GenerationRetryAllowed
                     ? "Retry same UUID"
                     : state.GenerationRetryRequired
@@ -901,7 +937,7 @@ public sealed class TripoPanelPresentation
                 resetEnabled &&
                 (state.HasWorkflowState ||
                  directGlbCreateStage != DirectGlbCreateUiStage.Inactive),
-            PromptEnabled = controlsReady && !generationPrepared,
+            PromptEnabled = controlsReady && !generationPrepared && !imageMode,
             FaceLimitEnabled = controlsReady && !generationPrepared,
             WithMaterialsEnabled = controlsReady && !generationPrepared,
             NameEnabled =
@@ -914,6 +950,15 @@ public sealed class TripoPanelPresentation
                 controlsReady &&
                 state.PreparedImport is null &&
                 !directGlbRoute,
+            ImageMode = imageMode,
+            HasImage = hasImage || state.PreparedImageGeneration is not null,
+            ImageName = imageName,
+            PickImageEnabled = controlsReady && !generationPrepared,
+            ClearImageVisible =
+                imageMode &&
+                (hasImage || state.PreparedImageGeneration is not null) &&
+                controlsReady &&
+                !generationPrepared,
         };
     }
 
