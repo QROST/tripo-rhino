@@ -27,9 +27,10 @@ public sealed record TripoApiKeyPromptPolicy(
                     ? state.PreparedConversion?.OperationId
                     : state.GenerationDispatchAttempted ||
                       state.GenerationReceipt is not null ||
+                      state.ImageGenerationReceipt is not null ||
                       state.GenerationOperationStatus is not null ||
                       state.GenerationStatus is not null
-                        ? state.PreparedGeneration?.OperationId
+                        ? state.PreparedGenerationOperationId
                         : null;
         return new TripoApiKeyPromptPolicy(
             replacing,
@@ -224,7 +225,8 @@ internal sealed record DirectGlbCreateConfirmation(
     internal static DirectGlbCreateConfirmation Create(
         string operationId,
         string documentTitle,
-        string objectName)
+        string objectName,
+        bool imageGeneration = false)
     {
         if (string.IsNullOrWhiteSpace(operationId))
         {
@@ -248,7 +250,9 @@ internal sealed record DirectGlbCreateConfirmation(
         }
         return new DirectGlbCreateConfirmation(
             "Create model and import direct GLB?",
-            "This sends one Tripo text-to-model generation request, which can " +
+            "This sends one Tripo " +
+            (imageGeneration ? "image-to-model" : "text-to-model") +
+            " generation request, which can " +
             "consume Tripo credits. " +
             "After that task reports success, this panel will import its GLB " +
             $"directly into \"{documentTitle}\" as \"{objectName}\".\n\n" +
@@ -268,9 +272,54 @@ internal static class DirectGlbFirstDispatchGuard
         PreparedTextGeneration prepared,
         bool directGlbSelected)
     {
+        ArgumentNullException.ThrowIfNull(prepared);
+        if (!Equals(state.PreparedGeneration, prepared))
+        {
+            return "The prepared generation no longer matches the confirmed " +
+                   "direct GLB workflow. Nothing was sent.";
+        }
+
+        return GetBlockingReason(
+            state,
+            recovery,
+            prepared.OperationId,
+            prepared.DocumentSessionId,
+            imageGeneration: false,
+            directGlbSelected);
+    }
+
+    internal static string? GetBlockingReason(
+        TripoPanelState state,
+        TripoPanelRecoveryLoadResult recovery,
+        PreparedImageGeneration prepared,
+        bool directGlbSelected)
+    {
+        ArgumentNullException.ThrowIfNull(prepared);
+        if (!Equals(state.PreparedImageGeneration, prepared))
+        {
+            return "The prepared generation no longer matches the confirmed " +
+                   "direct GLB workflow. Nothing was sent.";
+        }
+
+        return GetBlockingReason(
+            state,
+            recovery,
+            prepared.OperationId,
+            prepared.DocumentSessionId,
+            imageGeneration: true,
+            directGlbSelected);
+    }
+
+    private static string? GetBlockingReason(
+        TripoPanelState state,
+        TripoPanelRecoveryLoadResult recovery,
+        string operationId,
+        string documentSessionId,
+        bool imageGeneration,
+        bool directGlbSelected)
+    {
         ArgumentNullException.ThrowIfNull(state);
         ArgumentNullException.ThrowIfNull(recovery);
-        ArgumentNullException.ThrowIfNull(prepared);
         if (recovery.HasBlock)
         {
             return "Review recovered operation IDs before starting a " +
@@ -309,10 +358,17 @@ internal static class DirectGlbFirstDispatchGuard
 
         if (!string.Equals(
                 context.DocumentSessionId,
-                prepared.DocumentSessionId,
+                documentSessionId,
                 StringComparison.Ordinal) ||
-            state.PreparedGeneration is not { } current ||
-            !Equals(current, prepared) ||
+            !string.Equals(
+                state.PreparedGenerationOperationId,
+                operationId,
+                StringComparison.Ordinal) ||
+            !string.Equals(
+                state.PreparedGenerationDocumentSessionId,
+                documentSessionId,
+                StringComparison.Ordinal) ||
+            state.PreparedGenerationIsImage != imageGeneration ||
             state.GenerationDispatchAttempted ||
             !state.CanDispatchPreparedGeneration)
         {
@@ -450,6 +506,8 @@ public sealed class TripoPanelPresentation
 
     public bool PromptEnabled { get; private init; }
 
+    public bool InputModeEnabled { get; private init; }
+
     public bool FaceLimitEnabled { get; private init; }
 
     public bool WithMaterialsEnabled { get; private init; }
@@ -487,6 +545,8 @@ public sealed class TripoPanelPresentation
     /// True when a staged image can be cleared (image present and editing allowed).
     /// </summary>
     public bool ClearImageVisible { get; private init; }
+
+    public bool ClearImageEnabled { get; private init; }
 
     public static TripoPanelPresentation Create(
         TripoPanelState state,
@@ -596,11 +656,9 @@ public sealed class TripoPanelPresentation
             directGlbSelected &&
             directGlbSupported &&
             !state.HasWorkflowState &&
-            hasPrompt &&
+            (imageMode ? hasImage : hasPrompt) &&
             hasObjectName;
-        string? generationTaskId =
-            state.GenerationReceipt?.TaskId ??
-            state.GenerationOperationStatus?.CreatedTaskId;
+        string? generationTaskId = state.GenerationTaskId;
         string? conversionTaskId =
             state.ConversionReceipt?.ConversionTaskId ??
             state.ConversionOperationStatus?.CreatedTaskId;
@@ -704,9 +762,9 @@ public sealed class TripoPanelPresentation
             LatestPreparedOperationId =
                 state.PreparedImport?.OperationId ??
                 state.PreparedConversion?.OperationId ??
-                state.PreparedGeneration?.OperationId,
+                state.PreparedGenerationOperationId,
             GenerationOperationId =
-                state.PreparedGeneration?.OperationId ?? "Not prepared",
+                state.PreparedGenerationOperationId ?? "Not prepared",
             GenerationTaskId = generationTaskId ?? "Not created",
             GenerationStatus = StageStatus(
                 generationTaskId,
@@ -813,6 +871,8 @@ public sealed class TripoPanelPresentation
                     recoveryBlocked,
                     directGlbSelected,
                     directGlbSupported,
+                    imageMode,
+                    hasImage,
                     hasPrompt,
                     hasObjectName,
                     directGlbCreateStage),
@@ -938,6 +998,7 @@ public sealed class TripoPanelPresentation
                 (state.HasWorkflowState ||
                  directGlbCreateStage != DirectGlbCreateUiStage.Inactive),
             PromptEnabled = controlsReady && !generationPrepared && !imageMode,
+            InputModeEnabled = controlsReady && !generationPrepared,
             FaceLimitEnabled = controlsReady && !generationPrepared,
             WithMaterialsEnabled = controlsReady && !generationPrepared,
             NameEnabled =
@@ -959,6 +1020,11 @@ public sealed class TripoPanelPresentation
                 (hasImage || state.PreparedImageGeneration is not null) &&
                 controlsReady &&
                 !generationPrepared,
+            ClearImageEnabled =
+                imageMode &&
+                hasImage &&
+                controlsReady &&
+                !generationPrepared,
         };
     }
 
@@ -967,6 +1033,8 @@ public sealed class TripoPanelPresentation
         bool recoveryBlocked,
         bool directGlbSelected,
         bool directGlbSupported,
+        bool imageMode,
+        bool hasImage,
         bool hasPrompt,
         bool hasObjectName,
         DirectGlbCreateUiStage directGlbCreateStage)
@@ -1097,7 +1165,12 @@ public sealed class TripoPanelPresentation
                    "another model.";
         }
 
-        if (!hasPrompt)
+        if (imageMode && !hasImage)
+        {
+            return "Choose an image before starting image-to-model generation.";
+        }
+
+        if (!imageMode && !hasPrompt)
         {
             return "The prompt must contain 1 to 1024 characters.";
         }

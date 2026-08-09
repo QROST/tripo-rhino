@@ -211,7 +211,7 @@ public sealed record TripoPanelState(
 
     public bool HasUnresolvedPaidDispatch =>
         (GenerationDispatchAttempted &&
-         GenerationReceipt is null &&
+         GenerationReceiptOperationId is null &&
          GenerationOperationStatus?.TaskIdDurable != true &&
          !IsDefinitiveRequestRejection(GenerationOperationStatus)) ||
         (ConversionDispatchAttempted &&
@@ -242,6 +242,7 @@ public sealed record TripoPanelState(
     public bool HasCredentialBoundWorkflow =>
         GenerationDispatchAttempted ||
         GenerationReceipt is not null ||
+        ImageGenerationReceipt is not null ||
         GenerationOperationStatus is not null ||
         GenerationStatus is not null ||
         ConversionDispatchAttempted ||
@@ -592,6 +593,30 @@ public sealed record TripoPanelState(
     public string? PreparedGenerationOperationId =>
         PreparedGeneration?.OperationId ??
         PreparedImageGeneration?.OperationId;
+
+    /// <summary>
+    /// Unified prepared-generation document session across text and image
+    /// sources. Null when neither has been prepared.
+    /// </summary>
+    public string? PreparedGenerationDocumentSessionId =>
+        PreparedGeneration?.DocumentSessionId ??
+        PreparedImageGeneration?.DocumentSessionId;
+
+    /// <summary>
+    /// True when the active prepared generation uses an image source.
+    /// </summary>
+    public bool PreparedGenerationIsImage =>
+        PreparedImageGeneration is not null;
+
+    public string PreparedGenerationOperationKind =>
+        PreparedGenerationIsImage
+            ? "image_task_creation"
+            : "text_task_creation";
+
+    public string PreparedGenerationTaskType =>
+        PreparedGenerationIsImage
+            ? "image_to_model"
+            : "text_to_model";
 
     /// <summary>
     /// Unified generation-receipt operation id across text and image sources.
@@ -947,6 +972,33 @@ public sealed class TripoPanelSession : IAsyncDisposable
             cancellationToken);
     }
 
+    internal Task DispatchPreparedImageGenerationRequiringCapabilityAsync(
+        bool userConfirmedExternalCost,
+        string requiredHostCapability,
+        string requiredSidecarCapability,
+        CancellationToken cancellationToken = default)
+    {
+        if (string.IsNullOrWhiteSpace(requiredHostCapability))
+        {
+            throw new ArgumentException(
+                "The required host capability is missing.",
+                nameof(requiredHostCapability));
+        }
+
+        if (string.IsNullOrWhiteSpace(requiredSidecarCapability))
+        {
+            throw new ArgumentException(
+                "The required sidecar capability is missing.",
+                nameof(requiredSidecarCapability));
+        }
+
+        return DispatchPreparedImageGenerationCoreAsync(
+            userConfirmedExternalCost,
+            requiredHostCapability,
+            requiredSidecarCapability,
+            cancellationToken);
+    }
+
     private Task DispatchPreparedGenerationCoreAsync(
         bool userConfirmedExternalCost,
         string? requiredHostCapability,
@@ -1051,7 +1103,18 @@ public sealed class TripoPanelSession : IAsyncDisposable
 
     public Task DispatchPreparedImageGenerationAsync(
         bool userConfirmedExternalCost,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default) =>
+        DispatchPreparedImageGenerationCoreAsync(
+            userConfirmedExternalCost,
+            requiredHostCapability: null,
+            requiredSidecarCapability: null,
+            cancellationToken);
+
+    private Task DispatchPreparedImageGenerationCoreAsync(
+        bool userConfirmedExternalCost,
+        string? requiredHostCapability,
+        string? requiredSidecarCapability,
+        CancellationToken cancellationToken)
     {
         if (!userConfirmedExternalCost)
         {
@@ -1079,8 +1142,8 @@ public sealed class TripoPanelSession : IAsyncDisposable
                 await EnsureSessionStillActiveAsync(
                         client,
                         prepared.DocumentSessionId,
-                        requiredHostCapability: null,
-                        requiredSidecarCapability: null,
+                        requiredHostCapability,
+                        requiredSidecarCapability,
                         token)
                     .ConfigureAwait(false);
                 UpdateState(state => state with

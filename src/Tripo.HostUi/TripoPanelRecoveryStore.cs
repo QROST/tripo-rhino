@@ -543,11 +543,10 @@ public sealed class TripoPanelRecoveryStore : IDisposable
     {
         TripoPanelPaidRecoveryHint? generation =
             BuildPaidHint(
-                state.PreparedGeneration?.OperationId,
+                state.PreparedGenerationOperationId,
                 state.GenerationDispatchAttempted,
-                state.GenerationReceipt?.TaskId ??
-                state.GenerationOperationStatus?.CreatedTaskId,
-                state.GenerationReceipt is not null,
+                state.GenerationTaskId,
+                state.GenerationReceiptOperationId is not null,
                 state.GenerationOperationStatus);
         TripoPanelPaidRecoveryHint? conversion =
             BuildPaidHint(

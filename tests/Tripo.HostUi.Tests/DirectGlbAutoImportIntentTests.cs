@@ -608,6 +608,71 @@ public sealed class DirectGlbAutoImportIntentTests
         return intent;
     }
 
+    [Fact]
+    public void ImageIntentBindsImageReceiptAndAuthorizesOneImport()
+    {
+        Tripo.HostUi.DirectGlbAutoImportIntent intent = new(
+            SessionGeneration,
+            GenerationOperationId,
+            DocumentSessionId,
+            "Image Pavilion",
+            imageGeneration: true);
+        Tripo.HostUi.TripoPanelState state = ImagePanelState(
+            receipt: ImageReceipt(),
+            taskStatus: TaskStatus(
+                "success",
+                type: "image_to_model"));
+
+        Assert.True(intent.OwnsPreparedState(SessionGeneration, state));
+        Assert.Equal(
+            Tripo.HostUi.DirectGlbAutoImportDecision.BeginImport,
+            intent.ObserveState(SessionGeneration, state));
+        Assert.Equal(TaskId, intent.TaskId);
+        Assert.Equal(
+            Tripo.HostUi.DirectGlbAutoImportDecision.NoAction,
+            intent.ObserveState(SessionGeneration, state));
+    }
+
+    [Fact]
+    public void ImageIntentRejectsTextReceiptInsteadOfFallingBack()
+    {
+        Tripo.HostUi.DirectGlbAutoImportIntent intent = new(
+            SessionGeneration,
+            GenerationOperationId,
+            DocumentSessionId,
+            "Image Pavilion",
+            imageGeneration: true);
+        Tripo.HostUi.TripoPanelState state = ImagePanelState() with
+        {
+            GenerationReceipt = Receipt(),
+        };
+
+        Assert.False(intent.TryBindDurableTask(SessionGeneration, state));
+        Assert.Equal(
+            Tripo.HostUi.DirectGlbAutoImportPhase.Finished,
+            intent.Phase);
+        Assert.Null(intent.TaskId);
+    }
+
+    [Fact]
+    public void ImageIntentRejectsTextOperationKind()
+    {
+        Tripo.HostUi.DirectGlbAutoImportIntent intent = new(
+            SessionGeneration,
+            GenerationOperationId,
+            DocumentSessionId,
+            "Image Pavilion",
+            imageGeneration: true);
+        Tripo.HostUi.TripoPanelState state = ImagePanelState(
+            operationStatus: DurableOperationStatus(
+                kind: "text_task_creation"));
+
+        Assert.False(intent.TryBindDurableTask(SessionGeneration, state));
+        Assert.Equal(
+            Tripo.HostUi.DirectGlbAutoImportPhase.Finished,
+            intent.Phase);
+    }
+
     private static bool BindTask(
         Tripo.HostUi.DirectGlbAutoImportIntent intent) =>
         intent.TryBindDurableTask(
@@ -652,10 +717,54 @@ public sealed class DirectGlbAutoImportIntentTests
         };
     }
 
+    private static Tripo.HostUi.TripoPanelState ImagePanelState(
+        Tripo.Bridge.HostControlTaskStatusReceipt? taskStatus = null,
+        Tripo.Bridge.HostControlImageTaskCreationReceipt? receipt = null,
+        Tripo.Bridge.HostControlOperationStatusReceipt? operationStatus = null)
+    {
+        return Tripo.HostUi.TripoPanelState.Initial with
+        {
+            Connected = true,
+            Context = new Tripo.Bridge.HostContextReceipt(
+                "rhino",
+                "8-test",
+                123,
+                DocumentSessionId,
+                "Test.3dm",
+                "Meters",
+                []),
+            PreparedImageGeneration =
+                new Tripo.HostUi.PreparedImageGeneration(
+                    new Tripo.Bridge.StagedImageTransfer(
+                        "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+                        new string('a', 64),
+                        128,
+                        "image/png"),
+                    20_000,
+                    true,
+                    DocumentSessionId,
+                    GenerationOperationId),
+            GenerationDispatchAttempted = true,
+            ImageGenerationReceipt = receipt,
+            GenerationOperationStatus = operationStatus,
+            GenerationStatus = taskStatus,
+        };
+    }
+
     private static Tripo.Bridge.HostControlTextTaskCreationReceipt Receipt(
         string taskId = TaskId,
         string operationId = GenerationOperationId) =>
         new(operationId, taskId, "v2.5-20250123");
+
+    private static Tripo.Bridge.HostControlImageTaskCreationReceipt
+        ImageReceipt(
+            string taskId = TaskId,
+            string operationId = GenerationOperationId) =>
+        new(
+            operationId,
+            taskId,
+            "v2.5-20250123",
+            new string('a', 64));
 
     private static Tripo.Bridge.HostControlOperationStatusReceipt
         DurableOperationStatus(

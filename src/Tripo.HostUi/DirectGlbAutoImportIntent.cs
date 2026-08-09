@@ -20,9 +20,10 @@ internal enum DirectGlbAutoImportDecision
 
 internal sealed class DirectGlbAutoImportIntent
 {
-    private const string ExpectedTaskType = "text_to_model";
-    private const string ExpectedOperationKind = "text_task_creation";
     private readonly object _gate = new();
+    private readonly bool _imageGeneration;
+    private readonly string _expectedTaskType;
+    private readonly string _expectedOperationKind;
     private string? _taskId;
     private DirectGlbAutoImportPhase _phase =
         DirectGlbAutoImportPhase.Waiting;
@@ -31,7 +32,8 @@ internal sealed class DirectGlbAutoImportIntent
         long sessionGeneration,
         string generationOperationId,
         string documentSessionId,
-        string objectName)
+        string objectName,
+        bool imageGeneration = false)
     {
         if (sessionGeneration <= 0)
         {
@@ -57,6 +59,13 @@ internal sealed class DirectGlbAutoImportIntent
         }
 
         ObjectName = normalizedName;
+        _imageGeneration = imageGeneration;
+        _expectedTaskType = imageGeneration
+            ? "image_to_model"
+            : "text_to_model";
+        _expectedOperationKind = imageGeneration
+            ? "image_task_creation"
+            : "text_task_creation";
     }
 
     internal long SessionGeneration { get; }
@@ -66,6 +75,16 @@ internal sealed class DirectGlbAutoImportIntent
     internal string DocumentSessionId { get; }
 
     internal string ObjectName { get; }
+
+    internal bool ImageGeneration => _imageGeneration;
+
+    internal bool OwnsPreparedState(
+        long sessionGeneration,
+        TripoPanelState state)
+    {
+        ArgumentNullException.ThrowIfNull(state);
+        return MatchesStateIdentity(sessionGeneration, state);
+    }
 
     internal string? TaskId
     {
@@ -358,17 +377,18 @@ internal sealed class DirectGlbAutoImportIntent
         sessionGeneration == SessionGeneration &&
         state.Connected &&
         state.Context is not null &&
-        state.PreparedGeneration is not null &&
+        state.PreparedGenerationOperationId is not null &&
+        state.PreparedGenerationIsImage == _imageGeneration &&
         string.Equals(
             state.Context.DocumentSessionId,
             DocumentSessionId,
             StringComparison.Ordinal) &&
         string.Equals(
-            state.PreparedGeneration.DocumentSessionId,
+            state.PreparedGenerationDocumentSessionId,
             DocumentSessionId,
             StringComparison.Ordinal) &&
         string.Equals(
-            state.PreparedGeneration.OperationId,
+            state.PreparedGenerationOperationId,
             GenerationOperationId,
             StringComparison.Ordinal);
 
@@ -393,20 +413,30 @@ internal sealed class DirectGlbAutoImportIntent
         TripoPanelState state)
     {
         string? receiptTaskId = null;
-        Tripo.Bridge.HostControlTextTaskCreationReceipt? receipt =
-            state.GenerationReceipt;
-        if (receipt is not null)
+        if ((_imageGeneration && state.GenerationReceipt is not null) ||
+            (!_imageGeneration && state.ImageGenerationReceipt is not null))
+        {
+            return DurableTaskEvidence.InvalidEvidence;
+        }
+
+        string? receiptOperationId = _imageGeneration
+            ? state.ImageGenerationReceipt?.OperationId
+            : state.GenerationReceipt?.OperationId;
+        string? generationTaskId = _imageGeneration
+            ? state.ImageGenerationReceipt?.TaskId
+            : state.GenerationReceipt?.TaskId;
+        if (receiptOperationId is not null)
         {
             if (!string.Equals(
-                    receipt.OperationId,
+                    receiptOperationId,
                     GenerationOperationId,
                     StringComparison.Ordinal) ||
-                !Tripo.Bridge.TripoTaskId.IsValid(receipt.TaskId))
+                !Tripo.Bridge.TripoTaskId.IsValid(generationTaskId))
             {
                 return DurableTaskEvidence.InvalidEvidence;
             }
 
-            receiptTaskId = receipt.TaskId;
+            receiptTaskId = generationTaskId;
         }
 
         string? operationTaskId = null;
@@ -420,7 +450,7 @@ internal sealed class DirectGlbAutoImportIntent
                     StringComparison.Ordinal) ||
                 !string.Equals(
                     operationStatus.Kind,
-                    ExpectedOperationKind,
+                    _expectedOperationKind,
                     StringComparison.Ordinal) ||
                 operationStatus.SourceTaskId is not null)
             {
@@ -461,7 +491,7 @@ internal sealed class DirectGlbAutoImportIntent
         Tripo.Bridge.TripoTaskId.IsValid(status.TaskId) &&
         string.Equals(
             status.Type,
-            ExpectedTaskType,
+            _expectedTaskType,
             StringComparison.Ordinal);
 
     private static string RequireCanonicalUuid(string value, string paramName)

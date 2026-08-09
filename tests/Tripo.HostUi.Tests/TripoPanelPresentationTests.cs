@@ -62,6 +62,32 @@ public sealed class TripoPanelPresentationTests
     }
 
     [Fact]
+    public void ApiKeyPromptPolicyUsesImageGenerationUuid()
+    {
+        Tripo.HostUi.PreparedImageGeneration generation = new(
+            new Tripo.Bridge.StagedImageTransfer(
+                "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+                new string('a', 64),
+                128,
+                "image/png"),
+            10_000,
+            false,
+            DocumentSessionId,
+            "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb");
+        Tripo.HostUi.TripoApiKeyPromptPolicy policy =
+            Tripo.HostUi.TripoApiKeyPromptPolicy.Create(
+                ReadyState() with
+                {
+                    PreparedImageGeneration = generation,
+                    GenerationDispatchAttempted = true,
+                });
+
+        Assert.True(policy.RecoveryMode);
+        Assert.True(policy.ExactOriginalKeyRequired);
+        Assert.Equal(generation.OperationId, policy.WorkflowOperationId);
+    }
+
+    [Fact]
     public void ApiKeyPromptPolicyIgnoresUnsentDownstreamUuid()
     {
         Tripo.HostUi.PreparedTextGeneration generation = new(
@@ -1449,6 +1475,165 @@ public sealed class TripoPanelPresentationTests
         Assert.Contains(
             "No separate OBJ conversion request is sent",
             confirmation.Message);
+    }
+
+    [Fact]
+    public void ImageOneClickGatingNeverFallsBackToHiddenPrompt()
+    {
+        Tripo.HostUi.TripoPanelState state = ReadyState() with
+        {
+            Context = ReadyState().Context! with
+            {
+                Capabilities =
+                [
+                    Tripo.Bridge.BridgeConstants.ContextMethod,
+                    Tripo.Bridge.BridgeConstants.ImportGlbMethod,
+                ],
+            },
+        };
+
+        Tripo.HostUi.TripoPanelPresentation missingImage =
+            Tripo.HostUi.TripoPanelPresentation.Create(
+                state,
+                Tripo.HostUi.TripoPanelRecoveryLoadResult.Empty,
+                recoveryInspection: null,
+                prompt: "a hidden fallback prompt",
+                objectName: "Image Model",
+                importSource: "glb",
+                directGlbCreateStage:
+                    Tripo.HostUi.DirectGlbCreateUiStage.Inactive,
+                imageMode: true,
+                hasImage: false);
+        Tripo.HostUi.TripoPanelPresentation readyImage =
+            Tripo.HostUi.TripoPanelPresentation.Create(
+                state,
+                Tripo.HostUi.TripoPanelRecoveryLoadResult.Empty,
+                recoveryInspection: null,
+                prompt: string.Empty,
+                objectName: "Image Model",
+                importSource: "glb",
+                directGlbCreateStage:
+                    Tripo.HostUi.DirectGlbCreateUiStage.Inactive,
+                imageMode: true,
+                hasImage: true,
+                imageName: "input.webp");
+
+        Assert.False(missingImage.CreateInRhinoEnabled);
+        Assert.Contains("Choose an image", missingImage.CreateInRhinoHelp);
+        Assert.True(readyImage.CreateInRhinoEnabled);
+        Assert.True(readyImage.InputModeEnabled);
+    }
+
+    [Fact]
+    public void PreparedImageLocksInputModeAndSurfacesUnifiedIdentity()
+    {
+        Tripo.HostUi.PreparedImageGeneration prepared = new(
+            new Tripo.Bridge.StagedImageTransfer(
+                "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+                new string('a', 64),
+                128,
+                "image/webp"),
+            10_000,
+            true,
+            DocumentSessionId,
+            "11111111-1111-4111-8111-111111111111");
+        Tripo.HostUi.TripoPanelPresentation presentation =
+            Tripo.HostUi.TripoPanelPresentation.Create(
+                ReadyState() with { PreparedImageGeneration = prepared },
+                Tripo.HostUi.TripoPanelRecoveryLoadResult.Empty,
+                recoveryInspection: null,
+                prompt: "a hidden fallback prompt",
+                objectName: "Image Model",
+                importSource: "glb",
+                directGlbCreateStage:
+                    Tripo.HostUi.DirectGlbCreateUiStage.Inactive,
+                imageMode: true,
+                hasImage: true,
+                imageName: "input.webp");
+
+        Assert.False(presentation.InputModeEnabled);
+        Assert.False(presentation.PickImageEnabled);
+        Assert.False(presentation.ClearImageVisible);
+        Assert.Equal(prepared.OperationId, presentation.GenerationOperationId);
+        Assert.Equal(prepared.OperationId, presentation.LatestPreparedOperationId);
+    }
+
+    [Fact]
+    public void ImageDirectGlbConfirmationNamesImageRequest()
+    {
+        Tripo.HostUi.DirectGlbCreateConfirmation confirmation =
+            Tripo.HostUi.DirectGlbCreateConfirmation.Create(
+                "11111111-1111-4111-8111-111111111111",
+                "Test.3dm",
+                "Image Model",
+                imageGeneration: true);
+
+        Assert.True(confirmation.DefaultToNo);
+        Assert.Contains("image-to-model", confirmation.Message);
+        Assert.DoesNotContain("text-to-model", confirmation.Message);
+    }
+
+    [Fact]
+    public void ImageDirectGlbGuardRejectsTextOrChangedImageIdentity()
+    {
+        Tripo.HostUi.PreparedImageGeneration prepared = new(
+            new Tripo.Bridge.StagedImageTransfer(
+                "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+                new string('a', 64),
+                128,
+                "image/png"),
+            10_000,
+            true,
+            DocumentSessionId,
+            "11111111-1111-4111-8111-111111111111");
+        Tripo.HostUi.TripoPanelState ready = ReadyState() with
+        {
+            Context = ReadyState().Context! with
+            {
+                Capabilities =
+                [
+                    Tripo.Bridge.BridgeConstants.ContextMethod,
+                    Tripo.Bridge.BridgeConstants.ImportGlbMethod,
+                ],
+            },
+            PreparedImageGeneration = prepared,
+        };
+
+        Assert.Null(
+            Tripo.HostUi.DirectGlbFirstDispatchGuard.GetBlockingReason(
+                ready,
+                Tripo.HostUi.TripoPanelRecoveryLoadResult.Empty,
+                prepared,
+                directGlbSelected: true));
+        Assert.Contains(
+            "no longer matches",
+            Tripo.HostUi.DirectGlbFirstDispatchGuard.GetBlockingReason(
+                ready with
+                {
+                    PreparedImageGeneration = prepared with
+                    {
+                        Image = prepared.Image with { ByteLength = 129 },
+                    },
+                },
+                Tripo.HostUi.TripoPanelRecoveryLoadResult.Empty,
+                prepared,
+                directGlbSelected: true));
+        Assert.Contains(
+            "no longer matches",
+            Tripo.HostUi.DirectGlbFirstDispatchGuard.GetBlockingReason(
+                ready with
+                {
+                    PreparedImageGeneration = null,
+                    PreparedGeneration = new Tripo.HostUi.PreparedTextGeneration(
+                        "hidden prompt",
+                        prepared.FaceLimit,
+                        prepared.WithMaterials,
+                        prepared.DocumentSessionId,
+                        prepared.OperationId),
+                },
+                Tripo.HostUi.TripoPanelRecoveryLoadResult.Empty,
+                prepared,
+                directGlbSelected: true));
     }
 
     [Fact]

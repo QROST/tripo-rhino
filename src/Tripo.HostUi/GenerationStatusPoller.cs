@@ -61,12 +61,7 @@ internal sealed class GenerationStatusPoller : IDisposable
             return null;
         }
 
-        string? taskId = state.GenerationReceipt?.TaskId;
-        if (string.IsNullOrWhiteSpace(taskId) &&
-            state.GenerationOperationStatus?.TaskIdDurable == true)
-        {
-            taskId = state.GenerationOperationStatus.CreatedTaskId;
-        }
+        string? taskId = state.GenerationTaskId;
 
         if (string.IsNullOrWhiteSpace(taskId))
         {

@@ -67,6 +67,32 @@ public sealed class GenerationStatusPollerTests
     }
 
     [Fact]
+    public void PendingTaskSelectionUsesImageReceiptIdentity()
+    {
+        Tripo.HostUi.TripoPanelState state =
+            Tripo.HostUi.TripoPanelState.Initial with
+            {
+                Connected = true,
+                ImageGenerationReceipt =
+                    new Tripo.Bridge.HostControlImageTaskCreationReceipt(
+                        "operation-id",
+                        "task-image",
+                        "model",
+                        new string('a', 64)),
+                GenerationStatus = TaskStatus("task-image", "running") with
+                {
+                    Type = "image_to_model",
+                },
+            };
+
+        Assert.Equal(
+            "task-image",
+            Tripo.HostUi.GenerationStatusPoller.GetPendingTaskId(
+                state,
+                Tripo.HostUi.TripoPanelRecoveryLoadResult.Empty));
+    }
+
+    [Fact]
     public void PendingTaskSelectionRequiresConnectionAndDurableIdentity()
     {
         Tripo.HostUi.TripoPanelState disconnected =
