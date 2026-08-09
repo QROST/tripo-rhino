@@ -501,10 +501,12 @@ public sealed partial class TripoV3Client : ITripoApiClient
         using StreamContent fileContent = new(image);
         fileContent.Headers.ContentType =
             new MediaTypeHeaderValue(options.Image.MediaType);
-        string genericFileName =
-            options.Image.MediaType == "image/png"
-                ? "input.png"
-                : "input.jpg";
+        string genericFileName = options.Image.MediaType switch
+        {
+            "image/png" => "input.png",
+            "image/webp" => "input.webp",
+            _ => "input.jpg",
+        };
         multipart.Add(fileContent, "file", genericFileName);
         request.Content = multipart;
 

@@ -8,6 +8,7 @@ public static partial class ImageTransferStore
     private const string TransferExtension = ".image";
     private const string PngMediaType = "image/png";
     private const string JpegMediaType = "image/jpeg";
+    private const string WebpMediaType = "image/webp";
     private static readonly byte[] PngSignature =
     [
         0x89,
@@ -19,6 +20,12 @@ public static partial class ImageTransferStore
         0x1a,
         0x0a,
     ];
+
+    // WebP files start with "RIFF" + 4-byte little-endian size + "WEBP". The
+    // size field is variable, so only the RIFF and WEBP markers are matched.
+    private static readonly byte[] RiffMarker = [(byte)'R', (byte)'I', (byte)'F', (byte)'F'];
+    private static readonly byte[] WebpMarker = [(byte)'W', (byte)'E', (byte)'B', (byte)'P'];
+    private const int WebpHeaderLength = 12;
 
     public static async Task<StagedImageTransfer> StageAsync(
         string sourcePath,
@@ -60,11 +67,11 @@ public static partial class ImageTransferStore
         FileInfo sourceInfo = new(sourcePath);
         RejectLinkOrReparsePoint(sourceInfo, "The selected image");
         string extension = Path.GetExtension(sourceInfo.Name).ToLowerInvariant();
-        if (extension is not ".png" and not ".jpg" and not ".jpeg")
+        if (extension is not ".png" and not ".jpg" and not ".jpeg" and not ".webp")
         {
             throw new BridgeCallException(
                 "image_type_invalid",
-                "The selected image must use a .png, .jpg, or .jpeg extension.");
+                "The selected image must use a .png, .jpg, .jpeg, or .webp extension.");
         }
 
         await using FileStream source = new(
@@ -259,11 +266,13 @@ public static partial class ImageTransferStore
         }
 
         ValidateLength(transfer.ByteLength);
-        if (transfer.MediaType is not PngMediaType and not JpegMediaType)
+        if (transfer.MediaType is not PngMediaType
+            and not JpegMediaType
+            and not WebpMediaType)
         {
             throw new BridgeCallException(
                 "image_transfer_invalid",
-                "mediaType must be image/png or image/jpeg.");
+                "mediaType must be image/png, image/jpeg, or image/webp.");
         }
     }
 
@@ -307,7 +316,9 @@ public static partial class ImageTransferStore
         using IncrementalHash hash =
             IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
         byte[] buffer = new byte[64 * 1024];
-        byte[] prefix = new byte[PngSignature.Length];
+        // WebP needs the largest header (RIFF + size + WEBP = 12 bytes); the
+        // same buffer covers PNG (8) and JPEG (3) signature checks.
+        byte[] prefix = new byte[WebpHeaderLength];
         int prefixLength = 0;
         long total = 0;
         await using (FileStream destination = CreatePrivateFile(destinationPath))
@@ -388,9 +399,18 @@ public static partial class ImageTransferStore
             return JpegMediaType;
         }
 
+        // WebP: "RIFF" + 4-byte little-endian size + "WEBP".
+        if (prefix.Length >= WebpHeaderLength &&
+            prefix[..RiffMarker.Length].SequenceEqual(RiffMarker) &&
+            prefix[(WebpHeaderLength - WebpMarker.Length)..WebpHeaderLength]
+                .SequenceEqual(WebpMarker))
+        {
+            return WebpMediaType;
+        }
+
         throw new BridgeCallException(
             "image_type_invalid",
-            "The selected file is not a supported PNG or JPEG image.");
+            "The selected file is not a supported PNG, JPEG, or WebP image.");
     }
 
     private static void EnsureExtensionMatches(
@@ -400,7 +420,8 @@ public static partial class ImageTransferStore
         bool matches =
             mediaType == PngMediaType && extension == ".png" ||
             mediaType == JpegMediaType &&
-            extension is ".jpg" or ".jpeg";
+            extension is ".jpg" or ".jpeg" ||
+            mediaType == WebpMediaType && extension == ".webp";
         if (!matches)
         {
             throw new BridgeCallException(

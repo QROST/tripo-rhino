@@ -155,8 +155,9 @@ public sealed class TripoRhinoPanel : Panel, IPanel
     {
         Text = "Choose image\u2026",
         ToolTip =
-            "Select a PNG or JPEG on disk. The file is copied into private " +
-            "staging and then uploaded to Tripo; the original is not retained.",
+            "Select a PNG, JPEG, or WebP image on disk. The file is copied " +
+            "into private staging and then uploaded to Tripo; the original is " +
+            "not retained.",
     };
     private readonly ImageView _imagePreview = new()
     {
@@ -752,14 +753,15 @@ public sealed class TripoRhinoPanel : Panel, IPanel
         {
             CheckFileExists = true,
             MultiSelect = false,
-            Title = "Choose a PNG or JPEG for Tripo",
+            Title = "Choose a PNG, JPEG, or WebP image for Tripo",
             Filters =
             {
                 new Eto.Forms.FileFilter(
-                    "PNG or JPEG",
+                    "PNG, JPEG, or WebP",
                     "*.png",
                     "*.jpg",
-                    "*.jpeg"),
+                    "*.jpeg",
+                    "*.webp"),
             },
         };
         return dialog.ShowDialog(

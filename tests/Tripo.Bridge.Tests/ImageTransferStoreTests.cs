@@ -277,4 +277,71 @@ public sealed class ImageTransferStoreTests
 
         Assert.Equal("image_size_invalid", exception.Code);
     }
+
+    // WebP: "RIFF" + 4-byte little-endian size + "WEBP" + VP8 chunk payload.
+    private static readonly byte[] WebpBytes =
+    [
+        (byte)'R', (byte)'I', (byte)'F', (byte)'F',
+        0x0a, 0x00, 0x00, 0x00,
+        (byte)'W', (byte)'E', (byte)'B', (byte)'P',
+        (byte)'V', (byte)'P', (byte)'8', (byte)' ',
+    ];
+
+    [Fact]
+    public async Task StageAndOpenVerifiedAsyncRoundTripsOpaqueWebp()
+    {
+        using TemporaryDataRoot dataRoot = new();
+        string source = Path.Combine(dataRoot.Path, "source.webp");
+        await File.WriteAllBytesAsync(source, WebpBytes);
+
+        Tripo.Bridge.StagedImageTransfer transfer =
+            await Tripo.Bridge.ImageTransferStore.StageAsync(
+                source,
+                CancellationToken.None);
+
+        Assert.Equal("image/webp", transfer.MediaType);
+        Assert.Equal(WebpBytes.Length, transfer.ByteLength);
+        await using Stream verified =
+            await Tripo.Bridge.ImageTransferStore.OpenVerifiedAsync(
+                transfer,
+                CancellationToken.None);
+        using MemoryStream copy = new();
+        await verified.CopyToAsync(copy);
+        Assert.Equal(WebpBytes, copy.ToArray());
+    }
+
+    [Fact]
+    public async Task StageAsyncRejectsWebpExtensionSpoof()
+    {
+        using TemporaryDataRoot dataRoot = new();
+        // PNG bytes under a .webp name: extension/signature must not match.
+        string source = Path.Combine(dataRoot.Path, "source.webp");
+        await File.WriteAllBytesAsync(source, PngBytes);
+
+        Tripo.Bridge.BridgeCallException exception =
+            await Assert.ThrowsAsync<Tripo.Bridge.BridgeCallException>(
+                () => Tripo.Bridge.ImageTransferStore.StageAsync(
+                    source,
+                    CancellationToken.None));
+
+        Assert.Equal("image_type_invalid", exception.Code);
+    }
+
+    [Fact]
+    public async Task StageAsyncRejectsUnsupportedExtension()
+    {
+        using TemporaryDataRoot dataRoot = new();
+        // Valid GIF magic under a .gif name: GIF is not supported by Tripo v3.
+        byte[] gifBytes = { (byte)'G', (byte)'I', (byte)'F', (byte)'8' };
+        string source = Path.Combine(dataRoot.Path, "source.gif");
+        await File.WriteAllBytesAsync(source, gifBytes);
+
+        Tripo.Bridge.BridgeCallException exception =
+            await Assert.ThrowsAsync<Tripo.Bridge.BridgeCallException>(
+                () => Tripo.Bridge.ImageTransferStore.StageAsync(
+                    source,
+                    CancellationToken.None));
+
+        Assert.Equal("image_type_invalid", exception.Code);
+    }
 }
