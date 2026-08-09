@@ -26,6 +26,7 @@ public sealed class TripoRhinoPanel : Panel, IPanel
     private readonly TextArea _prompt = new()
     {
         Height = 84,
+        Width = 0,
         Text = "A buildable architectural pavilion",
         Wrap = true,
     };
@@ -36,6 +37,7 @@ public sealed class TripoRhinoPanel : Panel, IPanel
         MaxValue = 200_000,
         MinValue = 500,
         Value = 20_000,
+        Width = 0,
     };
     private readonly CheckBox _withMaterials = new()
     {
@@ -48,6 +50,7 @@ public sealed class TripoRhinoPanel : Panel, IPanel
     private readonly TextBox _name = new()
     {
         Text = "Tripo Model",
+        Width = 0,
     };
     private readonly DropDown _importSource = new()
     {
@@ -57,6 +60,7 @@ public sealed class TripoRhinoPanel : Panel, IPanel
             "OBJ compatibility",
         },
         SelectedIndex = 0,
+        Width = 0,
     };
     private readonly Label _createGuidance = StatusLabel();
     private readonly Label _importGuidance = StatusLabel();
@@ -64,6 +68,7 @@ public sealed class TripoRhinoPanel : Panel, IPanel
     {
         DataStore = new[] { "native", "mesh", "instance" },
         SelectedIndex = 0,
+        Width = 0,
     };
     private readonly CheckBox _applyMaterials = new()
     {
@@ -257,12 +262,20 @@ public sealed class TripoRhinoPanel : Panel, IPanel
         _session.StateChanged += OnStateChanged;
         _session.RecoveryChanged += OnRecoveryChanged;
 
+        StackLayout panelContent = BuildContent();
+        // Anchor the content to a narrow target width so child controls shrink
+        // and wrap instead of pushing the Scrollable's natural width outward
+        // (which is what triggers an unwanted horizontal scrollbar). Rhino owns
+        // the dock width; this only sets the preferred width the layout solves
+        // against, so a wider dock still fills and a narrower one scrolls
+        // vertically only.
+        panelContent.Width = 300;
         Content = new Scrollable
         {
             Border = BorderType.None,
             ExpandContentHeight = true,
             ExpandContentWidth = true,
-            Content = BuildContent(),
+            Content = panelContent,
         };
         _connect.Click += OnConnect;
         _apiKey.Click += OnApiKey;
@@ -385,7 +398,7 @@ public sealed class TripoRhinoPanel : Panel, IPanel
                 FieldBlock(
                     "Face limit",
                     _faceLimit,
-                    stretchControl: false),
+                    stretchControl: true),
                 _withMaterials,
                 FieldBlock("Object name", _name),
                 ActionColumn(_apiKey, _clearApiKey),
@@ -416,12 +429,12 @@ public sealed class TripoRhinoPanel : Panel, IPanel
                     FieldBlock(
                         "Import source",
                         _importSource,
-                        stretchControl: false),
+                        stretchControl: true),
                     _importGuidance,
                     FieldBlock(
                         "Import mode",
                         _importMode,
-                        stretchControl: false),
+                        stretchControl: true),
                     _applyMaterials,
                     ActionColumn(_import)),
                 _detailsExpander,
@@ -523,14 +536,18 @@ public sealed class TripoRhinoPanel : Panel, IPanel
         StackLayout layout = new()
         {
             Spacing = 4,
-            HorizontalContentAlignment = HorizontalAlignment.Left,
+            HorizontalContentAlignment = HorizontalAlignment.Stretch,
         };
         foreach (Button button in buttons)
         {
+            // Clear the implicit text-based width so the button can shrink and
+            // fill the row instead of stacking side-by-side and forcing a
+            // horizontal scrollbar in a narrow dock.
+            button.Width = 0;
             layout.Items.Add(
                 new StackLayoutItem(
                     button,
-                    HorizontalAlignment.Left));
+                    HorizontalAlignment.Stretch));
         }
 
         return layout;
