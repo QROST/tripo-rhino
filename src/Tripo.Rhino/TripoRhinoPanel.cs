@@ -7,6 +7,8 @@ namespace Tripo.Rhino;
 [Guid("717B15B4-C4F1-45E7-BE8E-C601440201C0")]
 public sealed class TripoRhinoPanel : Panel, IPanel
 {
+    private const int MaximumPreviewDimension = 16_384;
+    private const long MaximumPreviewPixels = 64L * 1024 * 1024;
     private const string ApiKeyInstructions =
         "Create a Tripo v3 API key at:\n" +
         "https://platform.tripo3d.ai/api-keys\n\n" +
@@ -185,7 +187,6 @@ public sealed class TripoRhinoPanel : Panel, IPanel
     private bool _imageMode;
     private Tripo.Bridge.StagedImageTransfer? _stagedImage;
     private string? _stagedImageName;
-    private string? _stagedImageSourcePath;
     private bool _recoveryWasBlocked;
     private bool _recoveryReviewInProgress;
     private bool _createInRhinoStarting;
@@ -621,6 +622,21 @@ public sealed class TripoRhinoPanel : Panel, IPanel
             return;
         }
 
+        Tripo.HostUi.TripoPanelState state = _session.State;
+        if (state.PreparedGenerationOperationId is not null)
+        {
+            _imageMode = state.PreparedGenerationIsImage;
+            _inputMode.SelectedIndex = _imageMode ? 1 : 0;
+            _promptBlock.Visible = !_imageMode;
+            _imageBlock.Visible = _imageMode;
+            return;
+        }
+
+        if (_imageMode && !image)
+        {
+            ClearStagedImage(_session.State);
+        }
+
         _imageMode = image;
         _promptBlock.Visible = !image;
         _imageBlock.Visible = image;
@@ -632,6 +648,11 @@ public sealed class TripoRhinoPanel : Panel, IPanel
         try
         {
             EnsurePanelDocumentIsActive();
+            if (_session.State.PreparedGenerationOperationId is not null)
+            {
+                return;
+            }
+
             string? path = PickImagePath();
             if (path is null)
             {
@@ -648,16 +669,12 @@ public sealed class TripoRhinoPanel : Panel, IPanel
 
     private void OnClearImage(object? sender, EventArgs args)
     {
-        if (_stagedImage is null)
+        if (_session.State.PreparedGenerationOperationId is not null)
         {
             return;
         }
 
-        _stagedImage = null;
-        _stagedImageName = null;
-        _stagedImageSourcePath = null;
-        _imagePreview.Image = null;
-        _imageName.Text = string.Empty;
+        ClearStagedImage(_session.State);
         RequestRender();
     }
 
@@ -682,67 +699,171 @@ public sealed class TripoRhinoPanel : Panel, IPanel
 
     private async Task StageClipboardImageAsync()
     {
+        string? path = null;
         try
         {
             EnsurePanelDocumentIsActive();
+            if (_session.State.PreparedGenerationOperationId is not null)
+            {
+                return;
+            }
+
             Eto.Drawing.Image? data = Clipboard.Instance.Image;
             if (data is null)
             {
                 return;
             }
 
-            string path = Path.Combine(
+            path = Path.Combine(
                 Path.GetTempPath(),
                 $"tripo-clipboard-{Guid.NewGuid():N}.png");
-            using (Eto.Drawing.Bitmap bitmap =
-                data is Eto.Drawing.Bitmap existing
-                    ? existing
-                    : new Eto.Drawing.Bitmap(data))
+            using (Eto.Drawing.Bitmap bitmap = new(data))
             {
-                await using FileStream stream = new(
-                    path,
-                    FileMode.CreateNew,
-                    FileAccess.Write,
-                    FileShare.None,
-                    64 * 1024,
-                    useAsync: true);
-                using Eto.Drawing.Bitmap png = bitmap;
-                png.Save(stream, Eto.Drawing.ImageFormat.Png);
+                await using FileStream stream =
+                    CreatePrivateClipboardFile(path);
+                bitmap.Save(stream, Eto.Drawing.ImageFormat.Png);
+                await stream.FlushAsync(_panelLifetime.Token);
             }
+            Tripo.Bridge.BridgePaths.SetPrivateFileMode(path);
 
-            await StageSelectedImageAsync(path, isClipboardTemp: true);
+            await StageSelectedImageAsync(
+                path,
+                displayName: "Clipboard image.png");
         }
         catch (Exception exception)
         {
             ShowError(exception);
         }
+        finally
+        {
+            if (path is not null)
+            {
+                Tripo.Bridge.BridgePaths.TryDelete(path);
+            }
+        }
     }
 
     private async Task StageSelectedImageAsync(
         string path,
-        bool isClipboardTemp = false)
+        string? displayName = null)
     {
         Tripo.Bridge.StagedImageTransfer transfer =
             await Tripo.Bridge.ImageTransferStore.StageAsync(
                     path,
                     _panelLifetime.Token)
                 .ConfigureAwait(true);
-        _stagedImage = transfer;
-        _stagedImageName = Path.GetFileName(path);
-        _stagedImageSourcePath = isClipboardTemp ? null : path;
+        Eto.Drawing.Bitmap? preview = null;
         try
         {
-            _imagePreview.Image = new Eto.Drawing.Bitmap(path);
+            await using Stream stagedSnapshot =
+                await Tripo.Bridge.ImageTransferStore.OpenVerifiedAsync(
+                        transfer,
+                        _panelLifetime.Token)
+                    .ConfigureAwait(true);
+            if (!Tripo.Bridge.ImagePixelDimensions.TryRead(
+                    stagedSnapshot,
+                    transfer.MediaType,
+                    out Tripo.Bridge.ImagePixelDimensions dimensions))
+            {
+                throw new InvalidOperationException(
+                    "The selected image dimensions could not be verified safely. " +
+                    "Use a valid PNG, JPEG, or WebP image.");
+            }
+
+            if (dimensions.Width > MaximumPreviewDimension ||
+                dimensions.Height > MaximumPreviewDimension ||
+                dimensions.PixelCount > MaximumPreviewPixels)
+            {
+                throw new InvalidOperationException(
+                    "The selected image is too large to preview safely. Use an " +
+                    "image no larger than 16,384 pixels on either side and 64 " +
+                    "megapixels total.");
+            }
+
+            stagedSnapshot.Position = 0;
+            try
+            {
+                preview = new Eto.Drawing.Bitmap(stagedSnapshot);
+            }
+            catch
+            {
+                // A non-fatal decoder failure must not block staging after the
+                // immutable snapshot and its dimensions have been verified.
+                preview?.Dispose();
+                preview = null;
+            }
         }
         catch
         {
-            // A non-fatal preview failure must not block staging. The label
-            // still identifies the file; the user can proceed or clear it.
-            _imagePreview.Image = null;
+            preview?.Dispose();
+            Tripo.Bridge.ImageTransferStore.TryDelete(transfer);
+            throw;
         }
+
+        if (_closing || _panelLifetime.IsCancellationRequested)
+        {
+            preview?.Dispose();
+            Tripo.Bridge.ImageTransferStore.TryDelete(transfer);
+            throw new OperationCanceledException(_panelLifetime.Token);
+        }
+
+        if (_session.State.PreparedGenerationOperationId is not null)
+        {
+            preview?.Dispose();
+            Tripo.Bridge.ImageTransferStore.TryDelete(transfer);
+            throw new InvalidOperationException(
+                "The generation input was prepared while this image was being " +
+                "staged. The new snapshot was discarded without changing the " +
+                "prepared operation.");
+        }
+
+        ClearStagedImage(_session.State);
+        _stagedImage = transfer;
+        _stagedImageName = displayName ?? Path.GetFileName(path);
+        _imagePreview.Image = preview;
 
         _imageName.Text = _stagedImageName;
         RequestRender();
+    }
+
+    private static FileStream CreatePrivateClipboardFile(string path)
+    {
+        FileStreamOptions options = new()
+        {
+            Mode = FileMode.CreateNew,
+            Access = FileAccess.Write,
+            Share = FileShare.None,
+            BufferSize = 64 * 1024,
+            Options = FileOptions.Asynchronous |
+                FileOptions.SequentialScan,
+        };
+        if (!OperatingSystem.IsWindows())
+        {
+            options.UnixCreateMode =
+                UnixFileMode.UserRead |
+                UnixFileMode.UserWrite;
+        }
+
+        return new FileStream(path, options);
+    }
+
+    private void ClearStagedImage(
+        Tripo.HostUi.TripoPanelState owningState)
+    {
+        Tripo.Bridge.StagedImageTransfer? staged = _stagedImage;
+        if (staged is not null &&
+            Tripo.HostUi.TripoPanelImageSnapshotPolicy
+                .CanDeleteUnadmittedSnapshot(staged, owningState))
+        {
+            Tripo.Bridge.ImageTransferStore.TryDelete(staged);
+        }
+
+        _stagedImage = null;
+        _stagedImageName = null;
+        _imageName.Text = string.Empty;
+        Eto.Drawing.Image? preview = _imagePreview.Image;
+        _imagePreview.Image = null;
+        preview?.Dispose();
     }
 
     private string? PickImagePath()
@@ -1348,6 +1469,7 @@ public sealed class TripoRhinoPanel : Panel, IPanel
     private async Task ReloadPanelSessionForRecoveryAsync()
     {
         Tripo.HostUi.TripoPanelSession previous = _session;
+        ClearStagedImage(previous.State);
         _directGlbAutoImportIntent = null;
         _directGlbCreateUiStage =
             Tripo.HostUi.DirectGlbCreateUiStage.Inactive;
@@ -1472,7 +1594,11 @@ public sealed class TripoRhinoPanel : Panel, IPanel
         RequestRender();
         Tripo.HostUi.TripoPanelSession ownerSession = _session;
         long ownerGeneration = _sessionGeneration;
-        Tripo.HostUi.PreparedTextGeneration? prepared = null;
+        Tripo.HostUi.PreparedTextGeneration? preparedText = null;
+        Tripo.HostUi.PreparedImageGeneration? preparedImage = null;
+        string? preparedOperationId = null;
+        string? preparedDocumentSessionId = null;
+        bool imageGeneration = false;
         Tripo.HostUi.DirectGlbAutoImportIntent? intent = null;
         try
         {
@@ -1503,23 +1629,47 @@ public sealed class TripoRhinoPanel : Panel, IPanel
                     "The Rhino object name must contain 1 to 128 characters.");
             }
 
-            prepared = ownerSession.PrepareGeneration(
+            imageGeneration = _imageMode;
+            if (imageGeneration)
+            {
+                Tripo.Bridge.StagedImageTransfer image =
+                    _stagedImage ??
+                    throw new InvalidOperationException(
+                        "Choose an image before starting image-to-model " +
+                        "generation.");
+                preparedImage = ownerSession.PrepareImageGeneration(
+                    image,
+                    checked((int)_faceLimit.Value),
+                    _withMaterials.Checked == true);
+                preparedOperationId = preparedImage.OperationId;
+                preparedDocumentSessionId = preparedImage.DocumentSessionId;
+            }
+            else
+            {
+                preparedText = ownerSession.PrepareGeneration(
                     _prompt.Text,
                     checked((int)_faceLimit.Value),
                     _withMaterials.Checked == true);
+                preparedOperationId = preparedText.OperationId;
+                preparedDocumentSessionId = preparedText.DocumentSessionId;
+            }
             PersistUserSettings();
             RequestRender();
             if (!ConfirmDirectGlbCreate(
-                    prepared.OperationId,
+                    preparedOperationId,
                     state.Context?.DocumentTitle ?? "the active document",
-                    normalizedObjectName))
+                    normalizedObjectName,
+                    imageGeneration))
             {
                 if (!_closing &&
                     ownerGeneration == _sessionGeneration &&
                     ReferenceEquals(ownerSession, _session) &&
                     !ownerSession.State.GenerationDispatchAttempted)
                 {
-                    ownerSession.ResetWorkflow();
+                    TryResetUnsentGeneration(
+                        ownerSession,
+                        preparedOperationId!,
+                        imageGeneration);
                     _directGlbCreateUiStage =
                         Tripo.HostUi.DirectGlbCreateUiStage.Inactive;
                     RequestRender();
@@ -1541,25 +1691,42 @@ public sealed class TripoRhinoPanel : Panel, IPanel
             EnsureDirectGlbFirstDispatchAvailable(
                 ownerSession.State,
                 ownerSession.Recovery,
-                prepared);
+                preparedText,
+                preparedImage);
             intent = new Tripo.HostUi.DirectGlbAutoImportIntent(
                 ownerGeneration,
-                prepared.OperationId,
-                prepared.DocumentSessionId,
-                normalizedObjectName);
+                preparedOperationId,
+                preparedDocumentSessionId,
+                normalizedObjectName,
+                imageGeneration);
             _directGlbAutoImportIntent = intent;
             _directGlbCreateUiStage =
                 Tripo.HostUi.DirectGlbCreateUiStage.WaitingForGeneration;
             RequestRender();
-            await ownerSession
-                .DispatchPreparedGenerationRequiringCapabilityAsync(
-                userConfirmedExternalCost: true,
-                requiredHostCapability:
-                    Tripo.Bridge.BridgeConstants.ImportGlbMethod,
-                requiredSidecarCapability:
-                    Tripo.Bridge.HostControlConstants
-                        .ImportGenerationGlbMethod,
-                cancellationToken: _panelLifetime.Token);
+            if (imageGeneration)
+            {
+                await ownerSession
+                    .DispatchPreparedImageGenerationRequiringCapabilityAsync(
+                    userConfirmedExternalCost: true,
+                    requiredHostCapability:
+                        Tripo.Bridge.BridgeConstants.ImportGlbMethod,
+                    requiredSidecarCapability:
+                        Tripo.Bridge.HostControlConstants
+                            .ImportGenerationGlbMethod,
+                    cancellationToken: _panelLifetime.Token);
+            }
+            else
+            {
+                await ownerSession
+                    .DispatchPreparedGenerationRequiringCapabilityAsync(
+                    userConfirmedExternalCost: true,
+                    requiredHostCapability:
+                        Tripo.Bridge.BridgeConstants.ImportGlbMethod,
+                    requiredSidecarCapability:
+                        Tripo.Bridge.HostControlConstants
+                            .ImportGenerationGlbMethod,
+                    cancellationToken: _panelLifetime.Token);
+            }
             if (!_closing &&
                 ownerGeneration == _sessionGeneration &&
                 ReferenceEquals(ownerSession, _session))
@@ -1590,12 +1757,12 @@ public sealed class TripoRhinoPanel : Panel, IPanel
                 Tripo.HostUi.TripoPanelState failedState =
                     ownerSession.State;
                 bool matchingUnsentGeneration =
-                    prepared is not null &&
-                    failedState.PreparedGeneration is { } failedPrepared &&
+                    preparedOperationId is not null &&
                     string.Equals(
-                        failedPrepared.OperationId,
-                        prepared.OperationId,
+                        failedState.PreparedGenerationOperationId,
+                        preparedOperationId,
                         StringComparison.Ordinal) &&
+                    failedState.PreparedGenerationIsImage == imageGeneration &&
                     !failedState.GenerationDispatchAttempted &&
                     !failedState.HasDurableGenerationTask;
                 if (matchingUnsentGeneration)
@@ -1612,14 +1779,15 @@ public sealed class TripoRhinoPanel : Panel, IPanel
                         Tripo.HostUi.DirectGlbCreateUiStage.Inactive;
                     TryResetUnsentGeneration(
                         ownerSession,
-                        prepared!.OperationId);
+                        preparedOperationId!,
+                        imageGeneration);
                     RequestRender();
                 }
                 else if (intent is not null &&
                          ReferenceEquals(
                              _directGlbAutoImportIntent,
                              intent) &&
-                         failedState.PreparedGeneration is null)
+                         failedState.PreparedGenerationOperationId is null)
                 {
                     _directGlbAutoImportIntent = null;
                     _directGlbCreateUiStage =
@@ -2121,15 +2289,12 @@ public sealed class TripoRhinoPanel : Panel, IPanel
         try
         {
             EnsureNoAutomaticDirectGlbCreateMutation("reset the workflow");
+            Tripo.HostUi.TripoPanelState previousState = _session.State;
             _session.ResetWorkflow();
             _directGlbAutoImportIntent = null;
             _directGlbCreateUiStage =
                 Tripo.HostUi.DirectGlbCreateUiStage.Inactive;
-            _stagedImage = null;
-            _stagedImageName = null;
-            _stagedImageSourcePath = null;
-            _imagePreview.Image = null;
-            _imageName.Text = string.Empty;
+            ClearStagedImage(previousState);
             _imageMode = false;
             _inputMode.SelectedIndex = 0;
             _promptBlock.Visible = true;
@@ -2241,13 +2406,15 @@ public sealed class TripoRhinoPanel : Panel, IPanel
     private bool ConfirmDirectGlbCreate(
         string operationId,
         string documentTitle,
-        string objectName)
+        string objectName,
+        bool imageGeneration)
     {
         Tripo.HostUi.DirectGlbCreateConfirmation confirmation =
             Tripo.HostUi.DirectGlbCreateConfirmation.Create(
                 operationId,
                 documentTitle,
-                objectName);
+                objectName,
+                imageGeneration);
         if (!confirmation.DefaultToNo)
         {
             throw new InvalidOperationException(
@@ -2266,13 +2433,20 @@ public sealed class TripoRhinoPanel : Panel, IPanel
     private void EnsureDirectGlbFirstDispatchAvailable(
         Tripo.HostUi.TripoPanelState state,
         Tripo.HostUi.TripoPanelRecoveryLoadResult recovery,
-        Tripo.HostUi.PreparedTextGeneration prepared)
+        Tripo.HostUi.PreparedTextGeneration? preparedText,
+        Tripo.HostUi.PreparedImageGeneration? preparedImage)
     {
-        string? blockingReason =
-            Tripo.HostUi.DirectGlbFirstDispatchGuard.GetBlockingReason(
+        string? blockingReason = preparedImage is not null
+            ? Tripo.HostUi.DirectGlbFirstDispatchGuard.GetBlockingReason(
                 state,
                 recovery,
-                prepared,
+                preparedImage,
+                IsDirectGlbSelected())
+            : Tripo.HostUi.DirectGlbFirstDispatchGuard.GetBlockingReason(
+                state,
+                recovery,
+                preparedText ?? throw new InvalidOperationException(
+                    "The confirmed generation identity is missing."),
                 IsDirectGlbSelected());
         if (blockingReason is not null)
         {
@@ -2280,23 +2454,26 @@ public sealed class TripoRhinoPanel : Panel, IPanel
         }
     }
 
-    private static void TryResetUnsentGeneration(
+    private void TryResetUnsentGeneration(
         Tripo.HostUi.TripoPanelSession ownerSession,
-        string operationId)
+        string operationId,
+        bool imageGeneration)
     {
         try
         {
             Tripo.HostUi.TripoPanelState state = ownerSession.State;
-            if (state.PreparedGeneration is { } prepared &&
-                string.Equals(
-                    prepared.OperationId,
+            if (string.Equals(
+                    state.PreparedGenerationOperationId,
                     operationId,
                     StringComparison.Ordinal) &&
+                state.PreparedGenerationIsImage == imageGeneration &&
                 !state.GenerationDispatchAttempted &&
                 !state.HasDurableGenerationTask &&
                 !state.HasUnresolvedDispatch)
             {
+                Tripo.HostUi.TripoPanelState previousState = state;
                 ownerSession.ResetWorkflow();
+                ClearStagedImage(previousState);
             }
         }
         catch
@@ -2516,6 +2693,7 @@ public sealed class TripoRhinoPanel : Panel, IPanel
         _reset.Enabled = presentation.ResetEnabled;
         _reset.Visible = presentation.ResetVisible;
         _prompt.Enabled = presentation.PromptEnabled;
+        _inputMode.Enabled = presentation.InputModeEnabled;
         _faceLimit.Enabled = presentation.FaceLimitEnabled;
         _withMaterials.Enabled = presentation.WithMaterialsEnabled;
         _name.Enabled = presentation.NameEnabled;
@@ -2528,6 +2706,7 @@ public sealed class TripoRhinoPanel : Panel, IPanel
         _imageBlock.Visible = presentation.ImageMode;
         _pickImage.Enabled = presentation.PickImageEnabled;
         _clearImage.Visible = presentation.ClearImageVisible;
+        _clearImage.Enabled = presentation.ClearImageEnabled;
         if (presentation.ImageName is not null)
         {
             _imageName.Text = presentation.ImageName;
@@ -2814,22 +2993,7 @@ public sealed class TripoRhinoPanel : Panel, IPanel
     private static bool IntentOwnsState(
         Tripo.HostUi.DirectGlbAutoImportIntent intent,
         PanelRenderFrame frame) =>
-        frame.SessionGeneration == intent.SessionGeneration &&
-        frame.State.Connected &&
-        frame.State.Context is { } context &&
-        frame.State.PreparedGeneration is { } prepared &&
-        string.Equals(
-            context.DocumentSessionId,
-            intent.DocumentSessionId,
-            StringComparison.Ordinal) &&
-        string.Equals(
-            prepared.DocumentSessionId,
-            intent.DocumentSessionId,
-            StringComparison.Ordinal) &&
-        string.Equals(
-            prepared.OperationId,
-            intent.GenerationOperationId,
-            StringComparison.Ordinal);
+        intent.OwnsPreparedState(frame.SessionGeneration, frame.State);
 
     private static bool DirectGlbWaitIntentIsIrrecoverable(
         Tripo.HostUi.DirectGlbAutoImportIntent intent,
@@ -2957,6 +3121,7 @@ public sealed class TripoRhinoPanel : Panel, IPanel
         }
 
         _closing = true;
+        ClearStagedImage(_session.State);
         _directGlbAutoImportIntent = null;
         _directGlbCreateUiStage =
             Tripo.HostUi.DirectGlbCreateUiStage.Inactive;

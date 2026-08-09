@@ -4,6 +4,64 @@ namespace Tripo.Bridge.Tests;
 
 public sealed class ImageTransferStoreTests
 {
+    [Fact]
+    public void PixelDimensionsReadPngJpegAndAllWebpLayoutsWithoutDecoding()
+    {
+        AssertDimensions(PngHeader(4096, 3072), "image/png", 4096, 3072);
+        AssertDimensions(JpegHeader(1200, 800), "image/jpeg", 1200, 800);
+        AssertDimensions(WebpExtendedHeader(640, 480), "image/webp", 640, 480);
+        AssertDimensions(WebpLosslessHeader(321, 123), "image/webp", 321, 123);
+        AssertDimensions(WebpLossyHeader(1920, 1080), "image/webp", 1920, 1080);
+    }
+
+    [Fact]
+    public void PixelDimensionsFailClosedWithoutChangingStreamPosition()
+    {
+        using MemoryStream malformed = new([0x89, (byte)'P']);
+        malformed.Position = 1;
+
+        Assert.False(
+            Tripo.Bridge.ImagePixelDimensions.TryRead(
+                malformed,
+                "image/png",
+                out _));
+        Assert.Equal(1, malformed.Position);
+        Assert.False(
+            Tripo.Bridge.ImagePixelDimensions.TryRead(
+                new MemoryStream(PngHeader(10, 10)),
+                "image/gif",
+                out _));
+    }
+
+    [Fact]
+    public void PixelDimensionsExposeOverflowSafePixelCountForPreviewGate()
+    {
+        using MemoryStream stream = new(PngHeader(16_384, 16_384));
+
+        Assert.True(
+            Tripo.Bridge.ImagePixelDimensions.TryRead(
+                stream,
+                "image/png",
+                out Tripo.Bridge.ImagePixelDimensions dimensions));
+        Assert.Equal(268_435_456L, dimensions.PixelCount);
+    }
+
+    [Fact]
+    public void PixelDimensionsRejectWrappedWebpChunkLength()
+    {
+        byte[] bytes = WebpContainer("JUNK", 8);
+        System.Buffers.Binary.BinaryPrimitives.WriteUInt32LittleEndian(
+            bytes.AsSpan(16, 4),
+            uint.MaxValue);
+        using MemoryStream stream = new(bytes);
+
+        Assert.False(
+            Tripo.Bridge.ImagePixelDimensions.TryRead(
+                stream,
+                "image/webp",
+                out _));
+    }
+
     private static readonly byte[] PngBytes =
     [
         0x89,
@@ -343,5 +401,110 @@ public sealed class ImageTransferStoreTests
                     CancellationToken.None));
 
         Assert.Equal("image_type_invalid", exception.Code);
+    }
+
+    private static void AssertDimensions(
+        byte[] bytes,
+        string mediaType,
+        int width,
+        int height)
+    {
+        using MemoryStream stream = new(bytes);
+        Assert.True(
+            Tripo.Bridge.ImagePixelDimensions.TryRead(
+                stream,
+                mediaType,
+                out Tripo.Bridge.ImagePixelDimensions dimensions));
+        Assert.Equal(width, dimensions.Width);
+        Assert.Equal(height, dimensions.Height);
+    }
+
+    private static byte[] PngHeader(int width, int height)
+    {
+        byte[] bytes = new byte[24];
+        PngBytes.AsSpan(0, 8).CopyTo(bytes);
+        bytes[11] = 13;
+        "IHDR"u8.CopyTo(bytes.AsSpan(12));
+        System.Buffers.Binary.BinaryPrimitives.WriteInt32BigEndian(
+            bytes.AsSpan(16, 4),
+            width);
+        System.Buffers.Binary.BinaryPrimitives.WriteInt32BigEndian(
+            bytes.AsSpan(20, 4),
+            height);
+        return bytes;
+    }
+
+    private static byte[] JpegHeader(int width, int height) =>
+    [
+        0xff, 0xd8,
+        0xff, 0xc0,
+        0x00, 0x11,
+        0x08,
+        (byte)(height >> 8), (byte)height,
+        (byte)(width >> 8), (byte)width,
+        0x03, 0x01, 0x11, 0x00, 0x02, 0x11, 0x00, 0x03, 0x11, 0x00,
+    ];
+
+    private static byte[] WebpExtendedHeader(int width, int height)
+    {
+        byte[] bytes = WebpContainer("VP8X", 10);
+        WriteUInt24LittleEndian(bytes.AsSpan(24, 3), width - 1);
+        WriteUInt24LittleEndian(bytes.AsSpan(27, 3), height - 1);
+        return bytes;
+    }
+
+    private static byte[] WebpLosslessHeader(int width, int height)
+    {
+        byte[] bytes = WebpContainer("VP8L", 5);
+        int widthMinusOne = width - 1;
+        int heightMinusOne = height - 1;
+        bytes[20] = 0x2f;
+        bytes[21] = (byte)widthMinusOne;
+        bytes[22] = (byte)(
+            (widthMinusOne >> 8) |
+            ((heightMinusOne & 0x03) << 6));
+        bytes[23] = (byte)(heightMinusOne >> 2);
+        bytes[24] = (byte)(heightMinusOne >> 10);
+        return bytes;
+    }
+
+    private static byte[] WebpLossyHeader(int width, int height)
+    {
+        byte[] bytes = WebpContainer("VP8 ", 10);
+        bytes[23] = 0x9d;
+        bytes[24] = 0x01;
+        bytes[25] = 0x2a;
+        System.Buffers.Binary.BinaryPrimitives.WriteUInt16LittleEndian(
+            bytes.AsSpan(26, 2),
+            checked((ushort)width));
+        System.Buffers.Binary.BinaryPrimitives.WriteUInt16LittleEndian(
+            bytes.AsSpan(28, 2),
+            checked((ushort)height));
+        return bytes;
+    }
+
+    private static byte[] WebpContainer(string chunkKind, int chunkLength)
+    {
+        int paddedLength = chunkLength + (chunkLength & 1);
+        byte[] bytes = new byte[20 + paddedLength];
+        "RIFF"u8.CopyTo(bytes);
+        System.Buffers.Binary.BinaryPrimitives.WriteUInt32LittleEndian(
+            bytes.AsSpan(4, 4),
+            checked((uint)(bytes.Length - 8)));
+        "WEBP"u8.CopyTo(bytes.AsSpan(8));
+        System.Text.Encoding.ASCII.GetBytes(chunkKind).CopyTo(bytes, 12);
+        System.Buffers.Binary.BinaryPrimitives.WriteUInt32LittleEndian(
+            bytes.AsSpan(16, 4),
+            checked((uint)chunkLength));
+        return bytes;
+    }
+
+    private static void WriteUInt24LittleEndian(
+        Span<byte> destination,
+        int value)
+    {
+        destination[0] = (byte)value;
+        destination[1] = (byte)(value >> 8);
+        destination[2] = (byte)(value >> 16);
     }
 }
