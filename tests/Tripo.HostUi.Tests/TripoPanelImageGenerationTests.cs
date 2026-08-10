@@ -242,6 +242,140 @@ public sealed class TripoPanelImageGenerationTests
     }
 
     [Fact]
+    public async Task SuccessfulImageGenerationImportsDirectGlbWithOriginalDocumentIdentity()
+    {
+        string root = Path.Combine(
+            Path.GetTempPath(),
+            "tripo-image-recovery-tests",
+            Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(root);
+        try
+        {
+            TripoPanelSessionTests.FakeHostControlClient client = new();
+            await using Tripo.HostUi.TripoPanelSession session =
+                new(
+                    new TestConnector(client),
+                    new Tripo.HostUi.TripoPanelRecoveryStore("rhino", root));
+            await session.ConnectAsync();
+            Tripo.HostUi.PreparedImageGeneration generation =
+                session.PrepareImageGeneration(
+                    ValidImage(),
+                    10_000,
+                    withMaterials: true);
+            Assert.Null(session.State.PreparedGeneration);
+            Assert.Equal(
+                generation,
+                session.State.PreparedImageGeneration);
+            Tripo.HostUi.DirectGlbAutoImportIntent intent = new(
+                sessionGeneration: 1,
+                generation.OperationId,
+                generation.DocumentSessionId,
+                "Image Chair",
+                imageGeneration: true);
+            await session.DispatchPreparedImageGenerationRequiringCapabilityAsync(
+                userConfirmedExternalCost: true,
+                requiredHostCapability:
+                    Tripo.Bridge.BridgeConstants.ImportGlbMethod,
+                requiredSidecarCapability:
+                    Tripo.Bridge.HostControlConstants
+                        .ImportGenerationGlbMethod);
+            await session.RefreshGenerationStatusAsync();
+            Assert.Equal(
+                Tripo.HostUi.DirectGlbAutoImportDecision.BeginImport,
+                intent.ObserveState(
+                    sessionGeneration: 1,
+                    session.State));
+
+            Tripo.HostUi.PreparedObjImport prepared =
+                session.PrepareGlbImport(intent.ObjectName);
+            await session.ImportPreparedAsync();
+            Assert.True(intent.TryFinishImport(1, session.State));
+
+            Assert.True(prepared.IsDirectGlb);
+            Assert.Equal("task_image456", prepared.ConversionTaskId);
+            Assert.Equal(
+                generation.DocumentSessionId,
+                prepared.DocumentSessionId);
+            Assert.Equal(
+                generation.DocumentSessionId,
+                client.LastGlbImportRequest?.DocumentSessionId);
+            Assert.Equal(
+                prepared.OperationId,
+                client.LastGlbImportRequest?.OperationId);
+            Assert.Equal(
+                "task_image456",
+                client.LastGlbImportRequest?.GenerationTaskId);
+            Assert.Equal(
+                generation.DocumentSessionId,
+                session.State.ImportReceipt?.HostReceipt.DocumentSessionId);
+            Assert.Equal(1, client.CreateImageCalls);
+            Assert.Equal(0, client.CreateConversionCalls);
+            Assert.Equal(1, client.GlbImportCalls);
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task SuccessfulImageGenerationConvertsAndImportsObjWithOriginalDocumentIdentity()
+    {
+        TripoPanelSessionTests.FakeHostControlClient client = new();
+        await using Tripo.HostUi.TripoPanelSession session =
+            CreateSession(client);
+        await session.ConnectAsync();
+        Tripo.HostUi.PreparedImageGeneration generation =
+            session.PrepareImageGeneration(
+                ValidImage(),
+                12_000,
+                withMaterials: true);
+        await session.DispatchPreparedImageGenerationAsync(
+            userConfirmedExternalCost: true);
+        await session.RefreshGenerationStatusAsync();
+
+        Tripo.HostUi.PreparedObjConversion conversion =
+            session.PrepareConversion(12_000, withMaterials: true);
+        Assert.Equal("task_image456", conversion.SourceTaskId);
+        Assert.Equal(
+            generation.DocumentSessionId,
+            conversion.DocumentSessionId);
+
+        await session.DispatchPreparedConversionAsync(
+            userConfirmedExternalCost: true);
+        Assert.Equal(
+            generation.DocumentSessionId,
+            client.LastConversionRequest?.DocumentSessionId);
+        Assert.Equal(
+            conversion.OperationId,
+            client.LastConversionRequest?.OperationId);
+        Assert.Equal(
+            "task_image456",
+            client.LastConversionRequest?.SourceTaskId);
+
+        await session.RefreshConversionStatusAsync();
+        Tripo.HostUi.PreparedObjImport preparedImport =
+            session.PrepareImport(
+                "Image Chair",
+                "native",
+                applyMaterials: true);
+        await session.ImportPreparedAsync();
+
+        Assert.Equal(
+            generation.DocumentSessionId,
+            preparedImport.DocumentSessionId);
+        Assert.Equal(
+            generation.DocumentSessionId,
+            client.LastObjImportRequest?.DocumentSessionId);
+        Assert.Equal(
+            preparedImport.OperationId,
+            client.LastObjImportRequest?.OperationId);
+        Assert.Equal(1, client.CreateImageCalls);
+        Assert.Equal(1, client.CreateConversionCalls);
+        Assert.Equal(1, client.ImportCalls);
+    }
+
+    [Fact]
     public async Task NullImageIsRejectedBeforeAnyStateMutation()
     {
         TripoPanelSessionTests.FakeHostControlClient client = new();

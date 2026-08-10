@@ -1244,6 +1244,11 @@ public sealed class TripoPanelSession : IAsyncDisposable
             ValidateFaceLimit(faceLimit);
             TripoPanelState state = State;
             EnsureSuccessfulTask(state.GenerationStatus, "generation");
+            string documentSessionId =
+                state.PreparedGenerationDocumentSessionId ??
+                throw new InvalidOperationException(
+                    "The prepared generation document identity is unavailable. " +
+                    "Start a new workflow before preparing an OBJ conversion.");
             if (state.PreparedConversion is not null ||
                 state.ConversionDispatchAttempted ||
                 state.ConversionReceipt is not null ||
@@ -1259,7 +1264,7 @@ public sealed class TripoPanelSession : IAsyncDisposable
                 state.GenerationStatus!.TaskId,
                 faceLimit,
                 withMaterials,
-                state.PreparedGeneration!.DocumentSessionId,
+                documentSessionId,
                 Guid.NewGuid().ToString("D"));
             UpdateState(current => current with
             {
@@ -1460,6 +1465,11 @@ public sealed class TripoPanelSession : IAsyncDisposable
             ValidateName(name);
             TripoPanelState state = State;
             EnsureSuccessfulTask(state.GenerationStatus, "generation");
+            string documentSessionId =
+                state.PreparedGenerationDocumentSessionId ??
+                throw new InvalidOperationException(
+                    "The prepared generation document identity is unavailable. " +
+                    "Start a new workflow before preparing direct GLB import.");
             Tripo.Bridge.HostContextReceipt context =
                 state.Context ??
                 throw new InvalidOperationException(
@@ -1489,7 +1499,7 @@ public sealed class TripoPanelSession : IAsyncDisposable
             PreparedObjImport prepared = new(
                 state.GenerationStatus!.TaskId,
                 name,
-                state.PreparedGeneration!.DocumentSessionId,
+                documentSessionId,
                 Guid.NewGuid().ToString("D"),
                 "glb_instance",
                 ApplyMaterials: true,

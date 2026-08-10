@@ -3685,6 +3685,13 @@ public sealed class TripoPanelSessionTests
             private set;
         }
 
+        public Tripo.Bridge.HostControlImportObjTaskRequest?
+            LastObjImportRequest
+        {
+            get;
+            private set;
+        }
+
         public Task<Tripo.Bridge.HostControlHealthReceipt> GetHealthAsync(
             CancellationToken cancellationToken)
         {
@@ -3926,6 +3933,7 @@ public sealed class TripoPanelSessionTests
                 CancellationToken cancellationToken)
         {
             ImportCalls++;
+            LastObjImportRequest = request;
             return Task.FromResult(
                 new Tripo.Bridge.HostControlObjTaskImportReceipt(
                     request.OperationId,
