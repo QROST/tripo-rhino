@@ -106,9 +106,9 @@ The lock and journal protect cooperating processes under one login. They do not 
 
 ## Local image transfers
 
-- The first slice accepts one byte-proven PNG or JPEG from 1 through
-  20,000,000 bytes. Extensions are not trusted; WebP and public URLs are not
-  accepted.
+- The image-transfer layer accepts one byte-proven PNG, JPEG, or WebP from 1
+  through 20,000,000 bytes. Extensions are checked against detected content;
+  public URLs are not accepted.
 - The choosing process creates a private snapshot under
   `<TRIPO_LOCAL_DATA_DIR>/image-transfers/`. The protocol carries only a
   canonical transfer UUID, lowercase SHA-256, byte length, and detected media
@@ -119,7 +119,7 @@ The lock and journal protect cooperating processes under one login. They do not 
 - Before multipart upload, the sidecar bounds, reads, hashes, and signature
   checks the file into an immutable in-memory snapshot. The upload never
   continues from the mutable owner-writable path after validation and uses only
-  a generic `input.png` or `input.jpg` filename.
+  a generic `input.png`, `input.jpg`, or `input.webp` filename.
 - A newly staged image that has not been handed to the sidecar is deleted on a
   pre-dispatch failure where safe. Once admitted, it may remain until a durable
   file-token or upload-ambiguity checkpoint exists. Preserve

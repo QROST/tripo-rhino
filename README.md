@@ -3,12 +3,13 @@
 English | [简体中文](./README.zh-CN.md)
 
 Tripo-Rhino is an independent community adapter for Rhino 8. AEC users can run
-the text-to-model workflow from a per-document Eto panel, or use the optional
-Grasshopper GHA for explicit text/local-image generation and a Grasshopper mesh
-value; agentic clients can use the same sidecar through MCP. The recommended
-Rhino path imports a successful generation GLB directly as a native PBR block,
-without a second conversion task. Validated OBJ remains an explicit
-mesh/block compatibility path and the stage-only Grasshopper format.
+text-to-model or local-image-to-model workflows from a per-document Eto panel,
+or use the optional Grasshopper GHA for explicit text/local-image generation
+and a Grasshopper mesh value; agentic clients can use the same sidecar through
+MCP. The recommended Rhino path imports a successful generation GLB directly
+as a native PBR block, without a second conversion task. Validated OBJ remains
+an explicit mesh/block compatibility path and the stage-only Grasshopper
+format.
 
 It is not an official Tripo or McNeel product.
 
@@ -28,13 +29,17 @@ authenticated local control channel and clears the field; it does not write
 the key to Rhino settings or the `.3dm` document.
 
 > **Current status:** the `.rhp` and optional `.gha` target Rhino 8 and compile
-> against pinned RhinoCommon/Grasshopper packages. The Eto text workflow,
-> Grasshopper text/local-PNG-or-JPEG workflow, credential dialog, sidecar
-> launcher, direct GLB/PBR import path, and bundled sidecar layout exist in
+> against pinned RhinoCommon/Grasshopper packages. The Eto text/local-image
+> workflow, Grasshopper text/local-PNG-or-JPEG workflow, credential dialog,
+> sidecar launcher, direct GLB/PBR import path, and bundled sidecar layout exist in
 > source, with portable control/workflow/MCP/process tests. A macOS development
 > host has exercised the manual package layout, real Eto panel, Keychain-backed
 > credential save/use, text generation, and two-second generation progress
-> refresh. The same host has also imported a real provider GLB in three
+> refresh. On 2026-08-11, that host also selected one real local image in the
+> Eto panel, completed provider image-to-model generation, and imported its
+> direct GLB successfully. The streamlined no-second-confirmation,
+> resize, and quiet-startup behavior in this revision still needs a fresh Rhino
+> acceptance pass. The same host has also imported a real provider GLB in three
 > independent fresh Rhino processes during proof-stability stress, followed by
 > an exact installed proof-v5/schema-3 canary; every run verified same-UUID
 > read-only `already_exists` replay.
@@ -287,10 +292,10 @@ If you customize the directory:
 Setting this variable only in the MCP client makes the server and Rhino use
 different discovery/staging roots and prevents a correct bridge connection.
 
-`image-transfers` may contain a private copy of a Grasshopper- or MCP-selected
-PNG/JPEG until a durable file-token or upload-ambiguity checkpoint exists. It
-is not an import allowlist and must be preserved with the journal during
-recovery.
+`image-transfers` may contain a private copy of a panel-, Grasshopper-, or
+MCP-selected image until a durable file-token or upload-ambiguity checkpoint
+exists. It is not an import allowlist and must be preserved with the journal
+during recovery.
 
 ## Use the Rhino panel
 
@@ -406,7 +411,8 @@ combined set. After manually repairing an invalid file, use **Refresh recovery
 status** directly.
 Invalid, oversized, unknown-schema, non-private Unix, or symlinked hints remain
 blocked for manual inspection. The paid-operation journal—not the hint—is
-authoritative. The Eto panel supports both text and local PNG/JPEG image input;
+authoritative. The Eto panel supports text plus local PNG/JPEG/WebP selection,
+bounded preview, and image-to-model one-click direct GLB import;
 the optional Grasshopper components and MCP tools expose the same two input
 families through their own guarded workflows.
 
@@ -465,7 +471,7 @@ The MCP front door exposes the same shared workflow as these nine tools:
 | `tripo_task_status` | `taskId` | Queries one existing Tripo task. |
 | `tripo_operation_status` | `operationId` | Reads a durable local paid-operation record. No Tripo or Rhino call. |
 | `tripo_create_text_task` | `prompt`, `faceLimit`, `withMaterials`, `documentSessionId`, `operationId`, `confirmExternalCost` | Creates one text-to-model task. `withMaterials=true` requests textured PBR generation (`texture`/`pbr`); `false` stays geometry-only. May consume credits. |
-| `tripo_stage_local_image` | `localImagePath` | Validates and privately snapshots one local PNG/JPEG and returns an opaque descriptor. No Tripo call. |
+| `tripo_stage_local_image` | `localImagePath` | Validates and privately snapshots one local PNG/JPEG/WebP and returns an opaque descriptor. No Tripo call. |
 | `tripo_create_image_task` | `transferId`, `sha256`, `byteLength`, `mediaType`, `faceLimit`, `withMaterials`, `documentSessionId`, `operationId`, `confirmExternalCost` | Uploads one staged image and creates an image-to-model task with durable upload/generation checkpoints. Copy the four descriptor fields exactly from `tripo_stage_local_image`. May consume credits. |
 | `tripo_import_generation_glb` | `generationTaskId`, `name`, `documentSessionId`, `operationId`, `applyMaterials` (must be `true`) | Recommended Rhino path: downloads and natively imports a successful generation GLB as one PBR block. It creates no conversion task and has no additional Tripo charge. |
 | `tripo_create_obj_conversion` | `sourceTaskId`, `faceLimit`, `withMaterials`, `documentSessionId`, `operationId`, `confirmExternalCost` | Creates one OBJ conversion. `withMaterials=true` requests an OBJ bundle with a baked-diffuse MTL and image textures (`bake=true`); `false` converts geometry only. May consume credits. |
@@ -713,9 +719,11 @@ switching to `instance`.
 
 - One Rhino mesh (`mesh` mode) or one block instance (`instance` mode) per
   import; no placement controls, and mesh mode carries at most one material.
-- The Eto panel currently supports text-to-3D only. Local PNG/JPEG image
-  selection/upload/create is available through the optional GHA and MCP;
-  panel image mode, WebP, and public URL input remain open.
+- The Eto panel supports local PNG/JPEG/WebP disk selection, bounded preview,
+  and image-to-model one-click direct GLB import. One real local-image run has
+  passed on macOS; this revision's streamlined dialogs/resize behavior still
+  needs a fresh host pass. Public-URL and multiview input remain open. No
+  Windows-host or clipboard acceptance is claimed.
 - Default text-generation model `v3.1-20260211`; `TRIPO_MODEL` can select
   another syntactically valid identifier, and changing it changes text-task
   paid-operation identity.

@@ -14,12 +14,15 @@ contract are locked by
 [`ADR-0002`](./adr/0002-recoverable-grasshopper-components.md).
 
 Implementation status: the shared workflow seam, authenticated host-control
-sidecar mode, sidecar-owned credentials, and Rhino Eto panel implement the
-**text-to-3D** portion of Phases 0–2. Source also implements local PNG/JPEG
-staging, multi-stage image-to-3D creation for MCP/Grasshopper, and the optional
-Rhino GHA's stage-only mesh value path. The Eto panel remains text-only.
-Portable tests and package compilation are separate evidence classes; real
-Rhino/Grasshopper loading and interactive acceptance remain separate gates.
+sidecar mode, sidecar-owned credentials, and Rhino Eto panel implement
+text-to-3D plus local PNG/JPEG/WebP disk selection, bounded preview, and
+image-to-model one-click direct GLB import. Source also implements multi-stage
+image creation for MCP/Grasshopper and the optional Rhino GHA's stage-only mesh
+value path. Portable tests and package compilation remain separate evidence
+classes. One real local-image panel workflow passed on macOS on 2026-08-11;
+the streamlined dialogs/resize behavior in this revision, Grasshopper loading,
+Windows host behavior, and broader interactive acceptance remain separate
+gates.
 
 ## Trust boundaries
 
@@ -82,7 +85,7 @@ Materials and the final import-or-value target are explicit choices:
      before one Tripo v3 text-to-model POST. `withMaterials=true` sends
      `texture=true, pbr=true` (`auto_size=true`, `quad=false`);
    - **local image:** validate and privately snapshot one 1–20,000,000-byte
-     PNG/JPEG under `image-transfers/`, then generate a UUID. Persist
+     PNG/JPEG/WebP under `image-transfers/`, then generate a UUID. Persist
      `Prepared`, `ImageUploadDispatching`, a valid `file_token`, and
      `ImageGenerationDispatching` as distinct checkpoints around the upload and
      image-to-model POSTs. The upload uses a generic filename; neither source
@@ -403,7 +406,11 @@ Protocol and parser tests, package compilation, packaged-sidecar process
 handshakes, native secret-store canaries, real host runtime, installer behavior,
 and visual/material fidelity are separate evidence classes. A passing portable
 test suite does not claim that Rhino, Grasshopper, or Revit loaded the binaries.
-The current source tree implements local PNG/JPEG upload/image creation for MCP
-and Grasshopper plus a text-only Eto/Revit panel slice. It does not implement
-panel image controls, WebP/public-URL input, a Yak package, or a signed
-installer.
+The current Rhino source tree implements local PNG/JPEG/WebP disk selection,
+bounded preview, and panel image-to-model one-click direct GLB import, alongside
+the MCP and Grasshopper image workflows. One real local-image panel run passed
+on macOS on 2026-08-11. The streamlined dialogs/resize behavior in this revision
+has portable evidence only and still needs a fresh host pass. This does not
+claim Windows-host or clipboard acceptance, public-URL/multiview input, a Yak
+package, or a signed installer. Revit behavior remains outside this repository
+and must be assessed against its own source and runtime evidence.

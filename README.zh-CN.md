@@ -3,10 +3,10 @@
 [English](./README.md) | 简体中文
 
 Tripo-Rhino 是面向 Rhino 8 的独立社区适配器。AEC 用户可以在 per-document Eto
-panel 中使用 text-to-model workflow，也可以通过可选 Grasshopper GHA 显式执行
-text/本地图生 3D 并得到 Grasshopper mesh value；agentic client 可通过 MCP 使用
-同一个 sidecar。Rhino 推荐路径会把成功 generation 的 GLB 直接导入为原生 PBR
-block，不需要第二个 conversion task；经校验的 OBJ 仍是显式 mesh/block 兼容路径，
+panel 中使用 text-to-model 或本地图生 3D workflow，也可以通过可选 Grasshopper
+GHA 显式执行 text/本地图生 3D 并得到 Grasshopper mesh value；agentic client 可通过
+MCP 使用同一个 sidecar。Rhino 推荐路径会把成功 generation 的 GLB 直接导入为原生
+PBR block，不需要第二个 conversion task；经校验的 OBJ 仍是显式 mesh/block 兼容路径，
 也是 Grasshopper 的 stage-only 格式。
 
 它不是 Tripo 或 McNeel 官方产品。
@@ -26,12 +26,15 @@ sidecar 是唯一解析、存储或使用 Tripo API key 的进程。plug-in 的 
 写入 Rhino settings 或 `.3dm` document。
 
 > **当前状态：**`.rhp` 与可选 `.gha` 以 Rhino 8 为目标，并可针对 pinned
-> RhinoCommon/Grasshopper packages 编译。Eto text workflow、Grasshopper
+> RhinoCommon/Grasshopper packages 编译。Eto text/本地图生 workflow、Grasshopper
 > text/本地 PNG 或 JPEG workflow、credential dialog、sidecar launcher、direct
 > GLB/PBR import 与 bundled sidecar layout 已存在源码，并有 portable
 > control/workflow/MCP/process tests。macOS 开发宿主已实际验证手动 package
 > layout、Eto panel、Keychain-backed credential 保存/使用、text generation 与约
-> 两秒一次的 generation progress 刷新。同一宿主还已在三个彼此独立的全新 Rhino
+> 两秒一次的 generation progress 刷新。2026-08-11，该宿主还在 Eto panel 中选择了
+> 一张真实本地图片，完成 provider image-to-model generation，并成功 direct
+> GLB import。本 revision 的免二次确认、resize 与 quiet-startup 简化行为仍需重新做
+> 一轮 Rhino acceptance。同一宿主还已在三个彼此独立的全新 Rhino
 > process 中用一份真实 provider GLB 做 proof-stability 压力测试，随后又对实际安装
 > 的 proof-v5/schema-3 binary 做 exact canary；每轮都验证了同 UUID 的只读
 > `already_exists` replay。
@@ -264,7 +267,7 @@ OS 上明确报告的 private fallback，绝不是 Windows 或 macOS 路径。
 只在 MCP client 中设置该变量会让 server 与 Rhino 使用不同的 discovery/staging
 roots，无法建立正确的 bridge 连接。
 
-`image-transfers` 可能暂存由 Grasshopper 或 MCP 选择的 PNG/JPEG 私有 snapshot，
+`image-transfers` 可能暂存由 panel、Grasshopper 或 MCP 选择的 image 私有 snapshot，
 直到 file-token 或 upload-ambiguity checkpoint 持久化。它不是 import allowlist；
 恢复期间必须与 journal 一起保留。
 
@@ -356,7 +359,8 @@ panel 还持有 workflow state，**Reload and review all work…** 会把已派�
 保留为 recovery evidence，只清除从未发送的 setup，再统一审阅。手工修复无效
 文件后可直接点击 **Refresh recovery status**。无效、超限、未知 schema、Unix
 上非 private 或 symlink hint 会继续阻塞，等待人工检查。paid-operation journal
-才是 authority，hint 不是。Eto panel 同时支持 text 与本地 PNG/JPEG image input；
+才是 authority，hint 不是。Eto panel 支持 text，以及本地 PNG/JPEG/WebP 选择、
+bounded preview 与 image-to-model one-click direct GLB import；
 可选 Grasshopper components 与 MCP tools 也以各自的 guarded workflow 提供这两类
 input。
 
@@ -414,7 +418,7 @@ MCP 入口通过以下九个 tools 暴露同一套 shared workflow：
 | `tripo_task_status` | `taskId` | 查询一个已有 Tripo task。 |
 | `tripo_operation_status` | `operationId` | 读取一条持久化的本地 paid-operation record；不调用 Tripo 或 Rhino。 |
 | `tripo_create_text_task` | `prompt`、`faceLimit`、`withMaterials`、`documentSessionId`、`operationId`、`confirmExternalCost` | 创建一个 text-to-model task。`withMaterials=true` 请求 textured PBR generation（`texture`/`pbr`）；`false` 保持 geometry-only。可能消耗 credits。 |
-| `tripo_stage_local_image` | `localImagePath` | 校验并私有 snapshot 一张本地 PNG/JPEG，返回 opaque descriptor；不调用 Tripo。 |
+| `tripo_stage_local_image` | `localImagePath` | 校验并私有 snapshot 一张本地 PNG/JPEG/WebP，返回 opaque descriptor；不调用 Tripo。 |
 | `tripo_create_image_task` | `transferId`、`sha256`、`byteLength`、`mediaType`、`faceLimit`、`withMaterials`、`documentSessionId`、`operationId`、`confirmExternalCost` | 上传一张 staged image，并以独立 upload/generation durable checkpoints 创建 image-to-model task。四个 descriptor fields 必须原样复制自 `tripo_stage_local_image`。可能消耗 credits。 |
 | `tripo_import_generation_glb` | `generationTaskId`、`name`、`documentSessionId`、`operationId`、`applyMaterials`（必须为 `true`） | Rhino 推荐路径：下载并原生导入成功 generation 的 GLB，创建一个 PBR block；不创建 conversion task，也没有额外 Tripo 费用。 |
 | `tripo_create_obj_conversion` | `sourceTaskId`、`faceLimit`、`withMaterials`、`documentSessionId`、`operationId`、`confirmExternalCost` | 创建一个 OBJ conversion。`withMaterials=true` 请求带 baked-diffuse MTL 与 image textures 的 OBJ bundle（`bake=true`）；`false` 只转换几何。可能消耗 credits。 |
@@ -627,8 +631,10 @@ Tripo task/billing history；不要自动发送另一个付费请求。进程被
 
 - 每次 import 创建一个 Rhino mesh（`mesh`）或一个 block instance
   （`instance`）；没有 placement controls，且 mesh 模式最多承载一个 material slot。
-- 当前宿主 panel 只支持 text-to-3D。图像选择、upload 与 image-to-3D creation
-  已由可选 GHA 与 MCP 提供；panel image mode、WebP 与 public URL input 尚未实现。
+- 当前宿主 panel 支持本地 PNG/JPEG/WebP 磁盘选择、bounded preview 与
+  image-to-model one-click direct GLB import；macOS 已有一张真实本地图片通过。
+  本 revision 的 dialog/resize 简化仍需 fresh host pass。public URL 与 multiview
+  input 尚未实现；不声称 Windows host 或 clipboard 已完成 acceptance。
 - text-generation 默认 model 是 `v3.1-20260211`；`TRIPO_MODEL` 可以选择另一个
   通过语法校验的 identifier，改变它也会改变 text-task paid-operation identity。
 - OBJ 兼容路径的材质上限是 baked diffuse（OBJ `Kd`/`d`/`Tr` color/alpha 加每个
