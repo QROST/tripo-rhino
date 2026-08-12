@@ -137,7 +137,12 @@ Each document-import path returns a typed host mutation receipt, including
 `SavedFamilyPath`.
 
 The generation and conversion cloud requests may consume credits. Each
-task-creation entry point therefore requires an explicit cost confirmation.
+task-creation entry point therefore requires explicit user authorization. In
+the panel's ready one-click direct-GLB path, the visible credits disclosure plus
+the enabled **Create in Rhino** click is that fresh authorization; it does not
+add a second modal. Advanced manual generation/conversion, every paid retry,
+Grasshopper actions, and MCP `confirmExternalCost` retain their separate
+confirmation gates.
 Task-creating POST requests are never automatically retried because the API
 does not document an idempotency key.
 
@@ -162,12 +167,13 @@ automatically resent. The sidecar verifies the staged descriptor and uploads an
 immutable in-memory snapshot, closing the check-versus-upload race on the
 owner-writable transfer file.
 
-The shared host UI generates and displays each operation UUID before dispatch
-and requires a separate Tripo-credit confirmation for generation and
-conversion. If a paid response is lost, refresh queries the local operation
-journal and recovers a durable task ID or same-UUID retry only when locally
-proven safe. An unresolved or ambiguous dispatch disables reset and new-key
-changes so the UI cannot disguise a paid result. A definitive
+The shared host UI generates and displays each operation UUID before dispatch.
+The panel's ready one-click action authorizes its fresh generation directly;
+manual generation, conversion, and paid retry actions require a separate
+Tripo-credit confirmation. If a paid response is lost, refresh queries the
+local operation journal and recovers a durable task ID or same-UUID retry only
+when locally proven safe. An unresolved or ambiguous dispatch disables reset
+and new-key changes so the UI cannot disguise a paid result. A definitive
 `request_rejected` receipt instead clears the rejected stage and requires a
 corrected credential plus a new UUID; generation rejection clears downstream
 work, while conversion rejection preserves successful generation. Conversion
@@ -212,9 +218,14 @@ operation IDs, durable task IDs when known, journal state, and only the bounded
 name/mode/material fields required to identify an import retry. It excludes the
 prompt, credential, Authorization header, URL, fingerprint, artifact path, and
 host document path. Each panel session owns a distinct recovery ID, so
-multiple panels for one document cannot overwrite each other. The hint remains
-through a successful import and is removed only by an explicit live-workflow
-reset or archived after recovered reconciliation.
+multiple panels for one document cannot overwrite each other. Once the live
+Rhino state contains a fully identity-matched terminal import receipt, the
+store first persists the receipt-known hint, then moves those exact bytes into
+the private archive. The same completed import is suppressed from later active
+hint rewrites. If archive creation or move fails, import success is unchanged
+and the active hint remains for fail-closed review. No running,
+successful-but-unimported, mutation-uncertain, receipt-mismatched, invalid, or
+foreign evidence is auto-archived.
 
 The live session owns its hint in process. Once that session or process is gone,
 a later panel treats the hint as stale and blocks new workflows and credential
@@ -234,8 +245,9 @@ ambiguous-outcome journal checkpoint. A
 disconnected UI client therefore cannot release the
 last protection around sidecar work, closing the cross-panel and MCP
 check-then-act gaps. Paid IDs can only be queried through the read-only
-operation-status path; imports require manual same-UUID reconciliation. Valid
-hints are archived only after the guided dialog performs that local inspection,
+operation-status path; imports require manual same-UUID reconciliation. Except
+for the verified live terminal-import case above, valid hints are archived only
+after the guided dialog performs that local inspection,
 shows the evidence and risks, and the user explicitly checks the confirmation.
 The dialog submits a snapshot token covering both the recovery files and every
 displayed full journal receipt or unavailable result. The session reloads the
@@ -265,10 +277,16 @@ a paid call.
 ### Rhino
 
 - The plug-in registers a per-document Eto panel opened from the **Tripo**
-  panel entry or the `TripoPanel` command. The text UI exposes prompt, face
-  limit, materials, import mode, key management, progress, and the three durable
-  stage IDs as selectable fields. It also exposes read-only crash recovery and
-  explicit snapshot-bound review controls.
+  panel entry or the `TripoPanel` command. The UI exposes text/local-image input,
+  face limit, materials, import mode, key management, progress, and the three
+  durable stage IDs as selectable fields. It also exposes read-only crash
+  recovery and explicit snapshot-bound review controls.
+- Initial automatic connection is driven by Rhino's `PanelShown` lifecycle
+  callback only; Eto load/unload cycles caused by dock resizing are not treated
+  as reconnect requests. Background connection, polling, and render failures
+  are reported inline or through bounded, non-sensitive Rhino command-history
+  messages. Explicit connection and true mutation/integrity/recovery failures
+  keep their modal error path.
 - All document reads and writes run on the Rhino UI thread.
 - A delayed request is rejected if the active document no longer matches the requested document session.
 - Geometry is prepared before mutation; each OBJ import (a mesh, or an instance

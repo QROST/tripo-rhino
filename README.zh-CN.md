@@ -271,30 +271,35 @@ roots，无法建立正确的 bridge 连接。
 ## 使用 Rhino panel
 
 1. 启动 Rhino，打开目标 document，并运行 `TripoPanel`。
-2. per-document panel 会自动连接精确 active document；也可以点击
-   **Connect / Refresh** 显式刷新。若 workflow 已有 state，不同 document session
-   会被拒绝，不会静默继承旧 task。
-3. 若没有可用 key，在 **API key…** 粘贴 key，并选择 persistent 或 session-only
-   storage。可在 [Tripo Platform](https://platform.tripo3d.ai/api-keys) 创建 key。
+2. Rhino 报告 panel 已显示时，per-document panel 会自动连接；调整 panel 大小导致的
+   Eto load cycle 不会触发 reconnect。**Advanced** 中仍可点击 **Connect /
+   Refresh** 显式刷新。若 workflow 已有 state，不同 document session 会被拒绝，
+   不会静默继承旧 task。自动连接失败只在 panel 内联状态与 Rhino command history
+   中提示，不弹 modal。
+3. 若没有可用 key，打开 **Settings**，点击 **API key…** 粘贴 key，并选择
+   persistent 或 session-only storage；打开 panel 不会强制弹 key 对话框。可在
+   [Tripo Platform](https://platform.tripo3d.ai/api-keys) 创建 key。
    active account-bound recovery 中该 action 仍可用，但会强制 session-only：
    ambiguous paid UUID 必须恢复精确原 key；accepted task/import 必须使用同一
    Tripo account 的 key。workflow 已解决并显式 reset 后，只有 sidecar 能明确证明
    OS-stored key 存在且可删除时，**Remove saved key…** 才会启用。其默认选择 No
    的确认框会同时清除 session key 与 stored key。`TRIPO_API_KEY` 环境覆盖仍然
    有效，并会禁用 panel credential actions；需在 Rhino 外修改后重启 Rhino。
-4. 输入 prompt、face limit 与材质选项，然后点击 **Generate**。panel 会先显示
-   可选择复制的 durable operation UUID，再显示 credit confirmation；拒绝确认不会
-   发送付费请求。Rhino 会在私有本地 `ui-settings/rhino-panel.json` preference
-   file 中记住最后一次合法的 face limit、材质偏好与 object name；不会保存
-   prompt、API key、task/operation ID、document path 或 import source。
-5. generation 在 `queued` 或 `running` 时会约每两秒自动刷新；也可点击
-   **Refresh generation** 立即刷新，直到 task 为 `success`。
-6. 保持 **Direct GLB (recommended)**，输入 block name，再点击
-   **Import GLB (recommended)**。该路径下载 generation GLB 并保留 Rhino-native
-   PBR；不会创建 conversion task，也不会消耗第二次 conversion credits。
-7. 只有 direct GLB 不可用，或明确需要 OBJ/GH mesh 时才选择 **OBJ
-   compatibility**：点击 **Convert to OBJ**、确认独立的可能费用、刷新至成功，再选择
-   `native`/`mesh`/`instance` 与 baked-diffuse material 选项后导入。
+4. 选择 text 或 image 输入，设置 object name 与 generation preferences，并保持
+   **Direct GLB (recommended)**。ready-state guidance 会明确说明 **Create in
+   Rhino** 将授权一个可能消耗 Tripo credits 的 generation request。点击已启用的
+   button 就是本次 fresh paid authorization，不再出现第二个确认框。
+5. panel 会创建一个 durable generation UUID，在 `queued` 或 `running` 时约每两秒
+   刷新同一个 task，并在成功后直接导入 GLB。该路径保留 Rhino-native PBR，不创建
+   conversion task，也不消耗第二次 conversion credits。后台 status failure 会暂停，
+   只显示内联 guidance 与不含敏感信息的 Rhino command-history 消息；点击
+   **Refresh generation** 会用同一 UUID 重试。
+6. Rhino 会在私有本地 `ui-settings/rhino-panel.json` preference file 中记住最后
+   一次合法的 face limit、材质偏好与 object name；不会保存 prompt、API key、
+   task/operation ID、document path 或 import source。
+7. 只有 direct GLB 不可用，或明确需要 OBJ/GH mesh 时，才使用 **Advanced** 手工
+   action 与 **OBJ compatibility**。手工 generation、OBJ conversion，以及每一次
+   paid same-UUID retry 都继续保留显式费用确认。
 
 每个新建 panel 都会从 **Direct GLB (recommended)** 开始，即使上一个 panel
 曾使用 OBJ compatibility。compatibility 路由只在当前 session 生效，不会在重启后
@@ -319,9 +324,13 @@ dispatch 前，shared state layer 会在
 durable task ID 与 import retry 所需的最少参数；不包含 prompt、API key、
 Authorization header、URL 或任意 path。
 
-这个具有独立 identity 的 hint 会在 import 成功后继续保留，直到 live workflow 被
-显式 reset。关闭 document、销毁 inspector、退出 Rhino 或崩溃都不会取消远端 task。
-下次打开 panel 时会显示 stale recovery ID，并阻止新 workflow。
+当 live Rhino state 取得完整 identity match 的 terminal import receipt 后，store 会
+先安全持久化 receipt-known hint，再 best-effort 把同一个文件移入 private archive；
+之后同一 completed import 的 state save 不会重新制造 active startup block。若归档
+不能完成，已经成功的 import 仍保持成功，active hint 也会保留并 fail closed 等待
+review。running work、success-but-unimported task、unknown mutation、未确认或
+mismatched receipt，以及 invalid/foreign evidence 都不会自动归档。关闭 document、
+销毁 inspector、退出 Rhino 或崩溃都不会取消远端 task。
 另一个 Rhino process 拥有的 hint 会保守地阻塞，因为不能跨 process 猜测 panel
 session 是否仍存活；recovery 必须在 owner process 中完成，或在确认它退出后再进行。
 API-key change 还会拒绝 Rhino 或 Revit 中任何尚未 reset 的
@@ -347,8 +356,9 @@ panel 还持有 workflow state，**Reload and review all work…** 会把已派�
 保留为 recovery evidence，只清除从未发送的 setup，再统一审阅。手工修复无效
 文件后可直接点击 **Refresh recovery status**。无效、超限、未知 schema、Unix
 上非 private 或 symlink hint 会继续阻塞，等待人工检查。paid-operation journal
-才是 authority，hint 不是。Eto panel 仍然只支持 text-to-3D；本地 image
-controls 目前由可选 Grasshopper components 与 MCP tools 提供。
+才是 authority，hint 不是。Eto panel 同时支持 text 与本地 PNG/JPEG image input；
+可选 Grasshopper components 与 MCP tools 也以各自的 guarded workflow 提供这两类
+input。
 
 ## 使用 Grasshopper components
 

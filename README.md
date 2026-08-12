@@ -295,12 +295,15 @@ recovery.
 ## Use the Rhino panel
 
 1. Start Rhino, open the target document, and run `TripoPanel`.
-2. The per-document panel automatically connects to the exact active document.
-   **Connect / Refresh** is available for an explicit refresh. If a workflow
-   already owns state, a different document session is rejected rather than
-   silently adopting the old task.
-3. If no key is usable, paste one into **API key…** and choose persistent or
-   session-only storage. Create keys at
+2. The per-document panel automatically connects when Rhino reports that panel
+   as shown. Eto load cycles caused by resizing do not reconnect it. **Connect
+   / Refresh** is available in **Advanced** for an explicit refresh.
+   If a workflow already owns state, a different document session is rejected
+   rather than silently adopting the old task. Automatic connection failures
+   are shown inline and in Rhino command history, not in a modal.
+3. If no key is usable, open **Settings**, click **API key…**, paste one, and
+   choose persistent or session-only storage. Opening the panel does not force
+   a key dialog. Create keys at
    [Tripo Platform](https://platform.tripo3d.ai/api-keys). During an active
    account-bound recovery, the same action remains available but is forced to
    session-only: restore the exact original key for an ambiguous paid UUID, or
@@ -311,24 +314,25 @@ recovery.
    key. A `TRIPO_API_KEY` environment override remains effective and disables
    panel credential actions until it is changed outside Rhino and Rhino is
    restarted.
-4. Enter the prompt, face limit, and material preference. Click **Generate**.
-   The panel displays a selectable durable operation UUID before showing a
-   credit confirmation. Declining sends no paid request. Rhino remembers the
-   last valid face limit, material preference, and object name in the private
-   local `ui-settings/rhino-panel.json` preference file. It does not store the
-   prompt, API key, task/operation IDs, document path, or import source.
-5. The panel refreshes a durable generation task every two seconds while it is
-   `queued` or `running`. **Refresh generation** remains available for an
-   immediate refresh or to resume polling after a status error.
-6. Keep **Direct GLB (recommended)** selected, enter the block name, and click
-   **Import GLB (recommended)**. This downloads the successful generation's
-   GLB and imports its native PBR materials; it creates no conversion task and
-   consumes no second conversion credits.
-7. Use **OBJ compatibility** only when direct GLB is unavailable or an OBJ/GH
-   mesh is specifically required. Click **Convert to OBJ**, confirm that
-   separate possible charge, refresh it to `success`, then choose
-   `native`/`mesh`/`instance` and the baked-diffuse material option before
-   importing.
+4. Choose text or image input, set the object name and generation preferences,
+   and keep **Direct GLB (recommended)** selected. The ready-state guidance
+   states that **Create in Rhino** authorizes one generation request that can
+   consume Tripo credits. Clicking that enabled button is the fresh paid
+   authorization; there is no second confirmation dialog.
+5. The panel creates one durable generation UUID, refreshes that same task
+   every two seconds while it is `queued` or `running`, and imports its GLB
+   directly after success. The import preserves Rhino-native PBR materials,
+   creates no conversion task, and consumes no second conversion credits.
+   A background status failure pauses with inline guidance and a non-sensitive
+   Rhino command-history message; **Refresh generation** retries the same UUID.
+6. Rhino remembers the last valid face limit, material preference, and object
+   name in the private local `ui-settings/rhino-panel.json` preference file. It
+   does not store the prompt, API key, task/operation IDs, document path, or
+   import source.
+7. Use the manual **Advanced** actions and **OBJ compatibility** only when
+   direct GLB is unavailable or an OBJ/GH mesh is specifically required.
+   Manual generation, OBJ conversion, and every paid same-UUID retry retain
+   their explicit cost confirmations.
 
 Each newly constructed panel starts on **Direct GLB (recommended)** even if an
 earlier panel used OBJ compatibility. The compatibility route is deliberately
@@ -360,12 +364,17 @@ default local-data root). The hint contains UUIDs, durable task IDs when known,
 and the minimum import retry parameters. It does not contain the prompt, API
 key, Authorization header, URL, or arbitrary path.
 
-The independently identified hint remains through a successful import until
-the live workflow is explicitly reset. Closing the document, disposing an
-inspector, exiting Rhino, or crashing does not cancel the remote task. The next
-panel shows stale recovery IDs and blocks
-new workflows. A hint owned by another Rhino process is conservatively
-blocking because panel-session liveness is not guessed across processes.
+After a live Rhino state has a fully identity-matched terminal import receipt,
+the store first persists that receipt-known hint and then best-effort moves the
+same file into its private archive. A later save of that same completed import
+does not recreate an active startup block. If archival cannot complete, the
+successful import remains successful and the active hint remains fail-closed
+for review. Running work, successful-but-unimported tasks, unknown mutations,
+unconfirmed or mismatched receipts, and invalid/foreign evidence are never
+auto-archived. Closing the document, disposing an inspector, exiting Rhino, or
+crashing does not cancel a remote task. A hint owned by another Rhino process
+is conservatively blocking because panel-session liveness is not guessed across
+processes.
 Recovery must happen in that owner process, or after its exit can be verified.
 API-key changes also refuse any recorded generation/conversion workflow that
 has not been reset, any unconfirmed import, unverifiable foreign-owner record,
@@ -397,8 +406,9 @@ combined set. After manually repairing an invalid file, use **Refresh recovery
 status** directly.
 Invalid, oversized, unknown-schema, non-private Unix, or symlinked hints remain
 blocked for manual inspection. The paid-operation journal—not the hint—is
-authoritative. The Eto panel remains text-only; local-image controls are
-currently available through the optional Grasshopper components and MCP tools.
+authoritative. The Eto panel supports both text and local PNG/JPEG image input;
+the optional Grasshopper components and MCP tools expose the same two input
+families through their own guarded workflows.
 
 ## Use the Grasshopper components
 

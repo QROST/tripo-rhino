@@ -60,6 +60,12 @@
 - Every newly constructed panel selects direct GLB. OBJ compatibility remains a
   deliberate per-session choice and cannot silently become the next panel's
   default paid conversion route.
+- The visible ready-state credits disclosure and click on the enabled
+  **Create in Rhino** button authorize one fresh direct-GLB generation. There is
+  no second modal on that happy path. Advanced manual generation/conversion and
+  every paid retry retain explicit confirmations; sidecar cost confirmation,
+  UUID, capability, active-document, recovery, and single-flight checks remain
+  mandatory.
 - Panels share one complete preference snapshot. Atomic replacement prevents
   torn JSON; when multiple panels save valid preferences, the last complete
   snapshot wins rather than merging individual fields.
@@ -179,6 +185,16 @@ The lock and journal protect cooperating processes under one login. They do not 
   call only local
   `operation_status`; no recovery scan automatically resends a paid POST or
   import. Imports require manual same-UUID reconciliation.
+- A current live Rhino hint is auto-archived only after the state passes the
+  full verified-terminal-import check (host/document/operation/source/format/
+  mode/created-object identity, terminal task evidence, and committed or
+  already-existing host transaction). The receipt-known hint is atomically
+  persisted first, then the same private file is moved to the private archive.
+  Later saves of that completed operation do not recreate an active hint. Any
+  archive setup/move failure leaves import success intact; when the move did not
+  complete, the active hint remains fail-closed. No running,
+  successful-but-unimported, uncertain, mismatched, invalid, or foreign evidence
+  is auto-archived.
 - The guided review automatically performs those read-only checks, displays
   missing or ambiguous local evidence as a provider-history check, and requires
   an unchecked-by-default confirmation before archival. The hint is not an
@@ -309,6 +325,9 @@ same user.
 ## Remote-task semantics
 
 - Creating or converting a model may consume credits.
+- The panel's visible one-click direct-GLB action is an explicit fresh paid
+  authorization. Manual generation/conversion, every retry, Grasshopper, and
+  MCP keep their independent confirmation gates.
 - Text creation, image upload/generation, and OBJ conversion are separate,
   journaled stages.
 - Task-creating POST requests have no automatic retry.
