@@ -164,6 +164,7 @@ public sealed class TripoPanelRecoveryStore : IDisposable
     private readonly object _ownedPathsGate = new();
     private readonly HashSet<string> _ownedPaths =
         new(StringComparer.Ordinal);
+    private string? _archivedVerifiedImportOperationId;
     private bool _disposed;
 
     internal string RootDirectory => _rootDirectory;
@@ -211,6 +212,26 @@ public sealed class TripoPanelRecoveryStore : IDisposable
                 state.Context.DocumentSessionId,
                 nameof(state.Context.DocumentSessionId));
         string path = GetHintPath(_recoveryId);
+        string? verifiedImportOperationId =
+            state.HasVerifiedTerminalImportReceipt
+                ? CanonicalizeUuid(
+                    state.ImportReceipt?.OperationId ??
+                    throw new InvalidOperationException(
+                        "The verified import receipt has no operation ID."),
+                    nameof(TripoPanelImportReceipt.OperationId))
+                : null;
+        if (verifiedImportOperationId is not null &&
+            IsArchivedVerifiedImport(verifiedImportOperationId))
+        {
+            DeleteOwnedRegularFile(path);
+            return;
+        }
+
+        if (verifiedImportOperationId is null)
+        {
+            ClearArchivedVerifiedImport();
+        }
+
         TripoPanelRecoveryHint? hint = BuildHint(state, documentSessionId);
         if (hint is null)
         {
@@ -251,6 +272,22 @@ public sealed class TripoPanelRecoveryStore : IDisposable
             Tripo.Bridge.BridgePaths.SetPrivateFileMode(temporaryPath);
             File.Move(temporaryPath, path, overwrite: true);
             RegisterOwnedPath(path);
+            if (verifiedImportOperationId is not null &&
+                hint.Import is
+                {
+                    DispatchAttempted: true,
+                    ReceiptKnown: true,
+                } verifiedImport &&
+                string.Equals(
+                    verifiedImport.OperationId,
+                    verifiedImportOperationId,
+                    StringComparison.Ordinal))
+            {
+                TryArchiveVerifiedTerminalImport(
+                    path,
+                    hint,
+                    verifiedImportOperationId);
+            }
         }
         finally
         {
@@ -912,6 +949,82 @@ public sealed class TripoPanelRecoveryStore : IDisposable
                 new WeakReference<TripoPanelRecoveryStore>(this);
         }
     }
+
+    private bool IsArchivedVerifiedImport(string operationId)
+    {
+        lock (_ownedPathsGate)
+        {
+            return string.Equals(
+                _archivedVerifiedImportOperationId,
+                operationId,
+                StringComparison.Ordinal);
+        }
+    }
+
+    private void ClearArchivedVerifiedImport()
+    {
+        lock (_ownedPathsGate)
+        {
+            _archivedVerifiedImportOperationId = null;
+        }
+    }
+
+    private void MarkVerifiedImportArchived(string operationId)
+    {
+        lock (_ownedPathsGate)
+        {
+            _archivedVerifiedImportOperationId = operationId;
+        }
+    }
+
+    private void TryArchiveVerifiedTerminalImport(
+        string source,
+        TripoPanelRecoveryHint hint,
+        string operationId)
+    {
+        string? destination = null;
+        try
+        {
+            string archiveDirectory = Path.Combine(_directory, "archive");
+            EnsurePrivateNonReparseDirectory(archiveDirectory);
+            destination = Path.Combine(
+                archiveDirectory,
+                hint.RecoveryId + "." +
+                DateTimeOffset.UtcNow.ToString(
+                    "yyyyMMddTHHmmssfffZ",
+                    CultureInfo.InvariantCulture) + "." +
+                Convert.ToHexString(RandomNumberGenerator.GetBytes(4)) +
+                ".json");
+            File.Move(source, destination);
+            Tripo.Bridge.BridgePaths.SetPrivateFileMode(destination);
+            UnregisterOwnedPath(source);
+            MarkVerifiedImportArchived(operationId);
+        }
+        catch (Exception exception)
+            when (IsBestEffortArchiveFailure(exception))
+        {
+            // The verified receipt is already durable and the Rhino mutation
+            // has committed. Archiving only removes the next-startup review;
+            // it must never turn that completed import into a reported failure.
+            // A move that did not complete leaves the active hint in place so
+            // recovery remains fail-closed.
+            if (destination is not null &&
+                !File.Exists(source) &&
+                File.Exists(destination))
+            {
+                UnregisterOwnedPath(source);
+                MarkVerifiedImportArchived(operationId);
+            }
+        }
+    }
+
+    private static bool IsBestEffortArchiveFailure(Exception exception) =>
+        exception is IOException or
+        UnauthorizedAccessException or
+        InvalidDataException or
+        InvalidOperationException or
+        NotSupportedException or
+        System.Security.SecurityException;
 
     private void UnregisterOwnedPath(string path)
     {

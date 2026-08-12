@@ -1394,9 +1394,12 @@ public sealed class TripoPanelPresentationTests
         Assert.Equal("Create in Rhino", direct.CreateInRhinoText);
         Assert.Contains("can consume credits", direct.CreateInRhinoHelp);
         Assert.Contains(
+            "Clicking Create in Rhino authorizes",
+            direct.CreateInRhinoHelp);
+        Assert.Contains(
             "No separate OBJ conversion request",
             direct.CreateInRhinoHelp);
-        Assert.False(direct.CreateInRhinoGuidanceVisible);
+        Assert.True(direct.CreateInRhinoGuidanceVisible);
         Assert.True(preflighting.CanStartDirectGlbCreate);
         Assert.False(preflighting.CreateInRhinoEnabled);
         Assert.Equal("Checking…", preflighting.CreateInRhinoText);
@@ -1454,27 +1457,6 @@ public sealed class TripoPanelPresentationTests
         Assert.Contains("1 to 128", blankName.CreateInRhinoHelp);
         Assert.False(longName.CreateInRhinoEnabled);
         Assert.Contains("1 to 128", longName.CreateInRhinoHelp);
-    }
-
-    [Fact]
-    public void DirectGlbConfirmationIsExplicitAndDefaultsToNo()
-    {
-        Tripo.HostUi.DirectGlbCreateConfirmation confirmation =
-            Tripo.HostUi.DirectGlbCreateConfirmation.Create(
-                "11111111-1111-4111-8111-111111111111",
-                "Test.3dm",
-                "Chair");
-
-        Assert.True(confirmation.DefaultToNo);
-        Assert.Contains("can consume Tripo credits", confirmation.Message);
-        Assert.Contains("Test.3dm", confirmation.Message);
-        Assert.Contains("Chair", confirmation.Message);
-        Assert.Contains(
-            "11111111-1111-4111-8111-111111111111",
-            confirmation.Message);
-        Assert.Contains(
-            "No separate OBJ conversion request is sent",
-            confirmation.Message);
     }
 
     [Fact]
@@ -1556,21 +1538,6 @@ public sealed class TripoPanelPresentationTests
         Assert.False(presentation.ClearImageVisible);
         Assert.Equal(prepared.OperationId, presentation.GenerationOperationId);
         Assert.Equal(prepared.OperationId, presentation.LatestPreparedOperationId);
-    }
-
-    [Fact]
-    public void ImageDirectGlbConfirmationNamesImageRequest()
-    {
-        Tripo.HostUi.DirectGlbCreateConfirmation confirmation =
-            Tripo.HostUi.DirectGlbCreateConfirmation.Create(
-                "11111111-1111-4111-8111-111111111111",
-                "Test.3dm",
-                "Image Model",
-                imageGeneration: true);
-
-        Assert.True(confirmation.DefaultToNo);
-        Assert.Contains("image-to-model", confirmation.Message);
-        Assert.DoesNotContain("text-to-model", confirmation.Message);
     }
 
     [Fact]

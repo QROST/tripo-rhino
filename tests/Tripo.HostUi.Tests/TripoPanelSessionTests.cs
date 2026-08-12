@@ -3130,7 +3130,78 @@ public sealed class TripoPanelSessionTests
     }
 
     [Fact]
-    public async Task ImportReceiptHintPersistsUntilExplicitWorkflowReset()
+    public async Task VerifiedTerminalImportArchivesHintAndRestartIsUnblocked()
+    {
+        string root = CreateTemporaryRoot();
+        string importOperationId;
+        try
+        {
+            await using (Tripo.HostUi.TripoPanelSession session =
+                         new(
+                             new FakeConnector(new FakeHostControlClient()),
+                             new Tripo.HostUi.TripoPanelRecoveryStore(
+                                 "rhino",
+                                 root)))
+            {
+                await session.ConnectAsync();
+                session.PrepareGeneration(
+                    "a chair",
+                    10_000,
+                    withMaterials: true);
+                await session.DispatchPreparedGenerationAsync(
+                    userConfirmedExternalCost: true);
+                await session.RefreshGenerationStatusAsync();
+                session.PrepareConversion(10_000, withMaterials: true);
+                await session.DispatchPreparedConversionAsync(
+                    userConfirmedExternalCost: true);
+                await session.RefreshConversionStatusAsync();
+                Tripo.HostUi.PreparedObjImport import =
+                    session.PrepareImport(
+                        "Chair",
+                        "native",
+                        applyMaterials: true);
+                importOperationId = import.OperationId;
+                await session.ImportPreparedAsync();
+
+                Assert.True(session.State.HasVerifiedTerminalImportReceipt);
+                Assert.Empty(
+                    Directory.GetFiles(
+                        Path.Combine(root, "ui-recovery", "rhino"),
+                        "*.json"));
+            }
+
+            string archivedFile = Assert.Single(
+                Directory.GetFiles(
+                    Path.Combine(
+                        root,
+                        "ui-recovery",
+                        "rhino",
+                        "archive"),
+                    "*.json"));
+            Tripo.HostUi.TripoPanelRecoveryHint hint =
+                System.Text.Json.JsonSerializer.Deserialize<
+                    Tripo.HostUi.TripoPanelRecoveryHint>(
+                    File.ReadAllText(archivedFile),
+                    Tripo.Bridge.BridgeJson.Options)
+                ?? throw new InvalidOperationException(
+                    "The import recovery hint could not be read.");
+            Assert.Equal(importOperationId, hint.Import?.OperationId);
+            Assert.True(hint.Import!.ReceiptKnown);
+
+            await using Tripo.HostUi.TripoPanelSession restarted =
+                new(
+                    new FakeConnector(new FakeHostControlClient()),
+                    new Tripo.HostUi.TripoPanelRecoveryStore("rhino", root));
+            Assert.False(restarted.Recovery.HasBlock);
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task TerminalImportArchiveFailureKeepsSuccessAndActiveHint()
     {
         string root = CreateTemporaryRoot();
         try
@@ -3139,6 +3210,9 @@ public sealed class TripoPanelSessionTests
                 new(
                     new FakeConnector(new FakeHostControlClient()),
                     new Tripo.HostUi.TripoPanelRecoveryStore("rhino", root));
+            string archivePath =
+                Path.Combine(root, "ui-recovery", "rhino", "archive");
+            File.WriteAllText(archivePath, "not-a-directory");
             await session.ConnectAsync();
             session.PrepareGeneration(
                 "a chair",
@@ -3156,27 +3230,25 @@ public sealed class TripoPanelSessionTests
                     "Chair",
                     "native",
                     applyMaterials: true);
+
             await session.ImportPreparedAsync();
 
-            string file = Assert.Single(
+            Assert.True(session.State.HasVerifiedTerminalImportReceipt);
+            Assert.Equal(
+                import.OperationId,
+                session.State.ImportReceipt?.OperationId);
+            string activeFile = Assert.Single(
                 Directory.GetFiles(
                     Path.Combine(root, "ui-recovery", "rhino"),
                     "*.json"));
             Tripo.HostUi.TripoPanelRecoveryHint hint =
                 System.Text.Json.JsonSerializer.Deserialize<
                     Tripo.HostUi.TripoPanelRecoveryHint>(
-                    File.ReadAllText(file),
-                    Tripo.Bridge.BridgeJson.Options)
-                ?? throw new InvalidOperationException(
-                    "The import recovery hint could not be read.");
+                    File.ReadAllText(activeFile),
+                    Tripo.Bridge.BridgeJson.Options)!;
             Assert.Equal(import.OperationId, hint.Import?.OperationId);
-            Assert.True(hint.Import!.ReceiptKnown);
-
-            session.ResetWorkflow();
-            Assert.Empty(
-                Directory.GetFiles(
-                    Path.Combine(root, "ui-recovery", "rhino"),
-                    "*.json"));
+            Assert.True(hint.Import?.ReceiptKnown);
+            Assert.True(File.Exists(archivePath));
         }
         finally
         {

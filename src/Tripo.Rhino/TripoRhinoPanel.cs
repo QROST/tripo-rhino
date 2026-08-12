@@ -201,7 +201,7 @@ public sealed class TripoRhinoPanel : Panel, IPanel
         _renderQueue = new(
             callback => Application.Instance.AsyncInvoke(callback),
             ApplyRenderFrame,
-            ShowError);
+            ReportBackgroundPanelFailure);
         _generationStatusPoller = new(
             TimeSpan.FromSeconds(2),
             RefreshGenerationStatusAutomaticallyAsync,
@@ -300,7 +300,6 @@ public sealed class TripoRhinoPanel : Panel, IPanel
         _clearImage.Click += OnClearImage;
         _faceLimit.ValueChanged += OnSettingsChanged;
         _withMaterials.CheckedChanged += OnSettingsChanged;
-        Load += OnLoaded;
         KeyDown += OnPanelKeyDown;
         ApplyControls(_session.State, _session.Recovery);
     }
@@ -312,9 +311,11 @@ public sealed class TripoRhinoPanel : Panel, IPanel
             _session.RefreshRecovery();
         }
 
-        if (!_session.State.Connected && !_session.State.Busy)
+        if (!_session.State.Connected &&
+            !_session.State.Busy &&
+            !IsAutomaticDirectGlbCreateActive)
         {
-            _ = ConnectSafelyAsync();
+            _ = ConnectSafelyAsync(showErrors: false);
         }
     }
 
@@ -601,9 +602,6 @@ public sealed class TripoRhinoPanel : Panel, IPanel
             Rows = { row },
         };
     }
-
-    private async void OnLoaded(object? sender, EventArgs args) =>
-        await ConnectSafelyAsync();
 
     private void OnFormInputChanged(object? sender, EventArgs args) =>
         RequestRender();
@@ -906,9 +904,9 @@ public sealed class TripoRhinoPanel : Panel, IPanel
     }
 
     private async void OnConnect(object? sender, EventArgs args) =>
-        await ConnectSafelyAsync();
+        await ConnectSafelyAsync(showErrors: true);
 
-    private async Task ConnectSafelyAsync()
+    private async Task ConnectSafelyAsync(bool showErrors)
     {
         if (_closing || _session.State.Busy)
         {
@@ -920,16 +918,6 @@ public sealed class TripoRhinoPanel : Panel, IPanel
             EnsureNoAutomaticDirectGlbCreateMutation("reconnect the panel");
             EnsurePanelDocumentIsActive();
             await _session.ConnectAsync(_panelLifetime.Token);
-            if (_closing)
-            {
-                return;
-            }
-
-            if (_session.State.CredentialStatus?.HasApiKey == false &&
-                !_session.Recovery.HasBlock)
-            {
-                await PromptForCurrentWorkflowApiKeyAsync();
-            }
         }
         catch (OperationCanceledException) when (_closing)
         {
@@ -939,7 +927,14 @@ public sealed class TripoRhinoPanel : Panel, IPanel
         }
         catch (Exception exception)
         {
-            ShowError(exception);
+            if (showErrors)
+            {
+                ShowError(exception);
+            }
+            else
+            {
+                ReportBackgroundConnectionFailure();
+            }
         }
     }
 
@@ -1655,28 +1650,6 @@ public sealed class TripoRhinoPanel : Panel, IPanel
             }
             PersistUserSettings();
             RequestRender();
-            if (!ConfirmDirectGlbCreate(
-                    preparedOperationId,
-                    state.Context?.DocumentTitle ?? "the active document",
-                    normalizedObjectName,
-                    imageGeneration))
-            {
-                if (!_closing &&
-                    ownerGeneration == _sessionGeneration &&
-                    ReferenceEquals(ownerSession, _session) &&
-                    !ownerSession.State.GenerationDispatchAttempted)
-                {
-                    TryResetUnsentGeneration(
-                        ownerSession,
-                        preparedOperationId!,
-                        imageGeneration);
-                    _directGlbCreateUiStage =
-                        Tripo.HostUi.DirectGlbCreateUiStage.Inactive;
-                    RequestRender();
-                }
-
-                return;
-            }
 
             EnsurePanelDocumentIsActive();
             await ownerSession.ConnectAsync(_panelLifetime.Token);
@@ -2131,7 +2104,7 @@ public sealed class TripoRhinoPanel : Panel, IPanel
 
     private void ReportAutomaticGenerationRefreshFailure(
         string expectedTaskId,
-        Exception exception)
+        Exception _)
     {
         if (_closing)
         {
@@ -2197,11 +2170,7 @@ public sealed class TripoRhinoPanel : Panel, IPanel
             return;
         }
 
-        ShowError(
-            new InvalidOperationException(
-                "Automatic generation refresh stopped. Click Refresh " +
-                $"generation to retry.\n\n{exception.Message}",
-                exception));
+        ReportBackgroundGenerationRefreshFailure();
         if (automaticIntentOwnsTask)
         {
             QueueDirectGlbAutoImportContinuation(
@@ -2402,33 +2371,6 @@ public sealed class TripoRhinoPanel : Panel, IPanel
             MessageBoxButtons.YesNo,
             MessageBoxType.Warning,
             MessageBoxDefaultButton.No) == DialogResult.Yes;
-
-    private bool ConfirmDirectGlbCreate(
-        string operationId,
-        string documentTitle,
-        string objectName,
-        bool imageGeneration)
-    {
-        Tripo.HostUi.DirectGlbCreateConfirmation confirmation =
-            Tripo.HostUi.DirectGlbCreateConfirmation.Create(
-                operationId,
-                documentTitle,
-                objectName,
-                imageGeneration);
-        if (!confirmation.DefaultToNo)
-        {
-            throw new InvalidOperationException(
-                "Direct GLB creation confirmation must fail closed.");
-        }
-
-        return MessageBox.Show(
-            this,
-            confirmation.Message,
-            confirmation.Title,
-            MessageBoxButtons.YesNo,
-            MessageBoxType.Warning,
-            MessageBoxDefaultButton.No) == DialogResult.Yes;
-    }
 
     private void EnsureDirectGlbFirstDispatchAvailable(
         Tripo.HostUi.TripoPanelState state,
@@ -3112,6 +3054,21 @@ public sealed class TripoRhinoPanel : Panel, IPanel
                 }
             });
     }
+
+    private static void ReportBackgroundConnectionFailure() =>
+        global::Rhino.RhinoApp.WriteLine(
+            "Tripo: Automatic panel connection did not complete. Use " +
+            "Connect / Refresh in Advanced if needed.");
+
+    private static void ReportBackgroundGenerationRefreshFailure() =>
+        global::Rhino.RhinoApp.WriteLine(
+            "Tripo: Automatic generation refresh paused. The same task is " +
+            "preserved; use Refresh generation to retry.");
+
+    private static void ReportBackgroundPanelFailure(Exception _) =>
+        global::Rhino.RhinoApp.WriteLine(
+            "Tripo: The panel could not apply a background layout update. " +
+            "Resize or reopen the panel to retry.");
 
     private async Task DisposeSessionAsync()
     {

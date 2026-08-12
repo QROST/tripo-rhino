@@ -217,53 +217,6 @@ internal enum DirectGlbCreateUiStage
     ManualReviewRequired,
 }
 
-internal sealed record DirectGlbCreateConfirmation(
-    string Title,
-    string Message,
-    bool DefaultToNo)
-{
-    internal static DirectGlbCreateConfirmation Create(
-        string operationId,
-        string documentTitle,
-        string objectName,
-        bool imageGeneration = false)
-    {
-        if (string.IsNullOrWhiteSpace(operationId))
-        {
-            throw new ArgumentException(
-                "The operation ID is required.",
-                nameof(operationId));
-        }
-
-        if (string.IsNullOrWhiteSpace(documentTitle))
-        {
-            throw new ArgumentException(
-                "The document title is required.",
-                nameof(documentTitle));
-        }
-
-        if (string.IsNullOrWhiteSpace(objectName))
-        {
-            throw new ArgumentException(
-                "The object name is required.",
-                nameof(objectName));
-        }
-        return new DirectGlbCreateConfirmation(
-            "Create model and import direct GLB?",
-            "This sends one Tripo " +
-            (imageGeneration ? "image-to-model" : "text-to-model") +
-            " generation request, which can " +
-            "consume Tripo credits. " +
-            "After that task reports success, this panel will import its GLB " +
-            $"directly into \"{documentTitle}\" as \"{objectName}\".\n\n" +
-            "No separate OBJ conversion request is sent.\n\n" +
-            $"Durable generation operation ID:\n{operationId}\n\n" +
-            "Keep this ID if the response is lost. Hiding the panel does not " +
-            "cancel the remote Tripo task.",
-            DefaultToNo: true);
-    }
-}
-
 internal static class DirectGlbFirstDispatchGuard
 {
     internal static string? GetBlockingReason(
@@ -878,8 +831,7 @@ public sealed class TripoPanelPresentation
                     directGlbCreateStage),
             CreateInRhinoGuidanceVisible =
                 directGlbCreateStage == DirectGlbCreateUiStage.Inactive &&
-                !state.Busy &&
-                !canStartDirectGlbCreate,
+                !state.Busy,
             DirectGlbWaitActionVisible =
                 directGlbCreateStage is
                     DirectGlbCreateUiStage.WaitingForGeneration or
@@ -1181,8 +1133,8 @@ public sealed class TripoPanelPresentation
                    "characters.";
         }
 
-        return "Creates one Tripo generation task, which can consume credits, " +
-               "waits for it to finish, then imports its GLB directly into " +
+        return "Clicking Create in Rhino authorizes one Tripo generation " +
+               "task that can consume credits. Its GLB imports directly into " +
                "Rhino. No separate OBJ conversion request is sent.";
     }
 

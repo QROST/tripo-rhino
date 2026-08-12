@@ -311,6 +311,28 @@ public sealed class TripoPanelImageGenerationTests
             Assert.Equal(1, client.CreateImageCalls);
             Assert.Equal(0, client.CreateConversionCalls);
             Assert.Equal(1, client.GlbImportCalls);
+            Assert.True(session.State.HasVerifiedTerminalImportReceipt);
+            Assert.Empty(
+                Directory.GetFiles(
+                    Path.Combine(root, "ui-recovery", "rhino"),
+                    "*.json"));
+            string archivedFile = Assert.Single(
+                Directory.GetFiles(
+                    Path.Combine(
+                        root,
+                        "ui-recovery",
+                        "rhino",
+                        "archive"),
+                    "*.json"));
+            Tripo.HostUi.TripoPanelRecoveryHint archivedHint =
+                System.Text.Json.JsonSerializer.Deserialize<
+                    Tripo.HostUi.TripoPanelRecoveryHint>(
+                    File.ReadAllText(archivedFile),
+                    Tripo.Bridge.BridgeJson.Options)!;
+            Assert.Equal(
+                prepared.OperationId,
+                archivedHint.Import?.OperationId);
+            Assert.True(archivedHint.Import?.ReceiptKnown);
         }
         finally
         {
