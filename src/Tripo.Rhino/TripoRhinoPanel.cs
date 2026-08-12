@@ -36,9 +36,12 @@ public sealed class TripoRhinoPanel : Panel, IPanel
     {
         DecimalPlaces = 0,
         Increment = 500,
-        MaxValue = 200_000,
-        MinValue = 500,
-        Value = 20_000,
+        MaxValue = Tripo.HostUi.RhinoPanelFaceLimitPolicy.Maximum,
+        MinValue = Tripo.HostUi.RhinoPanelFaceLimitPolicy.Minimum,
+        ToolTip =
+            "Values below 500 snap to 500; values above 200,000 snap to " +
+            "200,000.",
+        Value = Tripo.HostUi.RhinoPanelFaceLimitPolicy.Default,
         Width = 0,
     };
     private readonly CheckBox _withMaterials = new()
@@ -180,6 +183,8 @@ public sealed class TripoRhinoPanel : Panel, IPanel
     private string? _displayedPreparedOperationId;
     private string _lastValidObjectName =
         Tripo.HostUi.RhinoPanelUserSettings.DefaultObjectName;
+    private int _lastValidFaceLimit =
+        Tripo.HostUi.RhinoPanelFaceLimitPolicy.Default;
     private Tripo.HostUi.DirectGlbAutoImportIntent?
         _directGlbAutoImportIntent;
     private Tripo.HostUi.DirectGlbCreateUiStage _directGlbCreateUiStage =
@@ -190,6 +195,7 @@ public sealed class TripoRhinoPanel : Panel, IPanel
     private bool _recoveryWasBlocked;
     private bool _recoveryReviewInProgress;
     private bool _createInRhinoStarting;
+    private bool _normalizingFaceLimit;
     private bool _closing;
     private long _sessionGeneration = 1;
 
@@ -299,6 +305,7 @@ public sealed class TripoRhinoPanel : Panel, IPanel
         _pickImage.Click += OnPickImage;
         _clearImage.Click += OnClearImage;
         _faceLimit.ValueChanged += OnSettingsChanged;
+        _faceLimit.LostFocus += OnFaceLimitLostFocus;
         _withMaterials.CheckedChanged += OnSettingsChanged;
         KeyDown += OnPanelKeyDown;
         ApplyControls(_session.State, _session.Recovery);
@@ -399,7 +406,7 @@ public sealed class TripoRhinoPanel : Panel, IPanel
             Items =
             {
                 FieldBlock(
-                    "Face limit",
+                    "Face limit (500–200,000)",
                     _faceLimit,
                     stretchControl: true),
                 _withMaterials,
@@ -608,6 +615,28 @@ public sealed class TripoRhinoPanel : Panel, IPanel
 
     private void OnSettingsChanged(object? sender, EventArgs args)
     {
+        if (ReferenceEquals(sender, _faceLimit))
+        {
+            if (_normalizingFaceLimit)
+            {
+                return;
+            }
+
+            _ = ReadAndSnapFaceLimit();
+        }
+
+        PersistUserSettings();
+        RequestRender();
+    }
+
+    private void OnFaceLimitLostFocus(object? sender, EventArgs args)
+    {
+        if (_normalizingFaceLimit)
+        {
+            return;
+        }
+
+        _ = ReadAndSnapFaceLimit();
         PersistUserSettings();
         RequestRender();
     }
@@ -1634,7 +1663,7 @@ public sealed class TripoRhinoPanel : Panel, IPanel
                         "generation.");
                 preparedImage = ownerSession.PrepareImageGeneration(
                     image,
-                    checked((int)_faceLimit.Value),
+                    ReadAndSnapFaceLimit(),
                     _withMaterials.Checked == true);
                 preparedOperationId = preparedImage.OperationId;
                 preparedDocumentSessionId = preparedImage.DocumentSessionId;
@@ -1643,7 +1672,7 @@ public sealed class TripoRhinoPanel : Panel, IPanel
             {
                 preparedText = ownerSession.PrepareGeneration(
                     _prompt.Text,
-                    checked((int)_faceLimit.Value),
+                    ReadAndSnapFaceLimit(),
                     _withMaterials.Checked == true);
                 preparedOperationId = preparedText.OperationId;
                 preparedDocumentSessionId = preparedText.DocumentSessionId;
@@ -1952,7 +1981,7 @@ public sealed class TripoRhinoPanel : Panel, IPanel
             _session.State.PreparedGeneration ??
             _session.PrepareGeneration(
                 _prompt.Text,
-                checked((int)_faceLimit.Value),
+                ReadAndSnapFaceLimit(),
                 _withMaterials.Checked == true);
         PersistUserSettings();
         RequestRender();
@@ -1983,7 +2012,7 @@ public sealed class TripoRhinoPanel : Panel, IPanel
             _session.State.PreparedImageGeneration ??
             _session.PrepareImageGeneration(
                 _stagedImage,
-                checked((int)_faceLimit.Value),
+                ReadAndSnapFaceLimit(),
                 _withMaterials.Checked == true);
         PersistUserSettings();
         RequestRender();
@@ -2190,7 +2219,7 @@ public sealed class TripoRhinoPanel : Panel, IPanel
             Tripo.HostUi.PreparedObjConversion prepared =
                 _session.State.PreparedConversion ??
                 _session.PrepareConversion(
-                    checked((int)_faceLimit.Value),
+                    ReadAndSnapFaceLimit(),
                     _withMaterials.Checked == true);
             RequestRender();
             if (!ConfirmPaidDispatch(
@@ -2991,7 +3020,9 @@ public sealed class TripoRhinoPanel : Panel, IPanel
     private void ApplyUserSettings(
         Tripo.HostUi.RhinoPanelUserSettings settings)
     {
-        _faceLimit.Value = settings.FaceLimit;
+        _lastValidFaceLimit =
+            Tripo.HostUi.RhinoPanelFaceLimitPolicy.Clamp(settings.FaceLimit);
+        _faceLimit.Value = _lastValidFaceLimit;
         _withMaterials.Checked = settings.WithMaterials;
         _name.Text = settings.ObjectName;
         _lastValidObjectName = settings.ObjectName;
@@ -3007,13 +3038,41 @@ public sealed class TripoRhinoPanel : Panel, IPanel
         try
         {
             new Tripo.HostUi.RhinoPanelUserSettings(
-                checked((int)_faceLimit.Value),
+                ReadAndSnapFaceLimit(),
                 _withMaterials.Checked == true,
                 _lastValidObjectName).Save();
         }
         catch
         {
             // Preferences are best-effort and never block a workflow.
+        }
+    }
+
+    private int ReadAndSnapFaceLimit()
+    {
+        if (_normalizingFaceLimit)
+        {
+            return _lastValidFaceLimit;
+        }
+
+        _normalizingFaceLimit = true;
+        try
+        {
+            _ = Tripo.HostUi.RhinoPanelFaceLimitPolicy.TrySnapInteractive(
+                _faceLimit.Value,
+                _lastValidFaceLimit,
+                out int snapped);
+            _lastValidFaceLimit = snapped;
+            if (!_faceLimit.Value.Equals((double)snapped))
+            {
+                _faceLimit.Value = snapped;
+            }
+
+            return snapped;
+        }
+        finally
+        {
+            _normalizingFaceLimit = false;
         }
     }
 

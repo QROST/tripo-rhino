@@ -4,12 +4,12 @@ using System.Text.Json;
 namespace Tripo.HostUi;
 
 internal sealed record RhinoPanelUserSettings(
-    int FaceLimit = 20_000,
+    int FaceLimit = RhinoPanelFaceLimitPolicy.Default,
     bool WithMaterials = true,
     string ObjectName = "Tripo Model")
 {
     internal const int CurrentSchemaVersion = 1;
-    internal const int DefaultFaceLimit = 20_000;
+    internal const int DefaultFaceLimit = RhinoPanelFaceLimitPolicy.Default;
     internal const string DefaultObjectName = "Tripo Model";
     internal const int MaximumSettingsBytes = 16 * 1024;
 
@@ -176,9 +176,7 @@ internal sealed record RhinoPanelUserSettings(
 
     private RhinoPanelUserSettings Normalize()
     {
-        int faceLimit = FaceLimit is >= 500 and <= 200_000
-            ? FaceLimit
-            : DefaultFaceLimit;
+        int faceLimit = RhinoPanelFaceLimitPolicy.Clamp(FaceLimit);
         if (!TryNormalizeObjectName(ObjectName, out string objectName))
         {
             objectName = DefaultObjectName;

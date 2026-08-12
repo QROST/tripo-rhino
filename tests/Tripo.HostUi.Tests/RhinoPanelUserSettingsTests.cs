@@ -103,18 +103,20 @@ public sealed class RhinoPanelUserSettingsTests
         Assert.Equal(new Tripo.HostUi.RhinoPanelUserSettings(), settings);
     }
 
-    [Fact]
-    public void LoadNormalizesUnsafeOrUnsupportedValues()
+    [Theory]
+    [InlineData(1, 500)]
+    [InlineData(999_999, 200_000)]
+    public void LoadSnapsLegacyOutOfRangeFaceLimitToTheNearestEndpoint(
+        int faceLimit,
+        int expectedFaceLimit)
     {
         string root = CreateTemporaryRoot();
         try
         {
             string path = Path.Combine(root, "rhino-panel.json");
-            File.WriteAllText(
-                path,
-                """
+            File.WriteAllText(path, $$"""
                 {
-                  "faceLimit": 1,
+                  "faceLimit": {{faceLimit}},
                   "withMaterials": false,
                   "objectName": "                                                                                                                                 ",
                   "importMode": "family",
@@ -125,10 +127,47 @@ public sealed class RhinoPanelUserSettingsTests
             Tripo.HostUi.RhinoPanelUserSettings settings =
                 Tripo.HostUi.RhinoPanelUserSettings.Load(path);
 
-            Assert.Equal(20_000, settings.FaceLimit);
+            Assert.Equal(expectedFaceLimit, settings.FaceLimit);
             Assert.False(settings.WithMaterials);
             Assert.Equal("Tripo Model", settings.ObjectName);
             Assert.Equal(1, settings.SchemaVersion);
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Theory]
+    [InlineData(int.MinValue, 500)]
+    [InlineData(499, 500)]
+    [InlineData(500, 500)]
+    [InlineData(48_000, 48_000)]
+    [InlineData(200_000, 200_000)]
+    [InlineData(200_001, 200_000)]
+    [InlineData(int.MaxValue, 200_000)]
+    public void SaveAndLoadRoundTripSnapsFaceLimitToTheNearestEndpoint(
+        int faceLimit,
+        int expected)
+    {
+        string root = CreateTemporaryRoot();
+        try
+        {
+            string path = Path.Combine(root, "rhino-panel.json");
+
+            new Tripo.HostUi.RhinoPanelUserSettings(
+                faceLimit,
+                WithMaterials: true,
+                ObjectName: "Boundary model").Save(path);
+
+            Tripo.HostUi.RhinoPanelUserSettings settings =
+                Tripo.HostUi.RhinoPanelUserSettings.Load(path);
+
+            Assert.Equal(expected, settings.FaceLimit);
+            Assert.Contains(
+                $"\"faceLimit\": {expected}",
+                File.ReadAllText(path),
+                StringComparison.Ordinal);
         }
         finally
         {
