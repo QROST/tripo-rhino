@@ -297,9 +297,14 @@ roots，无法建立正确的 bridge 连接。
    conversion task，也不消耗第二次 conversion credits。后台 status failure 会暂停，
    只显示内联 guidance 与不含敏感信息的 Rhino command-history 消息；点击
    **Refresh generation** 会用同一 UUID 重试。
-6. Rhino 会在私有本地 `ui-settings/rhino-panel.json` preference file 中记住最后
-   一次合法的 face limit、材质偏好与 object name；不会保存 prompt、API key、
-   task/operation ID、document path 或 import source。
+6. 当前 plug-in 的 Rhino-compatible face-limit envelope 为闭区间
+   **500–200,000**；这是当前 import pipeline 的运行限制，并不代表 Tripo provider
+   所有模型/模式的 universal range。panel 会标注该范围，交互输入低于/高于范围时，
+   会在保存或 dispatch 前分别 snap 到 500/200,000。Rhino 会在私有本地
+   `ui-settings/rhino-panel.json` preference file 中记住归一化后的 face limit、材质
+   偏好与 object name；不会保存 prompt、API key、task/operation ID、document path
+   或 import source。MCP 与 GHA 的程序化输入继续 strict reject：超出
+   500–200,000 的值不会被静默 snap。
 7. 只有 direct GLB 不可用，或明确需要 OBJ/GH mesh 时，才使用 **Advanced** 手工
    action 与 **OBJ compatibility**。手工 generation、OBJ conversion，以及每一次
    paid same-UUID retry 都继续保留显式费用确认。
@@ -427,7 +432,9 @@ MCP 入口通过以下九个 tools 暴露同一套 shared workflow：
 输入边界：
 
 - `prompt`：1–1024 个字符；
-- `faceLimit`：500–200000；
+- `faceLimit`：当前 Rhino plug-in import envelope 的闭区间 500–200000。MCP 对
+  更低或更高的值直接拒绝，不执行 snap；该 plug-in-specific envelope 不代表 Tripo
+  每种 model/provider mode 的 universal range；
 - 导入对象 `name`：1–128 个字符；
 - task ID 必须原样使用 Tripo 返回值：接受当前 v3 的 `task_...`，也接受
   legacy-compatible response 中的 canonical lowercase UUID；

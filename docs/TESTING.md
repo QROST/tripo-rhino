@@ -47,8 +47,8 @@ The automated suite covers:
 - host UI state, recovery hints, explicit paid confirmations, and stable UUID
   retries;
 - bounded, private, atomically replaced Rhino panel preferences with
-  schema/corruption fallback and no prompt, credential, workflow identity, or
-  OBJ-route persistence;
+  endpoint snapping, safe NaN/infinity handling, schema/corruption fallback,
+  and no prompt, credential, workflow identity, or OBJ-route persistence;
 - host-agnostic UI render coalescing, including leading busy and trailing final
   state, stale-session replacement, and disposal before queued callbacks;
 - MCP schema plus real stdio initialization/tool-list handshakes;
@@ -100,9 +100,17 @@ exercised macOS panel/credential/generation checks after each deployed revision:
    clearable stored key; Cancel performs no mutation; confirmation clears the
    session and stored keys; and an environment override remains effective
    while disabling panel credential actions until Rhino restarts without it.
-4. Change face limit, generated-material preference, and object name; construct
-   a fresh panel and verify those three values return while the prompt does not
-   and **Direct GLB (recommended)** is selected again. Run text
+4. Verify the face-limit label shows **500–200,000**. Type or paste `499`, then
+   blur the field and verify both the control and persisted preference show
+   `500`. Type or paste `200001`, click **Create in Rhino** without first
+   blurring, and verify the control and submitted generation show `200000`.
+   Repeat at exact `500` and `200000`; confirm each click creates at most one
+   paid generation UUID (no ValueChanged/focus recursion or duplicate
+   dispatch). Then change generated-material preference and object name;
+   construct a fresh panel and verify the normalized face limit and those two
+   values return while the prompt does not and **Direct GLB (recommended)** is
+   selected again. Confirm the MCP and GHA paths still reject `499` and
+   `200001` rather than snapping them. Run text
    generation/status, then verify direct GLB creates one PBR block without a
    conversion task or second charge. Separately run OBJ conversion and both
    `mesh` and `instance` compatibility imports with explicit cost

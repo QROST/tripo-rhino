@@ -330,10 +330,16 @@ during recovery.
    creates no conversion task, and consumes no second conversion credits.
    A background status failure pauses with inline guidance and a non-sensitive
    Rhino command-history message; **Refresh generation** retries the same UUID.
-6. Rhino remembers the last valid face limit, material preference, and object
-   name in the private local `ui-settings/rhino-panel.json` preference file. It
-   does not store the prompt, API key, task/operation IDs, document path, or
-   import source.
+6. This plug-in's current Rhino-compatible face-limit envelope is inclusive
+   **500–200,000**; this is an operational limit of this import pipeline, not a
+   claim about a universal Tripo provider range. The panel labels the range and
+   snaps interactive values below/above it to 500/200,000 before saving or
+   dispatching. Rhino remembers that normalized face limit, material
+   preference, and object name in the private local
+   `ui-settings/rhino-panel.json` preference file. It does not store the prompt,
+   API key, task/operation IDs, document path, or import source. MCP and GHA
+   programmatic inputs remain strict: values outside 500–200,000 are rejected,
+   never silently snapped.
 7. Use the manual **Advanced** actions and **OBJ compatibility** only when
    direct GLB is unavailable or an OBJ/GH mesh is specifically required.
    Manual generation, OBJ conversion, and every paid same-UUID retry retain
@@ -480,7 +486,10 @@ The MCP front door exposes the same shared workflow as these nine tools:
 Input boundaries:
 
 - `prompt`: 1–1024 characters;
-- `faceLimit`: 500–200000;
+- `faceLimit`: inclusive 500–200000 for this Rhino plug-in's current import
+  envelope. MCP rejects lower or higher values rather than snapping them; this
+  plug-in-specific envelope is not a universal statement of every Tripo model
+  or provider mode;
 - imported object `name`: 1–128 characters;
 - task IDs are used exactly as returned by Tripo: current v3 `task_...` IDs
   and canonical lowercase UUIDs from legacy-compatible responses are accepted;
