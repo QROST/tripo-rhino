@@ -9,7 +9,7 @@ plus a SHA-256 sidecar under `artifacts/`.
 dotnet restore Tripo.Rhino.sln
 dotnet build Tripo.Rhino.sln --configuration Release --no-restore
 dotnet test Tripo.Rhino.sln --configuration Release --no-build
-./packaging/New-ReleaseCandidate.ps1 -Version v0.1.0
+./packaging/New-ReleaseCandidate.ps1 -Version v0.2.0
 ```
 
 The tag workflow uploads only a short-lived GitHub Actions artifact. It does
@@ -77,7 +77,7 @@ YAK="/Applications/Rhino 8.app/Contents/Resources/bin/yak"
 `yak build` emits two informational warnings that do not block packaging:
 
 - *Content version doesn't match manifest* — the assembly carries a
-  SourceLink-derived `0.1.0+<git-sha>` while the manifest declares `0.1.0`.
+  SourceLink-derived `0.2.0+<git-sha>` while the manifest declares `0.2.0`.
   This is expected under `Deterministic=true`; the manifest version wins for
   the Yak index.
 - *Content name doesn't match manifest* — the assembly is `Tripo.Rhino` but

@@ -41,7 +41,7 @@ sidecar 是唯一解析、存储或使用 Tripo API key 的进程。plug-in 的 
 > Windows CI 还会对隔离、合成的 Credential Manager target 执行
 > write/read/delete canary。可选 GHA 加载、production-user Credential Manager、
 > Windows 宿主加载、Undo、scale/orientation、性能与视觉/材质验收仍是彼此独立的
-> open gates。目前没有 Yak package、安装器、签名、notarization 或自动更新机制。
+> open gates。Rhino Package Manager（Yak）包 `tripo-rhino` 是打包分发路径。没有安装器、签名、notarization，也没有超出 Yak 包版本之外的自动更新。
 
 GHA 的详细构建、安装、components、隐私与恢复说明见
 [Grasshopper 指南](./src/Tripo.Rhino.Grasshopper/README.zh-CN.md)。
@@ -109,7 +109,11 @@ revision。
 
 ## 安装 Rhino plug-in
 
-当前仓库只提供手动开发安装方式。
+打包发布已上架 Rhino Package Manager（Yak）。在 Rhino 8 中运行 `_PackageManager`，
+搜索 `tripo-rhino` 并安装。该路径包含 `.rhp`、sidecar 与可选 `.gha`。没有安装器、
+签名、notarization，也没有超出 Yak 包版本之外的自动更新。
+
+下列步骤仍是手动开发安装方式。
 
 ### Windows
 
@@ -154,9 +158,9 @@ Rhino for Mac 不使用 Windows Plug-in Manager 流程。手动、按版本安�
 McNeel 文档说明了 `.rhp` package-folder 约定，以及 Rhino 8 按版本使用的
 `MacPlugIns` 位置：
 [Plugin Installers (Mac)](https://developer.rhino3d.com/guides/rhinocommon/plugin-installers-mac/)。
-McNeel 目前说明 `.macrhi` 已不再积极开发，并建议使用 Package Manager。本仓库既
-没有 Yak package，也没有 `.macrhi`。上述 package-folder layout 已在 macOS Rhino
-8 开发宿主中实际使用，但它不是已签名或普遍支持的安装器。
+McNeel 目前说明 `.macrhi` 已不再积极开发，并建议使用 Package Manager。本仓库发布
+Yak 包（`tripo-rhino`），不提供 `.macrhi`。上述 package-folder layout 已在 macOS
+Rhino 8 开发宿主中实际使用，但它不是已签名或普遍支持的安装器。
 
 ## 安装可选 Grasshopper components
 
@@ -650,7 +654,7 @@ Tripo task/billing history；不要自动发送另一个付费请求。进程被
   output 与 animation。
 - GHA 只支持 scalar、interactive workflow；没有 Grasshopper Player、headless、
   automatic polling、automatic material binding 或 one-call paid workflow。
-- 没有 Yak package、安装器、签名、notarization 或自动更新。
+- 没有安装器、签名、notarization，也没有超出 Yak 包版本之外的自动更新。
 - Production HTTP connections 有意不使用 system proxies。
 - macOS 真实宿主已部分验收 panel loading、Keychain-backed credential、
   generation、status polling、direct GLB import 与即时同 UUID replay。

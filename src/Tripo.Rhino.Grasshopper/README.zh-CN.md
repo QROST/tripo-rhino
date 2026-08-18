@@ -100,7 +100,7 @@ plug-in package，也不能替代完整 Rhino host output。
    目录注册 GHA。
 7. 确认 **Tripo → Generate** 下能看到全部三个 components。
 
-目前只提供手动开发安装，没有 Yak package、安装器、签名、notarization 或自动更新。
+打包后的 `.gha` 已包含在 Yak 包 `tripo-rhino` 中。下列步骤仍是手动开发安装。没有安装器、签名、notarization，也没有超出 Yak 包版本之外的自动更新。
 McNeel 在
 [Grasshopper Folders API](https://developer.rhino3d.com/api/grasshopper/html/T_Grasshopper_Folders.htm)
 说明 assembly folders，并在
@@ -205,7 +205,7 @@ upload。ambiguous upload 或 generation 会记录为 `outcome_unknown`，且绝
 - 没有 one-call generation/conversion workflow，也不自动 polling。
 - 没有 Grasshopper Player、headless、compiled-command 或 unattended paid mode。
 - 不自动绑定 GH/Rhino materials。
-- 没有 Yak package 或自动安装。
+- 没有安装器，也没有超出 Yak 包版本之外的自动更新。
 - 真实 Rhino/Grasshopper Windows/macOS 加载、UI、scale 与视觉验收仍是 open gates。
 
 规范 safety 与 evidence boundary 见

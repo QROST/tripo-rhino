@@ -47,8 +47,9 @@ the key to Rhino settings or the `.3dm` document.
 > write/read/delete canary. Optional GHA loading, production-user Credential
 > Manager, Windows host loading, Undo, scale/orientation, performance, and
 > visual/material acceptance remain separate open gates.
-> There is no Yak package, installer, signing, notarization, or automatic update
-> mechanism.
+> The Rhino Package Manager (Yak) package `tripo-rhino` is the packaged
+> distribution path. There is no installer, signing, notarization, or automatic
+> update beyond Yak package versions.
 
 For GHA-specific build, installation, component, privacy, and recovery details,
 see the [Grasshopper guide](./src/Tripo.Rhino.Grasshopper/README.md).
@@ -123,7 +124,12 @@ revision.
 
 ## Install the Rhino plug-in
 
-This repository currently provides only a manual development installation.
+The packaged release is on Rhino Package Manager (Yak). In Rhino 8, run
+`_PackageManager`, search `tripo-rhino`, and install. That path includes the
+`.rhp`, sidecar, and optional `.gha`. There is no installer, signing,
+notarization, or automatic update beyond Yak package versions.
+
+The steps below remain the manual development installation.
 
 ### Windows
 
@@ -172,9 +178,10 @@ McNeel documents the `.rhp` package-folder convention and the Rhino 8
 version-specific `MacPlugIns` location:
 [Plugin Installers (Mac)](https://developer.rhino3d.com/guides/rhinocommon/plugin-installers-mac/).
 McNeel now describes `.macrhi` as no longer under active development and points
-authors to Package Manager. This repository provides neither a Yak package nor
-a `.macrhi`. The package-folder layout above has been exercised on a macOS
-Rhino 8 development host; it is not a signed or generally supported installer.
+authors to Package Manager. This repository publishes a Yak package
+(`tripo-rhino`) and does not ship a `.macrhi`. The package-folder layout above
+has been exercised on a macOS Rhino 8 development host; it is not a signed or
+generally supported installer.
 
 ## Install the optional Grasshopper components
 
@@ -743,7 +750,7 @@ switching to `instance`.
 - The GHA is scalar-only and interactive-only: no Grasshopper Player, headless
   execution, automatic polling, automatic material binding, or one-call paid
   workflow.
-- No Yak package, installer, signing, notarization, or automatic update.
+- No installer, signing, notarization, or automatic update beyond Yak package versions.
 - Production HTTP connections intentionally do not use system proxies.
 - Real-host acceptance is partial on macOS for panel loading, Keychain-backed
   credentials, generation, status polling, direct GLB import, and immediate

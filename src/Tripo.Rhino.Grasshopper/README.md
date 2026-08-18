@@ -107,8 +107,9 @@ standalone plug-in package and does not replace the complete Rhino host output.
    directory that may be deleted by `dotnet clean`.
 7. Confirm that **Tripo → Generate** contains all three components.
 
-This is a manual development installation. There is no Yak package, installer,
-signing, notarization, or automatic update mechanism. McNeel documents
+The packaged `.gha` ships inside the Yak package `tripo-rhino`. The steps below
+remain the manual development installation. There is no installer, signing,
+notarization, or automatic update beyond Yak package versions. McNeel documents
 Grasshopper package assembly folders in the
 [Grasshopper Folders API](https://developer.rhino3d.com/api/grasshopper/html/T_Grasshopper_Folders.htm)
 and future `.gha` packaging in its
@@ -223,7 +224,7 @@ as `outcome_unknown` and is never automatically resent.
 - No one-call generation/conversion workflow and no automatic polling.
 - No Grasshopper Player, headless, compiled-command, or unattended paid mode.
 - No automatic GH/Rhino material binding.
-- No Yak package or automated installation.
+- No installer or automatic update beyond Yak package versions.
 - Real Rhino/Grasshopper Windows/macOS loading, UI, scale, and visual
   acceptance remain open gates.
 
