@@ -5,6 +5,19 @@ separate `rhino/`, `grasshopper/`, and optional standalone `mcp/` directories.
 It refuses a version that differs from the root `VERSION` file and emits a ZIP
 plus a SHA-256 sidecar under `artifacts/`.
 
+Existing candidate directories, ZIPs, and checksums are never overwritten.
+Assembly runs in a unique temporary directory, under an exclusive per-version
+lock, and publishes the completed ZIP last. A handled failure removes only this
+invocation's outputs. A process crash can leave a `.candidate-*` directory, a
+`.lock`, or partial final outputs; inspect and preserve that evidence, confirm
+the builder has stopped, then move it aside before retrying. Do not remove an
+active builder's lock. Packages include the repository `LICENSE` and `NOTICE`.
+
+Run `pwsh -NoProfile -File ./packaging/Test-ReleaseCandidate.ps1` for isolated,
+synthetic-file coverage of layout/checksum, existing-output preservation, lock
+refusal, compression failure, late output collisions, and retry cleanup. CI
+runs it on macOS and Windows. These tests do not load Rhino or publish anything.
+
 ```powershell
 dotnet restore Tripo.Rhino.sln
 dotnet build Tripo.Rhino.sln --configuration Release --no-restore

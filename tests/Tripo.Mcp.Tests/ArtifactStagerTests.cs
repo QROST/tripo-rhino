@@ -694,6 +694,23 @@ public sealed class ArtifactStagerTests
     [InlineData("2002:c0a8:0101::1", false)]
     [InlineData("2001:0000:4136:e378::1", false)]
     [InlineData("2001:4860:4860::8888", true)]
+    [InlineData("::127.0.0.1", false)]
+    [InlineData("::10.0.0.1", false)]
+    [InlineData("::ffff:127.0.0.1", false)]
+    [InlineData("::ffff:8.8.8.8", true)]
+    [InlineData("64:ff9b::127.0.0.1", false)]
+    [InlineData("64:ff9b:1::a00:1", false)]
+    [InlineData("100::1", false)]
+    [InlineData("100:0:0:1::1", false)]
+    [InlineData("2001:2::1", false)]
+    [InlineData("2001:1ff:ffff::1", false)]
+    [InlineData("2001:200::1", true)]
+    [InlineData("2001:db8::1", false)]
+    [InlineData("3fff:fff:ffff::1", false)]
+    [InlineData("3fff:1000::1", true)]
+    [InlineData("4000::1", false)]
+    [InlineData("5f00::1", false)]
+    [InlineData("2606:4700:4700::1111%2", false)]
     public void PublicAddressPolicyIsFailClosed(string value, bool expected)
     {
         Assert.Equal(

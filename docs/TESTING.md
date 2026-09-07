@@ -46,6 +46,11 @@ The automated suite covers:
   and stale tombstone deletion;
 - host UI state, recovery hints, explicit paid confirmations, and stable UUID
   retries;
+- provider read cooldowns that exceed the local backoff cap, and refusal to
+  retry when the cooldown exceeds the remaining query deadline;
+- Grasshopper attachment/action lifetime logic: remove/restore enables later
+  explicit actions, invalidates old callbacks and pre-dispatch intent, and
+  keeps an in-flight request's recovery store alive until completion;
 - bounded, private, atomically replaced Rhino panel preferences with
   endpoint snapping, safe NaN/infinity handling, schema/corruption fallback,
   and no prompt, credential, workflow identity, or OBJ-route persistence;
@@ -143,6 +148,14 @@ exercised macOS panel/credential/generation checks after each deployed revision:
     unexpected document mutation from Grasshopper recompute.
 14. Verify package layout from a clean checkout rather than a developer `bin/`
    directory.
+15. For each GHA component, remove it, restore it with Undo, and verify its
+    explicit menu actions remain usable without a paid request on recompute.
+    Repeat while the sidecar connection is delayed: the old action must not
+    dispatch after restoration, and a new action must wait for it to finish.
+    Remove a component after a paid request is sent and verify its existing
+    journal still records completion. During delayed mesh loading, remove and
+    restore the mesh component and confirm the old mesh/queued solution is not
+    published into the restored component.
 
 Static checks, unit/process tests, real Rhino interaction, visual acceptance,
 signing/notarization, and public release are distinct evidence classes.

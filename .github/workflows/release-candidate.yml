@@ -14,6 +14,8 @@ jobs:
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
       - uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9 # v4
         with:
           dotnet-version: 8.0.x
@@ -24,8 +26,10 @@ jobs:
       - name: Test
         run: dotnet test Tripo.Rhino.sln --configuration Release --no-build
       - name: Assemble candidate
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
         shell: pwsh
-        run: ./packaging/New-ReleaseCandidate.ps1 -Version "${{ github.ref_name }}"
+        run: ./packaging/New-ReleaseCandidate.ps1 -Version $env:RELEASE_TAG
       - name: Upload candidate
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:

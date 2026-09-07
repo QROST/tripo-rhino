@@ -530,7 +530,7 @@ public sealed class TripoTaskMeshComponent : TripoCanvasComponent
                 .ConfigureAwait(false);
             lock (_stateGate)
             {
-                if (IsRemoved ||
+                if (!IsActionCurrent ||
                     _input is null ||
                     !string.Equals(
                         _input.Fingerprint,
@@ -614,7 +614,7 @@ public sealed class TripoTaskMeshComponent : TripoCanvasComponent
                 try
                 {
                     cancellationToken.ThrowIfCancellationRequested();
-                    if (!binding.Matches(OnPingDocument()))
+                    if (!IsActionCurrent || !binding.Matches(OnPingDocument()))
                     {
                         throw new InvalidOperationException(
                             "The Grasshopper/Rhino document binding changed " +

@@ -248,6 +248,11 @@ same user.
 - Only HTTPS downloads are accepted.
 - API-key headers are not sent to signed artifact URLs.
 - Production API and download connections disable proxy and cookie state, resolve DNS once, reject any non-public address, and connect to the vetted endpoint directly.
+- Native IPv6 downloads are restricted to global unicast `2000::/3`, excluding
+  scoped addresses, protocol assignments `2001::/23`, 6to4, and documentation
+  ranges. IPv4-compatible and NAT64 destinations are refused; IPv4-mapped
+  addresses must pass the IPv4 policy. This deliberately excludes special
+  services and translation networks even where they might be routable.
 - Redirect count, compressed bytes, expanded bytes, OBJ vertices, faces, and
   coordinate magnitude are bounded.
 - Independent deadlines cover response headers and the complete response body.
@@ -339,6 +344,10 @@ same user.
 - Outcome-unknown operations refuse automatic resend. Preserve the original UUID and inspect local status plus provider task/billing history.
 - If a valid task ID was checkpointed but the MCP response was lost, the same UUID replays that ID without another POST.
 - Task status is queried separately with bounded read retries and a hard local deadline; no server-side long-poll loop hides a paid task ID.
+- Read retries honor the provider's `Retry-After` rather than shortening it to
+  the local exponential-backoff cap. If the cooldown cannot fit within the
+  remaining read deadline, the original error is returned without another
+  request.
 - Unknown task states fail closed.
 - Task-query responses must carry the exact requested task ID.
 - Cancelling a local status query does not claim that a remote task was cancelled.

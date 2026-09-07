@@ -1211,6 +1211,62 @@ public sealed class TripoWorkflowTests : IDisposable
     }
 
     [Fact]
+    public async Task TaskReadHonorsProviderCooldownAboveLocalBackoffCap()
+    {
+        FakeApiClient api = new();
+        TimeSpan cooldown = TimeSpan.FromMilliseconds(50);
+        api.TaskReadFailures.Enqueue(new Tripo.Mcp.TripoApiException(
+            "Rate limited.",
+            HttpStatusCode.TooManyRequests,
+            retryAfter: cooldown));
+        api.TaskSnapshots.Enqueue(Success("task_source123", "text_to_model", null));
+        RecordingTimeProvider timeProvider = new();
+        Tripo.Mcp.TripoWorkflow workflow = new(
+            api,
+            new FakeArtifactStager(),
+            new FakeHostConnection(),
+            _journal,
+            new Tripo.Mcp.TripoWorkflowOptions(
+                TimeSpan.FromSeconds(10),
+                TimeSpan.FromMilliseconds(1),
+                TimeSpan.FromMilliseconds(2),
+                MaximumReadRetries: 1),
+            timeProvider);
+
+        Tripo.Mcp.TaskStatusReceipt receipt = await workflow.GetTaskStatusAsync(
+            "task_source123",
+            CancellationToken.None);
+
+        Assert.Equal("task_source123", receipt.TaskId);
+        Assert.Equal(2, api.GetTaskCalls);
+        Assert.Contains(cooldown, timeProvider.DueTimes);
+        Assert.DoesNotContain(TimeSpan.FromMilliseconds(2), timeProvider.DueTimes);
+    }
+
+    [Fact]
+    public async Task TaskReadReturnsOriginalErrorWhenCooldownExceedsReadBudget()
+    {
+        Tripo.Mcp.TripoApiException rateLimit = new(
+            "Rate limited.",
+            HttpStatusCode.TooManyRequests,
+            retryAfter: TimeSpan.MaxValue);
+        FakeApiClient api = new() { TaskReadException = rateLimit };
+        Tripo.Mcp.TripoWorkflow workflow = CreateWorkflow(
+            api,
+            new FakeArtifactStager(),
+            new FakeHostConnection());
+
+        Tripo.Mcp.TripoApiException exception =
+            await Assert.ThrowsAsync<Tripo.Mcp.TripoApiException>(
+                () => workflow.GetTaskStatusAsync(
+                    "task_source123",
+                    CancellationToken.None));
+
+        Assert.Same(rateLimit, exception);
+        Assert.Equal(1, api.GetTaskCalls);
+    }
+
+    [Fact]
     public async Task HungTaskReadIsBoundedByTheWorkflowDeadline()
     {
         FakeApiClient api = new()
@@ -1458,6 +1514,8 @@ public sealed class TripoWorkflowTests : IDisposable
     {
         public Queue<Tripo.Mcp.TripoTaskSnapshot> TaskSnapshots { get; } = new();
 
+        public Queue<Tripo.Mcp.TripoApiException> TaskReadFailures { get; } = new();
+
         public int CreateTextCalls { get; private set; }
 
         public int CreateConversionCalls { get; private set; }
@@ -1653,6 +1711,11 @@ public sealed class TripoWorkflowTests : IDisposable
             CancellationToken cancellationToken)
         {
             GetTaskCalls++;
+            if (TaskReadFailures.TryDequeue(out Tripo.Mcp.TripoApiException? failure))
+            {
+                return Task.FromException<Tripo.Mcp.TripoTaskSnapshot>(failure);
+            }
+
             if (TaskReadException is not null)
             {
                 return Task.FromException<
@@ -1667,6 +1730,21 @@ public sealed class TripoWorkflowTests : IDisposable
             }
 
             return Task.FromResult(TaskSnapshots.Dequeue());
+        }
+    }
+
+    private sealed class RecordingTimeProvider : TimeProvider
+    {
+        public List<TimeSpan> DueTimes { get; } = [];
+
+        public override ITimer CreateTimer(
+            TimerCallback callback,
+            object? state,
+            TimeSpan dueTime,
+            TimeSpan period)
+        {
+            DueTimes.Add(dueTime);
+            return base.CreateTimer(callback, state, dueTime, period);
         }
     }
 

@@ -8,8 +8,7 @@ namespace Tripo.Rhino.Grasshopper.Runtime;
 public abstract class TripoCanvasComponent : GH_Component
 {
     private Tripo.HostUi.TripoPanelRecoveryStore? _recoveryStore;
-    private int _actionInProgress;
-    private int _removed;
+    private readonly Tripo.HostUi.ComponentActionLifetime _lifetime = new();
 
     protected TripoCanvasComponent(
         string name,
@@ -24,41 +23,13 @@ public abstract class TripoCanvasComponent : GH_Component
     // by ScheduleCanvasUpdate when the originating document is gone.
     protected static CancellationToken LifetimeToken => CancellationToken.None;
 
-    protected bool IsRemoved => Volatile.Read(ref _removed) != 0;
+    protected bool IsActionCurrent => _lifetime.IsActionCurrent;
 
-    protected void MarkRemoved()
-    {
-        Volatile.Write(ref _removed, 1);
-    }
+    protected void MarkRemoved() => _lifetime.Remove(DisposeRecoveryStore);
 
-    protected bool TryBeginAction()
-    {
-        if (Volatile.Read(ref _removed) != 0 ||
-            Interlocked.CompareExchange(
-                ref _actionInProgress,
-                1,
-                0) != 0)
-        {
-            return false;
-        }
+    protected bool TryBeginAction() => _lifetime.TryBeginAction();
 
-        if (Volatile.Read(ref _removed) != 0)
-        {
-            EndAction();
-            return false;
-        }
-
-        return true;
-    }
-
-    protected void EndAction()
-    {
-        Volatile.Write(ref _actionInProgress, 0);
-        if (Volatile.Read(ref _removed) != 0)
-        {
-            DisposeRecoveryStore();
-        }
-    }
+    protected void EndAction() => _lifetime.EndAction(DisposeRecoveryStore);
 
     protected CanvasBinding CaptureBinding() =>
         CanvasBinding.Capture(
@@ -68,7 +39,7 @@ public abstract class TripoCanvasComponent : GH_Component
 
     protected void EnsurePaidActionStillBound(CanvasBinding binding)
     {
-        if (IsRemoved || !binding.Matches(OnPingDocument()))
+        if (!IsActionCurrent || !binding.Matches(OnPingDocument()))
         {
             throw new InvalidOperationException(
                 "The originating Grasshopper/Rhino document or component " +
@@ -222,11 +193,13 @@ public abstract class TripoCanvasComponent : GH_Component
         CanvasBinding? binding = null,
         Action? beforeSolution = null)
     {
+        long? attachment = _lifetime.ActionAttachment;
         global::Rhino.RhinoApp.InvokeOnUiThread(
             new Action(() =>
             {
                 GH_Document? document = OnPingDocument();
-                if (document is null ||
+                if (!_lifetime.MatchesAttachment(attachment) ||
+                    document is null ||
                     (binding is not null && !binding.Matches(document)))
                 {
                     return;
@@ -235,7 +208,15 @@ public abstract class TripoCanvasComponent : GH_Component
                 beforeSolution?.Invoke();
                 document.ScheduleSolution(
                     1,
-                    _ => ExpireSolution(recompute: false));
+                    _ =>
+                    {
+                        if (_lifetime.MatchesAttachment(attachment) &&
+                            ReferenceEquals(OnPingDocument(), document) &&
+                            (binding is null || binding.Matches(document)))
+                        {
+                            ExpireSolution(recompute: false);
+                        }
+                    });
             }));
     }
 
@@ -293,14 +274,15 @@ public abstract class TripoCanvasComponent : GH_Component
                 echo: false));
     }
 
+    public override void AddedToDocument(GH_Document document)
+    {
+        base.AddedToDocument(document);
+        _lifetime.Attach();
+    }
+
     public override void RemovedFromDocument(GH_Document document)
     {
         MarkRemoved();
-        if (Volatile.Read(ref _actionInProgress) == 0)
-        {
-            DisposeRecoveryStore();
-        }
-
         base.RemovedFromDocument(document);
     }
 

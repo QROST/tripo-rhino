@@ -30,3 +30,6 @@ jobs:
         env:
           TRIPO_RUN_WINDOWS_CREDENTIAL_MANAGER_CANARY: ${{ runner.os == 'Windows' && '1' || '0' }}
         run: dotnet test Tripo.Rhino.sln --configuration Release --no-build
+      - name: Test release candidate assembly with synthetic files
+        shell: pwsh
+        run: ./packaging/Test-ReleaseCandidate.ps1

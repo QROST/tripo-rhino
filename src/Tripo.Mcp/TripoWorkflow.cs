@@ -693,6 +693,7 @@ public sealed class TripoWorkflow : ITripoWorkflow
                 cancellationToken,
                 readDeadline.Token);
         CancellationToken readToken = readCancellation.Token;
+        long startedAt = _timeProvider.GetTimestamp();
         TimeSpan delay = _options.InitialReadRetryDelay;
         try
         {
@@ -710,12 +711,20 @@ public sealed class TripoWorkflow : ITripoWorkflow
                           attempt < _options.MaximumReadRetries)
                 {
                     TimeSpan retryDelay = exception.RetryAfter ?? delay;
-                    if (retryDelay > _options.MaximumReadRetryDelay)
+                    TimeSpan remaining = _options.ReadOperationDeadline -
+                        _timeProvider.GetElapsedTime(startedAt);
+                    // The local backoff cap must not shorten a provider's
+                    // Retry-After. If its cooldown exceeds this read's budget,
+                    // return the original error instead of retrying too soon.
+                    if (retryDelay >= remaining)
                     {
-                        retryDelay = _options.MaximumReadRetryDelay;
+                        throw;
                     }
 
-                    await Task.Delay(retryDelay, _timeProvider, readToken)
+                    await Task.Delay(
+                            retryDelay < TimeSpan.Zero ? TimeSpan.Zero : retryDelay,
+                            _timeProvider,
+                            readToken)
                         .ConfigureAwait(false);
                     delay = TimeSpan.FromMilliseconds(
                         Math.Min(

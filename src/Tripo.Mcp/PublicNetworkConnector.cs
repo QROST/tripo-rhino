@@ -91,30 +91,33 @@ internal static class PublicNetworkConnector
         if (address.AddressFamily == AddressFamily.InterNetworkV6)
         {
             byte[] bytes = address.GetAddressBytes();
+            // Restrict downloads to native global unicast (2000::/3). In
+            // particular, IPv4-compatible and NAT64 destinations must not
+            // bypass the IPv4 policy through an embedded private address.
+            if ((bytes[0] & 0xe0) != 0x20 || address.ScopeId != 0)
+            {
+                return false;
+            }
+
             bool documentationPrefix =
                 bytes[0] == 0x20 &&
                 bytes[1] == 0x01 &&
                 bytes[2] == 0x0d &&
                 bytes[3] == 0xb8;
+            bool extendedDocumentationPrefix =
+                bytes[0] == 0x3f &&
+                bytes[1] == 0xff &&
+                (bytes[2] & 0xf0) == 0;
 
-            // 6to4 (2002::/16) and Teredo (2001:0000::/32) tunnel to an arbitrary
-            // embedded IPv4 address, so they must be rejected like the IPv4 ranges.
+            // Protocol assignments include Teredo, benchmarking, and other
+            // special-purpose services, not ordinary artifact download hosts.
+            bool protocolAssignment =
+                bytes[0] == 0x20 && bytes[1] == 0x01 && bytes[2] < 2;
             bool sixToFour = bytes[0] == 0x20 && bytes[1] == 0x02;
-            bool teredo =
-                bytes[0] == 0x20 &&
-                bytes[1] == 0x01 &&
-                bytes[2] == 0x00 &&
-                bytes[3] == 0x00;
-            return !address.Equals(IPAddress.IPv6Any) &&
-                   !address.Equals(IPAddress.IPv6None) &&
-                   !address.Equals(IPAddress.IPv6Loopback) &&
-                   !address.IsIPv6LinkLocal &&
-                   !address.IsIPv6Multicast &&
-                   !address.IsIPv6SiteLocal &&
-                   (bytes[0] & 0xfe) != 0xfc &&
-                   !documentationPrefix &&
-                   !sixToFour &&
-                   !teredo;
+            return !documentationPrefix &&
+                   !extendedDocumentationPrefix &&
+                   !protocolAssignment &&
+                   !sixToFour;
         }
 
         return false;
