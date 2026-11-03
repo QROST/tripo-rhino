@@ -76,6 +76,10 @@ public sealed class McpToolSchemaTests
             "localImagePath",
             stageImageSchema,
             StringComparison.Ordinal);
+        Assert.Contains(
+            "WebP",
+            stageImage.ProtocolTool.Description,
+            StringComparison.Ordinal);
         Assert.DoesNotContain(
             "confirmExternalCost",
             stageImageSchema,

@@ -25,9 +25,7 @@ public static class TripoMcpApplication
         }
 
         HostApplicationBuilder builder = Host.CreateApplicationBuilder(args);
-        builder.Logging.ClearProviders();
-        builder.Logging.AddConsole(options =>
-            options.LogToStandardErrorThreshold = LogLevel.Trace);
+        ConfigureSidecarLogging(builder.Logging);
 
         builder.Services.AddTripoExecutionCore(normalizedHost);
         builder.Services
@@ -37,6 +35,16 @@ public static class TripoMcpApplication
 
         using IHost application = builder.Build();
         await application.RunAsync(cancellationToken).ConfigureAwait(false);
+    }
+
+    internal static void ConfigureSidecarLogging(ILoggingBuilder logging)
+    {
+        logging.ClearProviders();
+        logging.AddFilter(
+            "System.Net.Http.HttpClient",
+            LogLevel.Warning);
+        logging.AddConsole(options =>
+            options.LogToStandardErrorThreshold = LogLevel.Trace);
     }
 
     internal static SocketsHttpHandler CreatePublicNetworkHandler() =>

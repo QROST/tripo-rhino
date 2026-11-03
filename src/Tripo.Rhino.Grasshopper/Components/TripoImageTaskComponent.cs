@@ -615,14 +615,15 @@ public sealed class TripoImageTaskComponent : TripoCanvasComponent
         {
             CheckFileExists = true,
             MultiSelect = false,
-            Title = "Choose a PNG or JPEG for Tripo",
+            Title = "Choose a PNG, JPEG, or WebP image for Tripo",
             Filters =
             {
                 new FileFilter(
-                    "PNG or JPEG",
+                    "PNG, JPEG, or WebP",
                     "*.png",
                     "*.jpg",
-                    "*.jpeg"),
+                    "*.jpeg",
+                    "*.webp"),
             },
         };
         return dialog.ShowDialog(

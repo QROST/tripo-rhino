@@ -6,7 +6,8 @@ public sealed record TripoApiKeyPromptPolicy(
     bool ExactOriginalKeyRequired,
     bool PersistAllowed,
     bool RequiresReplacementConfirmation,
-    string? WorkflowOperationId)
+    string? WorkflowOperationId,
+    string? PersistBlockedReason = null)
 {
     public static TripoApiKeyPromptPolicy Create(
         TripoPanelState state)
@@ -16,6 +17,11 @@ public sealed record TripoApiKeyPromptPolicy(
             state.CredentialStatus?.HasApiKey == true;
         bool recoveryMode =
             state.RequiresCredentialRecovery;
+        bool storeUnavailable =
+            string.Equals(
+                state.CredentialStatus?.Source,
+                Tripo.Bridge.HostControlConstants.CredentialSourceUnavailable,
+                StringComparison.Ordinal);
         string? workflowOperationId =
             state.ImportDispatchAttempted ||
             state.ImportReceipt is not null
@@ -36,10 +42,15 @@ public sealed record TripoApiKeyPromptPolicy(
             replacing,
             recoveryMode,
             state.HasUnresolvedPaidDispatch,
-            PersistAllowed: !recoveryMode,
+            PersistAllowed: !recoveryMode && !storeUnavailable,
             RequiresReplacementConfirmation:
                 replacing && !recoveryMode,
-            workflowOperationId);
+            workflowOperationId,
+            PersistBlockedReason: storeUnavailable && !recoveryMode
+                ? "The credential store could not be read. This dialog can " +
+                  "set a session-only key. Saving stays refused until the " +
+                  "store can be read, so an existing key is not overwritten."
+                : null);
     }
 }
 
@@ -437,6 +448,21 @@ public sealed class TripoPanelPresentation
 
     public string GenerateText { get; private init; } = string.Empty;
 
+    public string GenerateHelp { get; private init; } = string.Empty;
+
+    internal const string DirectGlbAdvancedGenerateHelp =
+        "Direct GLB is selected. Use Create in Rhino so the paid task " +
+        "imports automatically. This button stays off so it cannot start a " +
+        "separate charge. Choose OBJ compatibility to generate on the " +
+        "manual path.";
+
+    internal static bool DirectGlbBlocksAdvancedGenerate(
+        bool directGlbSelected,
+        bool generationPrepared,
+        bool generationDispatchAttempted) =>
+        directGlbSelected &&
+        (!generationPrepared || !generationDispatchAttempted);
+
     public bool RefreshGenerationEnabled { get; private init; }
 
     public bool ConvertEnabled { get; private init; }
@@ -686,6 +712,11 @@ public sealed class TripoPanelPresentation
                 "Review details",
             _ => "Ready.",
         };
+        bool directGlbBlocksAdvancedGenerate =
+            DirectGlbBlocksAdvancedGenerate(
+                directGlbSelected,
+                generationPrepared,
+                state.GenerationDispatchAttempted);
 
         return new TripoPanelPresentation
         {
@@ -865,6 +896,7 @@ public sealed class TripoPanelPresentation
             GenerateEnabled =
                 controlsReady &&
                 !recoveryBlocked &&
+                !directGlbBlocksAdvancedGenerate &&
                 state.CredentialStatus?.HasApiKey == true &&
                 ((!generationPrepared &&
                   (imageMode ? hasImage : hasPrompt)) ||
@@ -872,7 +904,9 @@ public sealed class TripoPanelPresentation
                   state.CanDispatchPreparedGeneration &&
                   (!state.GenerationDispatchAttempted ||
                    state.GenerationRetryAllowed))),
-            GenerateText = !generationPrepared
+            GenerateText = directGlbBlocksAdvancedGenerate
+                ? "Use Create in Rhino"
+                : !generationPrepared
                 ? imageMode
                     ? "Generate from image"
                     : "Generate"
@@ -883,6 +917,13 @@ public sealed class TripoPanelPresentation
                         : state.CanDispatchPreparedGeneration
                             ? "Send prepared"
                             : "Request sent",
+            GenerateHelp = directGlbBlocksAdvancedGenerate
+                ? DirectGlbAdvancedGenerateHelp
+                : generationPrepared && state.GenerationRetryAllowed
+                    ? "Retry the same generation UUID. This does not create " +
+                      "a new operation."
+                    : "Create a Tripo generation task on the manual path. " +
+                      "Import is a later, separate step.",
             RefreshGenerationEnabled =
                 ready &&
                 !recoveryBlocked &&
@@ -1091,6 +1132,16 @@ public sealed class TripoPanelPresentation
                    "generation work that can consume credits.";
         }
 
+        if (string.Equals(
+                state.CredentialStatus?.Source,
+                Tripo.Bridge.HostControlConstants.CredentialSourceUnavailable,
+                StringComparison.Ordinal))
+        {
+            return "The credential store could not be read. Open Settings to " +
+                   "set a session-only key, or retry after the store is " +
+                   "available. Saving a key stays refused.";
+        }
+
         if (state.CredentialStatus?.HasApiKey != true)
         {
             return "Open Settings and set a Tripo API key before starting " +
@@ -1177,6 +1228,16 @@ public sealed class TripoPanelPresentation
                    "the key.";
         }
 
+        if (string.Equals(
+                state.CredentialStatus?.Source,
+                Tripo.Bridge.HostControlConstants.CredentialSourceUnavailable,
+                StringComparison.Ordinal))
+        {
+            return "The credential store could not be read. A session-only " +
+                   "key can still be set. Saving and removing a stored key " +
+                   "stay refused until the store can be read.";
+        }
+
         return "Set or replace the Tripo v3 API key.";
     }
 
@@ -1256,6 +1317,14 @@ public sealed class TripoPanelPresentation
         string fallback = state.CredentialStatus.UsesWeakerFileFallback
             ? " · private-file fallback"
             : string.Empty;
+        if (string.Equals(
+                state.CredentialStatus.Source,
+                Tripo.Bridge.HostControlConstants.CredentialSourceUnavailable,
+                StringComparison.Ordinal))
+        {
+            return "API key: credential store unavailable" + fallback;
+        }
+
         if (!state.CredentialStatus.HasApiKey)
         {
             return "API key: not configured" + fallback;

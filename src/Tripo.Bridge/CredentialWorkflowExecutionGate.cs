@@ -62,19 +62,19 @@ public sealed class CredentialWorkflowExecutionGate :
 
     private static void EnsurePrivateNonReparseDirectory(string path)
     {
-        if (Directory.Exists(path) && IsReparsePoint(path))
+        try
         {
-            throw new InvalidDataException(
-                "The credential/workflow directory is a symbolic link or " +
-                "reparse point.");
+            BridgePaths.EnsurePrivateNonReparseDirectory(path);
         }
-
-        BridgePaths.EnsurePrivateDirectory(path);
-        if (IsReparsePoint(path))
+        catch (InvalidOperationException exception)
+            when (exception.Message.Contains(
+                "symbolic link",
+                StringComparison.Ordinal))
         {
             throw new InvalidDataException(
                 "The credential/workflow directory is a symbolic link or " +
-                "reparse point.");
+                "reparse point.",
+                exception);
         }
     }
 

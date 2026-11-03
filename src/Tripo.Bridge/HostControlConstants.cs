@@ -24,6 +24,7 @@ public static class HostControlConstants
         "workflow.import_generation_glb";
     public const string ImportObjTaskMethod = "workflow.import_obj_task";
     public const string StageObjTaskMethod = "workflow.stage_obj_task";
+    public const string CredentialSourceUnavailable = "unavailable";
     public const string CredentialInvalidError = "credential_invalid";
     public const string CredentialRejectedError = "credential_rejected";
     public const string RequestRejectedState = "request_rejected";

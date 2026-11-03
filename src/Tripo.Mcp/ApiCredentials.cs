@@ -110,7 +110,10 @@ public sealed class ApiCredentialService :
             {
                 _storedKey = null;
                 _storedKeyPresenceKnown = false;
-                return CreateStatus(hasApiKey: false, source: "none");
+                return CreateStatus(
+                    hasApiKey: false,
+                    source: Tripo.Bridge.HostControlConstants
+                        .CredentialSourceUnavailable);
             }
 
             if (_storedKey is not null)
@@ -140,6 +143,10 @@ public sealed class ApiCredentialService :
         {
             if (persist)
             {
+                EnsureStoreReadable(
+                    "The credential store could not be read, so the API key " +
+                    "was not saved. Use a session-only key, or retry after " +
+                    "the store is available.");
                 _sessionKey = null;
                 _storedKey = null;
                 _storedKeyPresenceKnown = false;
@@ -179,6 +186,9 @@ public sealed class ApiCredentialService :
         using IDisposable executionLease = _executionGate.Acquire();
         lock (_gate)
         {
+            EnsureStoreReadable(
+                "The credential store could not be read, so saved keys were " +
+                "not removed.");
             _sessionKey = null;
             _store.Delete();
             _storedKey = null;
@@ -268,6 +278,20 @@ public sealed class ApiCredentialService :
 
         _storedKey = stored;
         _storedKeyPresenceKnown = true;
+    }
+
+    private void EnsureStoreReadable(string failureMessage)
+    {
+        try
+        {
+            ReloadStore();
+        }
+        catch (TripoApiException exception)
+        {
+            throw new TripoApiException(
+                failureMessage,
+                innerException: exception);
+        }
     }
 }
 
@@ -383,11 +407,7 @@ internal sealed class PrivateFileApiKeyStore : IPlatformApiKeyStore
             ".tmp";
         try
         {
-            File.WriteAllText(
-                temporaryPath,
-                apiKey,
-                new UTF8Encoding(encoderShouldEmitUTF8Identifier: false));
-            Tripo.Bridge.BridgePaths.SetPrivateFileMode(temporaryPath);
+            Tripo.Bridge.BridgePaths.WriteNewPrivateText(temporaryPath, apiKey);
             File.Move(temporaryPath, path, true);
         }
         catch (IOException exception)
@@ -429,7 +449,7 @@ internal sealed class PrivateFileApiKeyStore : IPlatformApiKeyStore
         string directory = Path.Combine(
             Tripo.Bridge.BridgePaths.GetRootDirectory(),
             "secrets");
-        Tripo.Bridge.BridgePaths.EnsurePrivateDirectory(directory);
+        Tripo.Bridge.BridgePaths.EnsurePrivateNonReparseDirectory(directory);
         return Path.Combine(directory, FileName);
     }
 

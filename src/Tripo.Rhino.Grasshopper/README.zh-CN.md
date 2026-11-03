@@ -143,7 +143,7 @@ Generation 与 conversion 使用不同 UUID；响应丢失时应保留两者。
 
 1. 放置 **Tripo Image Task**，设置一个 face limit/material choice。
 2. 右键选择 **Choose image and create task…**。
-3. 选择一张 1–20,000,000 bytes 的本地 PNG 或 JPEG。
+3. 选择一张 1–20,000,000 bytes 的本地 PNG、JPEG 或 WebP。
 4. 核对 UUID 与费用 warning 后再确认。
 5. 手动 refresh 到 `success`。
 6. 把 `Task ID` 接到 **Tripo Task to Mesh**，再执行文生流程的步骤 7–8。

@@ -8,7 +8,7 @@ public static class HostControlPaths
     public static string GetDiscoveryDirectory()
     {
         string path = Path.Combine(BridgePaths.GetRootDirectory(), "controls");
-        BridgePaths.EnsurePrivateDirectory(path);
+        BridgePaths.EnsurePrivateNonReparseDirectory(path);
         return path;
     }
 
@@ -43,7 +43,10 @@ public static class HostControlPaths
 
         try
         {
-            await File.WriteAllTextAsync(temporaryPath, json, cancellationToken)
+            await BridgePaths.WriteNewPrivateTextAsync(
+                    temporaryPath,
+                    json,
+                    cancellationToken)
                 .ConfigureAwait(false);
             BridgePaths.SetPrivateFileMode(temporaryPath);
             File.Move(temporaryPath, path, true);

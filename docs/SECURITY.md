@@ -31,10 +31,16 @@
 - Credential status reports only presence/source and whether a stored key can
   be cleared. Set and clear responses never echo key material.
 - Native secret-store calls fail closed without falling back after an error.
-  Windows write buffers are cleared in managed and unmanaged memory before
-  release. The unsupported-platform fallback rejects symlinks, bounds file
-  size and UTF-8 content, and enforces `0700` directory / `0600` file modes on
-  Unix.
+  A read failure is reported as credential source `unavailable` with
+  `hasApiKey: false`. Persistent save and clear are refused until a later read
+  succeeds, so a panel cannot overwrite or delete a key it could not see.
+  Session-only keys remain available. Windows write buffers are cleared in
+  managed and unmanaged memory before release. The unsupported-platform
+  fallback rejects symlinks, bounds file size and UTF-8 content, and creates
+  Unix credential files with mode `0600` before any write. Directories use
+  `0700`.
+- HttpClient request logging is Warning or higher, so Information logs do not
+  emit signed download URLs.
 - Signed download URLs are treated as short-lived secrets and are never persisted in receipts.
 - Paid-operation fingerprints use the API key only as an HMAC key over the exact request identity. The API key, prompt, signed URL, and artifact path are not written to the operation journal.
 - Replacing the effective key changes that fingerprint identity. The host
@@ -60,6 +66,11 @@
 - Every newly constructed panel selects direct GLB. OBJ compatibility remains a
   deliberate per-session choice and cannot silently become the next panel's
   default paid conversion route.
+- While direct GLB is selected, Advanced **Generate** does not start a new
+  paid task. **Create in Rhino** is the generation that imports automatically.
+  A same-UUID retry of an already dispatched operation can still use Advanced
+  Generate. Switching the import source to OBJ compatibility restores the
+  manual generate / convert / import path.
 - The visible ready-state credits disclosure and click on the enabled
   **Create in Rhino** button authorize one fresh direct-GLB generation. There is
   no second modal on that happy path. Advanced manual generation/conversion and

@@ -1014,6 +1014,38 @@ public sealed class TripoPanelPresentationTests
         Assert.False(presentation.GenerateEnabled);
     }
 
+    [Fact]
+    public void UnavailableCredentialStoreKeepsSessionSaveAndBlocksPersistence()
+    {
+        Tripo.HostUi.TripoPanelState state =
+            ReadyState() with
+            {
+                CredentialStatus =
+                    new Tripo.Bridge.HostControlCredentialStatusReceipt(
+                        false,
+                        Tripo.Bridge.HostControlConstants
+                            .CredentialSourceUnavailable,
+                        false,
+                        false,
+                        "keychain",
+                        false,
+                        false),
+            };
+
+        Tripo.HostUi.TripoPanelPresentation presentation = Present(state);
+        Tripo.HostUi.TripoApiKeyPromptPolicy policy =
+            Tripo.HostUi.TripoApiKeyPromptPolicy.Create(state);
+
+        Assert.Equal(
+            "API key: credential store unavailable",
+            presentation.CredentialStatus);
+        Assert.Contains("session-only", presentation.ApiKeyHelp);
+        Assert.True(presentation.ApiKeyEnabled);
+        Assert.False(presentation.ClearApiKeyEnabled);
+        Assert.False(policy.PersistAllowed);
+        Assert.Contains("session-only", policy.PersistBlockedReason);
+    }
+
     [Theory]
     [InlineData("store", false, "API key: saved")]
     [InlineData("session", false, "API key: session only")]
@@ -1413,6 +1445,10 @@ public sealed class TripoPanelPresentationTests
         Assert.Contains("selected in Advanced", obj.CreateInRhinoHelp);
         Assert.Contains("separate manual path", obj.CreateInRhinoHelp);
         Assert.True(obj.GenerateEnabled);
+        Assert.Equal("Generate", obj.GenerateText);
+        Assert.False(direct.GenerateEnabled);
+        Assert.Equal("Use Create in Rhino", direct.GenerateText);
+        Assert.Contains("separate charge", direct.GenerateHelp);
     }
 
     [Fact]

@@ -112,9 +112,10 @@ public sealed class TripoTools
         OpenWorld = false,
         UseStructuredContent = true)]
     [Description(
-        "Validate and copy one explicit local PNG or JPEG into the private Tripo " +
-        "image-transfer store. This does not call Tripo or consume credits. The " +
-        "returned opaque descriptor can be passed to tripo_create_image_task.")]
+        "Validate and copy one explicit local PNG, JPEG, or WebP image into " +
+        "the private Tripo image-transfer store. This does not call Tripo or " +
+        "consume credits. The returned opaque descriptor can be passed to " +
+        "tripo_create_image_task.")]
     public Task<Tripo.Bridge.StagedImageTransfer> StageLocalImageAsync(
         [Description(
             "Absolute path visible to this local sidecar. The source path is " +

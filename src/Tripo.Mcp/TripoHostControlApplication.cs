@@ -1,7 +1,6 @@
 using System.Diagnostics;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
-using Microsoft.Extensions.Logging;
 
 namespace Tripo.Mcp;
 
@@ -19,9 +18,7 @@ internal static class TripoHostControlApplication
                 {
                     Args = Array.Empty<string>(),
                 });
-        builder.Logging.ClearProviders();
-        builder.Logging.AddConsole(consoleOptions =>
-            consoleOptions.LogToStandardErrorThreshold = LogLevel.Trace);
+        TripoMcpApplication.ConfigureSidecarLogging(builder.Logging);
         builder.Services.AddTripoExecutionCore(
             normalizedHost,
             options.HostProcessId);

@@ -1133,7 +1133,7 @@ public sealed class TripoRhinoPanel : Panel, IPanel
             ToolTip = policy.RecoveryMode
                 ? "Recovery credentials remain session-only until the " +
                   "account-bound workflow is reconciled and explicitly reset."
-                : null,
+                : policy.PersistBlockedReason,
         };
         CheckBox confirmReplacement = new()
         {
@@ -1179,6 +1179,16 @@ public sealed class TripoRhinoPanel : Panel, IPanel
 
         content.Items.Add(LeftLabel("API key"));
         content.Items.Add(password);
+        if (policy.PersistBlockedReason is not null)
+        {
+            content.Items.Add(
+                new Label
+                {
+                    Text = policy.PersistBlockedReason,
+                    Wrap = WrapMode.Word,
+                });
+        }
+
         content.Items.Add(persist);
         content.Items.Add(confirmReplacement);
         content.Items.Add(RightAlignedActions(save, cancel));
@@ -1956,6 +1966,17 @@ public sealed class TripoRhinoPanel : Panel, IPanel
     {
         try
         {
+            if (Tripo.HostUi.TripoPanelPresentation.DirectGlbBlocksAdvancedGenerate(
+                    IsDirectGlbSelected(),
+                    _session.State.PreparedGeneration is not null ||
+                        _session.State.PreparedImageGeneration is not null,
+                    _session.State.GenerationDispatchAttempted))
+            {
+                throw new InvalidOperationException(
+                    Tripo.HostUi.TripoPanelPresentation
+                        .DirectGlbAdvancedGenerateHelp);
+            }
+
             EnsureNoAutomaticDirectGlbCreateMutation(
                 "start or retry generation");
             EnsurePanelDocumentIsActive();
@@ -2651,6 +2672,7 @@ public sealed class TripoRhinoPanel : Panel, IPanel
             presentation.DirectGlbWaitActionHelp;
         _generate.Enabled = presentation.GenerateEnabled;
         _generate.Text = presentation.GenerateText;
+        _generate.ToolTip = presentation.GenerateHelp;
         _refreshGeneration.Enabled =
             presentation.RefreshGenerationEnabled;
         _convert.Enabled = presentation.ConvertEnabled;

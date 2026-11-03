@@ -48,8 +48,9 @@ the key to Rhino settings or the `.3dm` document.
 > Manager, Windows host loading, Undo, scale/orientation, performance, and
 > visual/material acceptance remain separate open gates.
 > The Rhino Package Manager (Yak) package `tripo-rhino` is the packaged
-> distribution path. There is no installer, signing, notarization, or automatic
-> update beyond Yak package versions.
+> distribution path. The tag workflow uploads a Windows zip artifact and does
+> not run `yak push`, sign, or notarize. There is no installer or automatic
+> update beyond a Yak package version that has actually been published.
 
 For GHA-specific build, installation, component, privacy, and recovery details,
 see the [Grasshopper guide](./src/Tripo.Rhino.Grasshopper/README.md).
@@ -124,10 +125,12 @@ revision.
 
 ## Install the Rhino plug-in
 
-The packaged release is on Rhino Package Manager (Yak). In Rhino 8, run
-`_PackageManager`, search `tripo-rhino`, and install. That path includes the
-`.rhp`, sidecar, and optional `.gha`. There is no installer, signing,
-notarization, or automatic update beyond Yak package versions.
+The intended packaged distribution is the Rhino Package Manager (Yak) package
+`tripo-rhino`. This repository's tag workflow uploads a Windows zip artifact
+only; it does not run `yak push`, sign, or notarize. In Rhino 8, run
+`_PackageManager` and search `tripo-rhino` after a version has been published.
+That path includes the `.rhp`, sidecar, and optional `.gha`. If this version
+is not listed, use the manual steps below.
 
 The steps below remain the manual development installation.
 
@@ -178,8 +181,9 @@ McNeel documents the `.rhp` package-folder convention and the Rhino 8
 version-specific `MacPlugIns` location:
 [Plugin Installers (Mac)](https://developer.rhino3d.com/guides/rhinocommon/plugin-installers-mac/).
 McNeel now describes `.macrhi` as no longer under active development and points
-authors to Package Manager. This repository publishes a Yak package
-(`tripo-rhino`) and does not ship a `.macrhi`. The package-folder layout above
+authors to Package Manager. This repository's packaged distribution is a Yak
+package (`tripo-rhino`); the tag workflow does not upload it. It does not ship
+a `.macrhi`. The package-folder layout above
 has been exercised on a macOS Rhino 8 development host; it is not a signed or
 generally supported installer.
 

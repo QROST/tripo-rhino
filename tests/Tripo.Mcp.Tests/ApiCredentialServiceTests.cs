@@ -99,9 +99,38 @@ public sealed class ApiCredentialServiceTests
 
         Assert.False(initial.HasApiKey);
         Assert.False(initial.StoredKeyPresenceKnown);
+        Assert.Equal(
+            Tripo.Bridge.HostControlConstants.CredentialSourceUnavailable,
+            initial.Source);
         Assert.Equal("session-key", service.GetApiKey());
         Assert.Equal("session", receipt.Status.Source);
         Assert.False(receipt.Status.StoredKeyPresenceKnown);
+    }
+
+    [Fact]
+    public void UnavailablePersistentStoreRefusesSaveAndClear()
+    {
+        FakeStore store = new()
+        {
+            ThrowOnRead = true,
+            StoredValue = "existing-key",
+        };
+        Tripo.Mcp.ApiCredentialService service = new(() => null, store);
+
+        Tripo.Mcp.TripoApiException save =
+            Assert.Throws<Tripo.Mcp.TripoApiException>(
+                () => service.SetApiKey("replacement-key", persist: true));
+        Tripo.Mcp.TripoApiException clear =
+            Assert.Throws<Tripo.Mcp.TripoApiException>(
+                () => service.ClearApiKey());
+
+        Assert.Contains("was not saved", save.Message, StringComparison.Ordinal);
+        Assert.Contains("were not removed", clear.Message, StringComparison.Ordinal);
+        Assert.Equal(0, store.WriteCalls);
+        Assert.Equal(0, store.DeleteCalls);
+        Assert.Equal("existing-key", store.StoredValue);
+        Assert.Throws<Tripo.Mcp.TripoApiException>(
+            () => service.GetApiKey());
     }
 
     [Fact]
@@ -256,6 +285,27 @@ public sealed class ApiCredentialServiceTests
             Assert.Throws<Tripo.Mcp.TripoApiException>(store.Read);
 
         Assert.Contains("oversized", exception.Message);
+    }
+
+    [Fact]
+    public void PrivateFileFallbackRejectsSymlinkedSecretsDirectory()
+    {
+        if (OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        using TemporaryDataRoot dataRoot = new();
+        string real = Path.Combine(dataRoot.Path, "real-secrets");
+        Directory.CreateDirectory(real);
+        Directory.CreateSymbolicLink(
+            Path.Combine(dataRoot.Path, "secrets"),
+            real);
+        Tripo.Mcp.PrivateFileApiKeyStore store = new();
+
+        Assert.Throws<InvalidOperationException>(
+            () => store.Write("private-file-key"));
+        Assert.Empty(Directory.EnumerateFileSystemEntries(real));
     }
 
     [Fact]

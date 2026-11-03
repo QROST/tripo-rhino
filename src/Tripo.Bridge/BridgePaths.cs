@@ -36,7 +36,7 @@ public static partial class BridgePaths
     public static string GetDiscoveryDirectory()
     {
         string path = Path.Combine(GetRootDirectory(), "bridges");
-        EnsurePrivateDirectory(path);
+        EnsurePrivateNonReparseDirectory(path);
         return path;
     }
 
@@ -61,7 +61,7 @@ public static partial class BridgePaths
     public static string GetFamiliesDirectory()
     {
         string path = Path.Combine(GetRootDirectory(), "families");
-        EnsurePrivateDirectory(path);
+        EnsurePrivateNonReparseDirectory(path);
         return path;
     }
 
@@ -94,7 +94,7 @@ public static partial class BridgePaths
 
         try
         {
-            await File.WriteAllTextAsync(temporaryPath, json, cancellationToken)
+            await WriteNewPrivateTextAsync(temporaryPath, json, cancellationToken)
                 .ConfigureAwait(false);
             SetPrivateFileMode(temporaryPath);
             File.Move(temporaryPath, path, true);
@@ -218,6 +218,30 @@ public static partial class BridgePaths
         }
     }
 
+    public static void WriteNewPrivateText(string path, string contents)
+    {
+        using FileStream stream = OpenNewPrivateText(path);
+        using StreamWriter writer = new(
+            stream,
+            new System.Text.UTF8Encoding(encoderShouldEmitUTF8Identifier: false));
+        writer.Write(contents);
+    }
+
+    public static async Task WriteNewPrivateTextAsync(
+        string path,
+        string contents,
+        CancellationToken cancellationToken)
+    {
+        await using FileStream stream = OpenNewPrivateText(path);
+        await using StreamWriter writer = new(
+            stream,
+            new System.Text.UTF8Encoding(encoderShouldEmitUTF8Identifier: false));
+        await writer.WriteAsync(contents.AsMemory(), cancellationToken)
+            .ConfigureAwait(false);
+        await writer.FlushAsync().ConfigureAwait(false);
+        await stream.FlushAsync(cancellationToken).ConfigureAwait(false);
+    }
+
     public static void TryDelete(string path)
     {
         try
@@ -235,6 +259,24 @@ public static partial class BridgePaths
         {
             // Cleanup is best effort.
         }
+    }
+
+    private static FileStream OpenNewPrivateText(string path)
+    {
+        FileStreamOptions options = new()
+        {
+            Mode = FileMode.CreateNew,
+            Access = FileAccess.Write,
+            Share = FileShare.None,
+            Options = FileOptions.WriteThrough,
+        };
+        if (!OperatingSystem.IsWindows())
+        {
+            options.UnixCreateMode =
+                UnixFileMode.UserRead | UnixFileMode.UserWrite;
+        }
+
+        return new FileStream(path, options);
     }
 
     [GeneratedRegex("^[a-z][a-z0-9]{1,31}$", RegexOptions.CultureInvariant)]

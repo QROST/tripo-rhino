@@ -634,12 +634,54 @@ public sealed class PaidOperationJournalTests
     private static string JournalPath(string root, string operationId) =>
         Path.Combine(root, operationId + ".jsonl");
 
+    private static string CanonicalTemporaryDirectory()
+    {
+        string temporaryDirectory = System.IO.Path.GetTempPath();
+        if (!OperatingSystem.IsMacOS())
+        {
+            return temporaryDirectory;
+        }
+
+        return temporaryDirectory switch
+        {
+            "/tmp/" => "/private/tmp/",
+            _ when temporaryDirectory.StartsWith(
+                "/var/",
+                StringComparison.Ordinal) =>
+                "/private" + temporaryDirectory,
+            _ => temporaryDirectory,
+        };
+    }
+
+    [Fact]
+    public async Task AcquireRejectsASymlinkedOperationsDirectory()
+    {
+        if (OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        using TemporaryJournalRoot parent = new();
+        string real = Path.Combine(parent.Path, "real");
+        Directory.CreateDirectory(real);
+        string link = Path.Combine(parent.Path, "link");
+        Directory.CreateSymbolicLink(link, real);
+        Tripo.Mcp.PaidOperationJournal journal = new(link);
+
+        await Assert.ThrowsAsync<InvalidOperationException>(
+            () => journal.AcquireAsync(
+                TextDescriptor(Guid.NewGuid().ToString("D")),
+                CancellationToken.None));
+
+        Assert.Empty(Directory.EnumerateFileSystemEntries(real));
+    }
+
     private sealed class TemporaryJournalRoot : IDisposable
     {
         public TemporaryJournalRoot(bool create = true)
         {
             Path = System.IO.Path.Combine(
-                System.IO.Path.GetTempPath(),
+                CanonicalTemporaryDirectory(),
                 "tripo-journal-tests",
                 Guid.NewGuid().ToString("N"));
             if (create)

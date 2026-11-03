@@ -3553,8 +3553,22 @@ public sealed class TripoPanelSessionTests
 
     private static string CreateTemporaryRoot()
     {
+        string temporaryDirectory = Path.GetTempPath();
+        if (OperatingSystem.IsMacOS())
+        {
+            temporaryDirectory = temporaryDirectory switch
+            {
+                "/tmp/" => "/private/tmp/",
+                _ when temporaryDirectory.StartsWith(
+                    "/var/",
+                    StringComparison.Ordinal) =>
+                    "/private" + temporaryDirectory,
+                _ => temporaryDirectory,
+            };
+        }
+
         string root = Path.Combine(
-            Path.GetTempPath(),
+            temporaryDirectory,
             "tripo-host-ui-tests",
             Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(root);

@@ -155,7 +155,7 @@ lost.
 
 1. Place **Tripo Image Task** and set one face limit/material choice.
 2. Right-click it and choose **Choose image and create task…**.
-3. Select one local PNG or JPEG from 1 through 20,000,000 bytes.
+3. Select one local PNG, JPEG, or WebP image from 1 through 20,000,000 bytes.
 4. Review the UUID and cost warning before confirming.
 5. Refresh manually to `success`.
 6. Connect its `Task ID` to **Tripo Task to Mesh**, then follow steps 7–8 of the

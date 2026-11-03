@@ -11,7 +11,7 @@ public sealed class TripoWorkflowTests : IDisposable
     public TripoWorkflowTests()
     {
         _journalRoot = Path.Combine(
-            Path.GetTempPath(),
+            CanonicalTemporaryDirectory(),
             "tripo-paid-operation-tests",
             Guid.NewGuid().ToString("N"));
         _journal = new Tripo.Mcp.PaidOperationJournal(_journalRoot);
@@ -1436,6 +1436,25 @@ public sealed class TripoWorkflowTests : IDisposable
         {
             Directory.Delete(_journalRoot, recursive: true);
         }
+    }
+
+    private static string CanonicalTemporaryDirectory()
+    {
+        string temporaryDirectory = Path.GetTempPath();
+        if (!OperatingSystem.IsMacOS())
+        {
+            return temporaryDirectory;
+        }
+
+        return temporaryDirectory switch
+        {
+            "/tmp/" => "/private/tmp/",
+            _ when temporaryDirectory.StartsWith(
+                "/var/",
+                StringComparison.Ordinal) =>
+                "/private" + temporaryDirectory,
+            _ => temporaryDirectory,
+        };
     }
 
     private Tripo.Mcp.TripoWorkflow CreateWorkflow(

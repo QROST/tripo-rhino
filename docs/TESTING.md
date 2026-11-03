@@ -114,7 +114,9 @@ exercised macOS panel/credential/generation checks after each deployed revision:
    dispatch). Then change generated-material preference and object name;
    construct a fresh panel and verify the normalized face limit and those two
    values return while the prompt does not and **Direct GLB (recommended)** is
-   selected again. Confirm the MCP and GHA paths still reject `499` and
+   selected again. With Direct GLB selected, Advanced Generate stays disabled
+   and tells the user to use Create in Rhino; switching the import source to
+   OBJ compatibility enables Generate again. Confirm the MCP and GHA paths still reject `499` and
    `200001` rather than snapping them. Run text
    generation/status, then verify direct GLB creates one PBR block without a
    conversion task or second charge. Separately run OBJ conversion and both

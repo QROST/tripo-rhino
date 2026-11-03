@@ -1,5 +1,6 @@
 using System.Net;
 using System.Net.Http.Headers;
+using System.Reflection;
 using System.Security.Cryptography;
 using System.Text.Json;
 using System.Text.RegularExpressions;
@@ -59,6 +60,9 @@ public sealed partial class TripoV3Client : ITripoApiClient
     public const string ApiKeyEnvironmentVariable = "TRIPO_API_KEY";
     public const string ModelEnvironmentVariable = "TRIPO_MODEL";
     public const string DefaultModel = "v3.1-20260211";
+    internal static string ProductVersion { get; } = ReadProductVersion();
+    internal static string UserAgentValue { get; } =
+        "tripo-rhino/" + ProductVersion;
     public static readonly Uri BaseUri = new("https://openapi.tripo3d.ai/v3/");
 
     private const int MaximumResponseBytes = 1024 * 1024;
@@ -842,6 +846,32 @@ public sealed partial class TripoV3Client : ITripoApiClient
         HttpStatusCode? statusCode) =>
         statusCode is HttpStatusCode.Unauthorized or HttpStatusCode.Forbidden;
 
+    private static string ReadProductVersion()
+    {
+        string? informational = typeof(TripoV3Client).Assembly
+            .GetCustomAttribute<AssemblyInformationalVersionAttribute>()
+            ?.InformationalVersion;
+        if (!string.IsNullOrWhiteSpace(informational))
+        {
+            int metadata = informational.IndexOf('+', StringComparison.Ordinal);
+            if (metadata >= 0)
+            {
+                informational = informational[..metadata];
+            }
+
+            if (informational.Length is > 0 and <= 32 &&
+                informational.All(static character =>
+                    char.IsAsciiLetterOrDigit(character) ||
+                    character is '.' or '-'))
+            {
+                return informational;
+            }
+        }
+
+        Version? version = typeof(TripoV3Client).Assembly.GetName().Version;
+        return version?.ToString(3) ?? "0.0.0";
+    }
+
     private HttpRequestMessage CreateApiRequest(
         HttpMethod method,
         string relativePath,
@@ -850,7 +880,7 @@ public sealed partial class TripoV3Client : ITripoApiClient
         string apiKey = paidOperationApiKey ?? GetValidatedApiKey();
         HttpRequestMessage request = new(method, relativePath);
         request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", apiKey);
-        request.Headers.UserAgent.ParseAdd("tripo-rhino/0.2.0");
+        request.Headers.UserAgent.ParseAdd(UserAgentValue);
         return request;
     }
 

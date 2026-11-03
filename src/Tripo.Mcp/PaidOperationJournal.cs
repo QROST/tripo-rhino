@@ -235,10 +235,6 @@ internal sealed class PaidOperationJournal : IPaidOperationJournal
     private const int MaximumJournalBytes = 1024 * 1024;
     private const int MaximumRecordBytes = 64 * 1024;
     private const string OperationsDirectoryName = "operations";
-    private const UnixFileMode PrivateDirectoryMode =
-        UnixFileMode.UserRead |
-        UnixFileMode.UserWrite |
-        UnixFileMode.UserExecute;
     private const UnixFileMode PrivateFileMode =
         UnixFileMode.UserRead |
         UnixFileMode.UserWrite;
@@ -991,14 +987,8 @@ internal sealed class PaidOperationJournal : IPaidOperationJournal
 
     private void EnsureOperationsDirectory()
     {
-        if (OperatingSystem.IsWindows())
-        {
-            Tripo.Bridge.BridgePaths.EnsurePrivateDirectory(_operationsDirectory);
-            return;
-        }
-
-        Directory.CreateDirectory(_operationsDirectory, PrivateDirectoryMode);
-        File.SetUnixFileMode(_operationsDirectory, PrivateDirectoryMode);
+        Tripo.Bridge.BridgePaths.EnsurePrivateNonReparseDirectory(
+            _operationsDirectory);
     }
 
     private static FileStream OpenPrivateFile(
