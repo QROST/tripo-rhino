@@ -9,13 +9,8 @@ public sealed class TripoRhinoPanel : Panel, IPanel
 {
     private const int MaximumPreviewDimension = 16_384;
     private const long MaximumPreviewPixels = 64L * 1024 * 1024;
-    private const string ApiKeyInstructions =
-        "Create a Tripo v3 API key at:\n" +
-        "https://platform.tripo3d.ai/api-keys\n\n" +
-        "The key is sent only to the local Tripo sidecar. It is never saved " +
-        "in this .3dm document.\n\n" +
-        "Replacing the effective key can make same-UUID recovery fail closed " +
-        "for unfinished UI or MCP paid operations. Reconcile them first.";
+    private static string ApiKeyInstructions =>
+        Tripo.HostUi.TripoUiText.Get("Create a Tripo v3 API key at:\nhttps://platform.tripo3d.ai/api-keys\n\nThe key is sent only to the local Tripo sidecar. It is never saved in this .3dm document.\n\nReplacing the effective key can make same-UUID recovery fail closed for unfinished UI or MCP paid operations. Reconcile them first.");
 
     private readonly uint _documentSerialNumber;
     private readonly TripoRhinoPlugin _plugin;
@@ -39,18 +34,16 @@ public sealed class TripoRhinoPanel : Panel, IPanel
         MaxValue = Tripo.HostUi.RhinoPanelFaceLimitPolicy.Maximum,
         MinValue = Tripo.HostUi.RhinoPanelFaceLimitPolicy.Minimum,
         ToolTip =
-            "Values below 500 snap to 500; values above 200,000 snap to " +
-            "200,000.",
+            Tripo.HostUi.TripoUiText.Get("Values below 500 snap to 500; values above 200,000 snap to 200,000."),
         Value = Tripo.HostUi.RhinoPanelFaceLimitPolicy.Default,
         Width = 0,
     };
     private readonly CheckBox _withMaterials = new()
     {
         Checked = true,
-        Text = "Generate materials",
+        Text = Tripo.HostUi.TripoUiText.Get("Generate materials"),
         ToolTip =
-            "Request generated materials from Tripo. This is the recommended " +
-            "setting for direct GLB import.",
+            Tripo.HostUi.TripoUiText.Get("Request generated materials from Tripo. This is the recommended setting for direct GLB import."),
     };
     private readonly TextBox _name = new()
     {
@@ -61,8 +54,8 @@ public sealed class TripoRhinoPanel : Panel, IPanel
     {
         DataStore = new[]
         {
-            "Direct GLB (recommended)",
-            "OBJ compatibility",
+            Tripo.HostUi.TripoUiText.Get("Direct GLB (recommended)"),
+            Tripo.HostUi.TripoUiText.Get("OBJ compatibility"),
         },
         SelectedIndex = 0,
         Width = 0,
@@ -77,10 +70,9 @@ public sealed class TripoRhinoPanel : Panel, IPanel
     };
     private readonly CheckBox _applyMaterials = new()
     {
-        Text = "Apply diffuse materials (OBJ fallback)",
+        Text = Tripo.HostUi.TripoUiText.Get("Apply diffuse materials (OBJ fallback)"),
         ToolTip =
-            "Apply baked OBJ/MTL diffuse materials when available. Direct GLB " +
-            "imports generated materials when they are available.",
+            Tripo.HostUi.TripoUiText.Get("Apply baked OBJ/MTL diffuse materials when available. Direct GLB imports generated materials when they are available."),
     };
     private readonly Label _documentStatus = StatusLabel();
     private readonly TextBox _documentSession = OperationStatusBox();
@@ -110,59 +102,56 @@ public sealed class TripoRhinoPanel : Panel, IPanel
     private readonly Expander _recoveryExpander = new();
     private readonly Expander _advancedExpander = new();
     private readonly Expander _detailsExpander = new();
-    private readonly Button _connect = new() { Text = "Connect / Refresh" };
-    private readonly Button _apiKey = new() { Text = "API key…" };
+    private readonly Button _connect = new() { Text = Tripo.HostUi.TripoUiText.Get("Connect / Refresh") };
+    private readonly Button _apiKey = new() { Text = Tripo.HostUi.TripoUiText.Get("API key\u2026") };
     private readonly Button _clearApiKey =
-        new() { Text = "Remove saved key…" };
+        new() { Text = Tripo.HostUi.TripoUiText.Get("Remove saved key\u2026") };
     private readonly Button _checkRecovery = new()
     {
-        Text = "Refresh recovery status",
+        Text = Tripo.HostUi.TripoUiText.Get("Refresh recovery status"),
         ToolTip =
-            "Read local operation status without sending a paid request.",
+            Tripo.HostUi.TripoUiText.Get("Read local operation status without sending a paid request."),
     };
     private readonly Button _reviewRecovery = new()
     {
-        Text = "Review recovery…",
+        Text = Tripo.HostUi.TripoUiText.Get("Review recovery\u2026"),
         ToolTip =
-            "Inspect recovered operations, review the risk, and unlock Tripo.",
+            Tripo.HostUi.TripoUiText.Get("Inspect recovered operations, review the risk, and unlock Tripo."),
     };
     private readonly Button _createInRhino =
-        new() { Text = "Create in Rhino" };
+        new() { Text = Tripo.HostUi.TripoUiText.Get("Create in Rhino") };
     private readonly Button _directGlbWaitAction = new()
     {
-        Text = "Stop waiting",
+        Text = Tripo.HostUi.TripoUiText.Get("Stop waiting"),
         Visible = false,
     };
-    private readonly Button _generate = new() { Text = "Generate" };
+    private readonly Button _generate = new() { Text = Tripo.HostUi.TripoUiText.Get("Generate") };
     private readonly Button _refreshGeneration = new()
     {
-        Text = "Refresh generation",
+        Text = Tripo.HostUi.TripoUiText.Get("Refresh generation"),
         ToolTip =
-            "Updates automatically every 2 seconds while queued or running. " +
-            "Click for an immediate refresh.",
+            Tripo.HostUi.TripoUiText.Get("Updates automatically every 2 seconds while queued or running. Click for an immediate refresh."),
     };
-    private readonly Button _convert = new() { Text = "Convert to OBJ" };
+    private readonly Button _convert = new() { Text = Tripo.HostUi.TripoUiText.Get("Convert to OBJ") };
     private readonly Button _refreshConversion = new()
     {
-        Text = "Refresh conversion",
+        Text = Tripo.HostUi.TripoUiText.Get("Refresh conversion"),
     };
-    private readonly Button _import = new() { Text = "Import into Rhino" };
-    private readonly Button _reset = new() { Text = "New workflow" };
+    private readonly Button _import = new() { Text = Tripo.HostUi.TripoUiText.Get("Import into Rhino") };
+    private readonly Button _reset = new() { Text = Tripo.HostUi.TripoUiText.Get("New workflow") };
     private readonly RadioButtonList _inputMode = new()
     {
         Orientation = Orientation.Horizontal,
         Spacing = new Eto.Drawing.Size(16, 0),
-        Items = { "Text", "Image" },
+        Items = { Tripo.HostUi.TripoUiText.Get("Text"), Tripo.HostUi.TripoUiText.Get("Image") },
         SelectedIndex = 0,
     };
     private readonly StackLayout _promptBlock;
     private readonly Button _pickImage = new()
     {
-        Text = "Choose image\u2026",
+        Text = Tripo.HostUi.TripoUiText.Get("Choose image\u2026"),
         ToolTip =
-            "Select a PNG, JPEG, or WebP image on disk. The file is copied " +
-            "into private staging and then uploaded to Tripo; the original is " +
-            "not retained.",
+            Tripo.HostUi.TripoUiText.Get("Select a PNG, JPEG, or WebP image on disk. The file is copied into private staging and then uploaded to Tripo; the original is not retained."),
     };
     private readonly ImageView _imagePreview = new()
     {
@@ -171,7 +160,7 @@ public sealed class TripoRhinoPanel : Panel, IPanel
     private readonly Label _imageName = StatusLabel();
     private readonly Button _clearImage = new()
     {
-        Text = "Remove image",
+        Text = Tripo.HostUi.TripoUiText.Get("Remove image"),
         Visible = false,
     };
     private readonly StackLayout _imageBlock;
@@ -213,7 +202,7 @@ public sealed class TripoRhinoPanel : Panel, IPanel
             RefreshGenerationStatusAutomaticallyAsync,
             ReportAutomaticGenerationRefreshFailure);
         ApplyUserSettings(Tripo.HostUi.RhinoPanelUserSettings.Load());
-        _promptBlock = FieldBlock("Describe the model", _prompt);
+        _promptBlock = FieldBlock(Tripo.HostUi.TripoUiText.Get("Describe the model"), _prompt);
         _imageBlock = new StackLayout
         {
             AlignLabels = false,
@@ -247,10 +236,10 @@ public sealed class TripoRhinoPanel : Panel, IPanel
         };
         _imageBlock.Visible = false;
         _generationDiagnosticBlock = FieldBlock(
-            "Generation diagnostic",
+            Tripo.HostUi.TripoUiText.Get("Generation diagnostic"),
             _generationDiagnostic);
         _conversionDiagnosticBlock = FieldBlock(
-            "Conversion diagnostic",
+            Tripo.HostUi.TripoUiText.Get("Conversion diagnostic"),
             _conversionDiagnostic);
         _importReceiptDetails = new StackLayout
         {
@@ -260,10 +249,10 @@ public sealed class TripoRhinoPanel : Panel, IPanel
             Items =
             {
                 FieldBlock(
-                    "Rhino object ID",
+                    Tripo.HostUi.TripoUiText.Get("Rhino object ID"),
                     _importCreatedObject),
                 FieldBlock(
-                    "Import transaction",
+                    Tripo.HostUi.TripoUiText.Get("Import transaction"),
                     _importTransaction),
             },
         };
@@ -369,7 +358,7 @@ public sealed class TripoRhinoPanel : Panel, IPanel
             },
         };
 
-        _detailsExpander.Header = LeftLabel("Workflow details");
+        _detailsExpander.Header = LeftLabel(Tripo.HostUi.TripoUiText.Get("Workflow details"));
         _detailsExpander.Expanded = false;
         _detailsExpander.Content = new StackLayout
         {
@@ -379,23 +368,23 @@ public sealed class TripoRhinoPanel : Panel, IPanel
             HorizontalContentAlignment = HorizontalAlignment.Stretch,
             Items =
             {
-                FieldBlock("Document session", _documentSession),
+                FieldBlock(Tripo.HostUi.TripoUiText.Get("Document session"), _documentSession),
                 FieldBlock(
-                    "Generation operation ID",
+                    Tripo.HostUi.TripoUiText.Get("Generation operation ID"),
                     _generationOperation),
-                FieldBlock("Generation task ID", _generationTaskId),
+                FieldBlock(Tripo.HostUi.TripoUiText.Get("Generation task ID"), _generationTaskId),
                 _generationDiagnosticBlock,
                 FieldBlock(
-                    "Conversion operation ID",
+                    Tripo.HostUi.TripoUiText.Get("Conversion operation ID"),
                     _conversionOperation),
-                FieldBlock("Conversion task ID", _conversionTaskId),
+                FieldBlock(Tripo.HostUi.TripoUiText.Get("Conversion task ID"), _conversionTaskId),
                 _conversionDiagnosticBlock,
-                FieldBlock("Import operation ID", _importOperation),
+                FieldBlock(Tripo.HostUi.TripoUiText.Get("Import operation ID"), _importOperation),
                 _importReceiptDetails,
             },
         };
 
-        _settingsExpander.Header = LeftLabel("Settings");
+        _settingsExpander.Header = LeftLabel(Tripo.HostUi.TripoUiText.Get("Settings"));
         _settingsExpander.Expanded = false;
         _settingsExpander.Content = new StackLayout
         {
@@ -406,16 +395,16 @@ public sealed class TripoRhinoPanel : Panel, IPanel
             Items =
             {
                 FieldBlock(
-                    "Face limit (500–200,000)",
+                    Tripo.HostUi.TripoUiText.Get("Face limit (500\u2013200,000)"),
                     _faceLimit,
                     stretchControl: true),
                 _withMaterials,
-                FieldBlock("Object name", _name),
+                FieldBlock(Tripo.HostUi.TripoUiText.Get("Object name"), _name),
                 ActionColumn(_apiKey, _clearApiKey),
             },
         };
 
-        _advancedExpander.Header = LeftLabel("Advanced");
+        _advancedExpander.Header = LeftLabel(Tripo.HostUi.TripoUiText.Get("Advanced"));
         _advancedExpander.Expanded = false;
         _advancedExpander.Content = new StackLayout
         {
@@ -427,22 +416,22 @@ public sealed class TripoRhinoPanel : Panel, IPanel
             {
                 ActionColumn(_connect),
                 Section(
-                    "Manual generation",
+                    Tripo.HostUi.TripoUiText.Get("Manual generation"),
                     ActionColumn(_generate, _refreshGeneration)),
                 Section(
-                    "Optional OBJ compatibility",
+                    Tripo.HostUi.TripoUiText.Get("Optional OBJ compatibility"),
                     _conversionTask,
                     _conversionProgress,
                     ActionColumn(_convert, _refreshConversion)),
                 Section(
-                    "Manual import",
+                    Tripo.HostUi.TripoUiText.Get("Manual import"),
                     FieldBlock(
-                        "Import source",
+                        Tripo.HostUi.TripoUiText.Get("Import source"),
                         _importSource,
                         stretchControl: true),
                     _importGuidance,
                     FieldBlock(
-                        "Import mode",
+                        Tripo.HostUi.TripoUiText.Get("Import mode"),
                         _importMode,
                         stretchControl: true),
                     _applyMaterials,
@@ -481,7 +470,7 @@ public sealed class TripoRhinoPanel : Panel, IPanel
                         },
                     }),
                 Stretch(_recoveryExpander),
-                FieldBlock("Input mode", _inputMode),
+                FieldBlock(Tripo.HostUi.TripoUiText.Get("Input mode"), _inputMode),
                 _promptBlock,
                 _imageBlock,
                 Stretch(_createInRhino),
@@ -793,8 +782,7 @@ public sealed class TripoRhinoPanel : Panel, IPanel
                     out Tripo.Bridge.ImagePixelDimensions dimensions))
             {
                 throw new InvalidOperationException(
-                    "The selected image dimensions could not be verified safely. " +
-                    "Use a valid PNG, JPEG, or WebP image.");
+                    Tripo.HostUi.TripoUiText.Get("The selected image dimensions could not be verified safely. Use a valid PNG, JPEG, or WebP image."));
             }
 
             if (dimensions.Width > MaximumPreviewDimension ||
@@ -802,9 +790,7 @@ public sealed class TripoRhinoPanel : Panel, IPanel
                 dimensions.PixelCount > MaximumPreviewPixels)
             {
                 throw new InvalidOperationException(
-                    "The selected image is too large to preview safely. Use an " +
-                    "image no larger than 16,384 pixels on either side and 64 " +
-                    "megapixels total.");
+                    Tripo.HostUi.TripoUiText.Get("The selected image is too large to preview safely. Use an image no larger than 16,384 pixels on either side and 64 megapixels total."));
             }
 
             stagedSnapshot.Position = 0;
@@ -839,9 +825,7 @@ public sealed class TripoRhinoPanel : Panel, IPanel
             preview?.Dispose();
             Tripo.Bridge.ImageTransferStore.TryDelete(transfer);
             throw new InvalidOperationException(
-                "The generation input was prepared while this image was being " +
-                "staged. The new snapshot was discarded without changing the " +
-                "prepared operation.");
+                Tripo.HostUi.TripoUiText.Get("The generation input was prepared while this image was being staged. The new snapshot was discarded without changing the prepared operation."));
         }
 
         ClearStagedImage(_session.State);
@@ -901,7 +885,7 @@ public sealed class TripoRhinoPanel : Panel, IPanel
         {
             CheckFileExists = true,
             MultiSelect = false,
-            Title = "Choose a PNG, JPEG, or WebP image for Tripo",
+            Title = Tripo.HostUi.TripoUiText.Get("Choose a PNG, JPEG, or WebP image for Tripo"),
             Filters =
             {
                 new Eto.Forms.FileFilter(
@@ -944,7 +928,7 @@ public sealed class TripoRhinoPanel : Panel, IPanel
 
         try
         {
-            EnsureNoAutomaticDirectGlbCreateMutation("reconnect the panel");
+            EnsureNoAutomaticDirectGlbCreateMutation(Tripo.HostUi.TripoUiText.Get("reconnect the panel"));
             EnsurePanelDocumentIsActive();
             await _session.ConnectAsync(_panelLifetime.Token);
         }
@@ -1010,16 +994,12 @@ public sealed class TripoRhinoPanel : Panel, IPanel
         try
         {
             EnsureNoAutomaticDirectGlbCreateMutation(
-                "remove the saved API key");
+                Tripo.HostUi.TripoUiText.Get("remove the saved API key"));
             if (_closing ||
                 MessageBox.Show(
                     this,
-                    "Remove the Tripo API key saved for this user? This also " +
-                    "clears any session-only key. A TRIPO_API_KEY environment " +
-                    "override, if configured outside Rhino, remains effective." +
-                    "\n\nThis does not change the .3dm document or cancel a " +
-                    "remote Tripo task.",
-                    "Remove saved Tripo API key?",
+                    Tripo.HostUi.TripoUiText.Get("Remove the Tripo API key saved for this user? This also clears any session-only key. A TRIPO_API_KEY environment override, if configured outside Rhino, remains effective.\n\nThis does not change the .3dm document or cancel a remote Tripo task."),
+                    Tripo.HostUi.TripoUiText.Get("Remove saved Tripo API key?"),
                     MessageBoxButtons.YesNo,
                     MessageBoxType.Warning,
                     MessageBoxDefaultButton.No) != DialogResult.Yes)
@@ -1123,34 +1103,33 @@ public sealed class TripoRhinoPanel : Panel, IPanel
         PasswordBox password = new()
         {
             MaxLength = 2048,
-            ToolTip = "Paste the Tripo v3 API key.",
+            ToolTip = Tripo.HostUi.TripoUiText.Get("Paste the Tripo v3 API key."),
         };
         CheckBox persist = new()
         {
             Checked = policy.PersistAllowed,
             Enabled = policy.PersistAllowed,
-            Text = "Save in this user's OS credential store",
+            Text = Tripo.HostUi.TripoUiText.Get("Save in this user\u0027s OS credential store"),
             ToolTip = policy.RecoveryMode
-                ? "Recovery credentials remain session-only until the " +
-                  "account-bound workflow is reconciled and explicitly reset."
+                ? Tripo.HostUi.TripoUiText.Get("Recovery credentials remain session-only until the account-bound workflow is reconciled and explicitly reset.")
                 : policy.PersistBlockedReason,
         };
         CheckBox confirmReplacement = new()
         {
             Text =
-                "I want this new key to be used for future paid requests.",
+                Tripo.HostUi.TripoUiText.Get("I want this new key to be used for future paid requests."),
             Visible = policy.RequiresReplacementConfirmation,
         };
         Button save = new()
         {
             Enabled = false,
             Text = policy.RecoveryMode
-                ? "Use recovery key"
+                ? Tripo.HostUi.TripoUiText.Get("Use recovery key")
                 : policy.Replacing
-                    ? "Replace API key"
-                    : "Save API key",
+                    ? Tripo.HostUi.TripoUiText.Get("Replace API key")
+                    : Tripo.HostUi.TripoUiText.Get("Save API key"),
         };
-        Button cancel = new() { Text = "Cancel" };
+        Button cancel = new() { Text = Tripo.HostUi.TripoUiText.Get("Cancel") };
         StackLayout content = new()
         {
             Padding = 12,
@@ -1168,16 +1147,13 @@ public sealed class TripoRhinoPanel : Panel, IPanel
                 new Label
                 {
                     Text = policy.ExactOriginalKeyRequired
-                        ? "Recovery mode: this key is session-only. " +
-                          "Restore the exact original key for the unresolved " +
-                          "paid UUID."
-                        : "Recovery mode: this key is session-only. Use a key " +
-                          "for the same Tripo account as the unfinished workflow.",
+                        ? Tripo.HostUi.TripoUiText.Get("Recovery mode: this key is session-only. Restore the exact original key for the unresolved paid UUID.")
+                        : Tripo.HostUi.TripoUiText.Get("Recovery mode: this key is session-only. Use a key for the same Tripo account as the unfinished workflow."),
                     Wrap = WrapMode.Word,
                 });
         }
 
-        content.Items.Add(LeftLabel("API key"));
+        content.Items.Add(LeftLabel(Tripo.HostUi.TripoUiText.Get("API key")));
         content.Items.Add(password);
         if (policy.PersistBlockedReason is not null)
         {
@@ -1195,8 +1171,8 @@ public sealed class TripoRhinoPanel : Panel, IPanel
         Dialog<bool> dialog = new()
         {
             Title = policy.Replacing
-                ? "Replace Tripo API key"
-                : "Set Tripo API key",
+                ? Tripo.HostUi.TripoUiText.Get("Replace Tripo API key")
+                : Tripo.HostUi.TripoUiText.Get("Set Tripo API key"),
             ClientSize = new Eto.Drawing.Size(
                 520,
                 policy.Replacing ? 410 : 370),
@@ -1251,14 +1227,12 @@ public sealed class TripoRhinoPanel : Panel, IPanel
         return MessageBox.Show(
             this,
             (policy.ExactOriginalKeyRequired
-                ? "A paid dispatch has no durable task ID. Restore the exact " +
-                  "original API key; the journal fingerprint is bound to that key."
-                : "An accepted remote task or unresolved import still needs " +
-                  "access. Use a key for the same Tripo account.") +
-            "\n\nWorkflow operation ID:\n" +
-            (policy.WorkflowOperationId ?? "Unavailable") +
-            "\n\nThe recovery key remains session-only.",
-            "Restore workflow access with an API key?",
+                ? Tripo.HostUi.TripoUiText.Get("A paid dispatch has no durable task ID. Restore the exact original API key; the journal fingerprint is bound to that key.")
+                : Tripo.HostUi.TripoUiText.Get("An accepted remote task or unresolved import still needs access. Use a key for the same Tripo account.")) +
+            Tripo.HostUi.TripoUiText.Get("\n\nWorkflow operation ID:\n") +
+            (policy.WorkflowOperationId ?? Tripo.HostUi.TripoUiText.Get("Unavailable")) +
+            Tripo.HostUi.TripoUiText.Get("\n\nThe recovery key remains session-only."),
+            Tripo.HostUi.TripoUiText.Get("Restore workflow access with an API key?"),
             MessageBoxButtons.YesNo,
             MessageBoxType.Warning,
             MessageBoxDefaultButton.No) == DialogResult.Yes;
@@ -1274,7 +1248,7 @@ public sealed class TripoRhinoPanel : Panel, IPanel
         try
         {
             EnsureNoAutomaticDirectGlbCreateMutation(
-                "inspect recovery records");
+                Tripo.HostUi.TripoUiText.Get("inspect recovery records"));
             _recoveryReviewInProgress = true;
             RequestRender();
             Tripo.HostUi.TripoPanelRecoveryLoadResult recovery =
@@ -1333,7 +1307,7 @@ public sealed class TripoRhinoPanel : Panel, IPanel
         try
         {
             EnsureNoAutomaticDirectGlbCreateMutation(
-                "review recovery records");
+                Tripo.HostUi.TripoUiText.Get("review recovery records"));
             await ReviewAndUnlockRecoveryAsync();
         }
         catch (OperationCanceledException) when (_closing)
@@ -1378,12 +1352,11 @@ public sealed class TripoRhinoPanel : Panel, IPanel
 
                 MessageBox.Show(
                     this,
-                    "Tripo cannot safely read these recovery records, so it " +
-                    "will not delete or archive them automatically:\n\n" +
+                    Tripo.HostUi.TripoUiText.Get("Tripo cannot safely read these recovery records, so it will not delete or archive them automatically:\n\n") +
                     string.Join(Environment.NewLine, issues) +
-                    "\n\nInspect or move the named files aside manually, " +
-                    "then choose Refresh recovery status.",
-                    "Recovery needs manual attention",
+                    Tripo.HostUi.TripoUiText.Get("\n\nInspect or move the named files aside manually, ") +
+                    Tripo.HostUi.TripoUiText.Get("then choose Refresh recovery status."),
+                    Tripo.HostUi.TripoUiText.Get("Recovery needs manual attention"),
                     MessageBoxType.Warning);
                 return false;
             }
@@ -1405,8 +1378,7 @@ public sealed class TripoRhinoPanel : Panel, IPanel
                 if (recovery.Issues.Count > 0)
                 {
                     throw new InvalidOperationException(
-                        "Reloaded recovery contains a record that needs manual " +
-                        "attention. Repair it, then refresh recovery status.");
+                        Tripo.HostUi.TripoUiText.Get("Reloaded recovery contains a record that needs manual attention. Repair it, then refresh recovery status."));
                 }
             }
 
@@ -1438,10 +1410,8 @@ public sealed class TripoRhinoPanel : Panel, IPanel
             {
                 MessageBox.Show(
                     this,
-                    "A recovered paid operation is still active. Tripo will " +
-                    "keep recovery blocked. Wait for it to finish, then choose " +
-                    "Refresh recovery status and review again.",
-                    "Tripo operation still active",
+                    Tripo.HostUi.TripoUiText.Get("A recovered paid operation is still active. Tripo will keep recovery blocked. Wait for it to finish, then choose Refresh recovery status and review again."),
+                    Tripo.HostUi.TripoUiText.Get("Tripo operation still active"),
                     MessageBoxType.Information);
                 return false;
             }
@@ -1490,12 +1460,8 @@ public sealed class TripoRhinoPanel : Panel, IPanel
     private bool ConfirmReloadForRecovery() =>
         MessageBox.Show(
             this,
-            "This panel also contains current workflow state.\n\n" +
-            "Reloading the panel session sends no Tripo request. It preserves " +
-            "every dispatched operation ID as recovery evidence and clears " +
-            "only setup that was never sent. You can then review all recovered " +
-            "work together.\n\nReload and continue?",
-            "Reload Tripo recovery?",
+            Tripo.HostUi.TripoUiText.Get("This panel also contains current workflow state.\n\nReloading the panel session sends no Tripo request. It preserves every dispatched operation ID as recovery evidence and clears only setup that was never sent. You can then review all recovered work together.\n\nReload and continue?"),
+            Tripo.HostUi.TripoUiText.Get("Reload Tripo recovery?"),
             MessageBoxButtons.YesNo,
             MessageBoxType.Warning,
             MessageBoxDefaultButton.No) == DialogResult.Yes;
@@ -1541,18 +1507,16 @@ public sealed class TripoRhinoPanel : Panel, IPanel
         CheckBox confirmed = new()
         {
             Text =
-                "I reviewed every operation above, checked Tripo task and " +
-                "billing history where local status was missing or ambiguous, " +
-                "and checked any Rhino import in the original document.",
+                Tripo.HostUi.TripoUiText.Get("I reviewed every operation above, checked Tripo task and billing history where local status was missing or ambiguous, and checked any Rhino import in the original document."),
         };
         Button unlock = new()
         {
             Enabled = false,
-            Text = "Archive reviewed notices and continue",
+            Text = Tripo.HostUi.TripoUiText.Get("Archive reviewed notices and continue"),
             ToolTip =
-                "Archive only the local recovery notice and unlock Tripo.",
+                Tripo.HostUi.TripoUiText.Get("Archive only the local recovery notice and unlock Tripo."),
         };
-        Button cancel = new() { Text = "Keep blocked" };
+        Button cancel = new() { Text = Tripo.HostUi.TripoUiText.Get("Keep blocked") };
         StackLayout content = new()
         {
             Padding = 12,
@@ -1562,9 +1526,7 @@ public sealed class TripoRhinoPanel : Panel, IPanel
                 new Label
                 {
                     Text =
-                        "A previous paid request may have reached Tripo " +
-                        "before its result was saved. Review the evidence " +
-                        "below to avoid an accidental duplicate charge.",
+                        Tripo.HostUi.TripoUiText.Get("A previous paid request may have reached Tripo before its result was saved. Review the evidence below to avoid an accidental duplicate charge."),
                     Wrap = WrapMode.Word,
                 },
                 evidence,
@@ -1572,9 +1534,7 @@ public sealed class TripoRhinoPanel : Panel, IPanel
                 new Label
                 {
                     Text =
-                        "Continuing archives only this local notice. It " +
-                        "does not retry, cancel, refund, or delete a remote " +
-                        "Tripo task.",
+                        Tripo.HostUi.TripoUiText.Get("Continuing archives only this local notice. It does not retry, cancel, refund, or delete a remote Tripo task."),
                     Wrap = WrapMode.Word,
                 },
                 RightAlignedActions(unlock, cancel),
@@ -1582,7 +1542,7 @@ public sealed class TripoRhinoPanel : Panel, IPanel
         };
         Dialog<bool> dialog = new()
         {
-            Title = "Review previous Tripo work",
+            Title = Tripo.HostUi.TripoUiText.Get("Review previous Tripo work"),
             ClientSize = new Eto.Drawing.Size(600, 500),
             Resizable = true,
             Content = content,
@@ -1660,7 +1620,7 @@ public sealed class TripoRhinoPanel : Panel, IPanel
                     out string normalizedObjectName))
             {
                 throw new InvalidOperationException(
-                    "The Rhino object name must contain 1 to 128 characters.");
+                    Tripo.HostUi.TripoUiText.Get("The Rhino object name must contain 1 to 128 characters."));
             }
 
             imageGeneration = _imageMode;
@@ -1669,8 +1629,7 @@ public sealed class TripoRhinoPanel : Panel, IPanel
                 Tripo.Bridge.StagedImageTransfer image =
                     _stagedImage ??
                     throw new InvalidOperationException(
-                        "Choose an image before starting image-to-model " +
-                        "generation.");
+                        Tripo.HostUi.TripoUiText.Get("Choose an image before starting image-to-model generation."));
                 preparedImage = ownerSession.PrepareImageGeneration(
                     image,
                     ReadAndSnapFaceLimit(),
@@ -1837,21 +1796,19 @@ public sealed class TripoRhinoPanel : Panel, IPanel
             if (_closing || _session.State.Busy)
             {
                 throw new InvalidOperationException(
-                    "Wait for the current panel operation to finish before " +
-                    "changing automatic waiting.");
+                    Tripo.HostUi.TripoUiText.Get("Wait for the current panel operation to finish before changing automatic waiting."));
             }
 
             if (_session.Recovery.HasBlock)
             {
                 throw new InvalidOperationException(
-                    "Review recovered operation IDs before changing automatic " +
-                    "waiting.");
+                    Tripo.HostUi.TripoUiText.Get("Review recovered operation IDs before changing automatic waiting."));
             }
 
             Tripo.HostUi.DirectGlbAutoImportIntent intent =
                 _directGlbAutoImportIntent ??
                 throw new InvalidOperationException(
-                    "There is no active one-click generation task to pause.");
+                    Tripo.HostUi.TripoUiText.Get("There is no active one-click generation task to pause."));
             Tripo.HostUi.TripoPanelState state = _session.State;
             PanelRenderFrame frame = new(
                 _session,
@@ -1869,9 +1826,7 @@ public sealed class TripoRhinoPanel : Panel, IPanel
                             intent,
                             Tripo.HostUi.DirectGlbCreateUiStage.Refused);
                         throw new InvalidOperationException(
-                            "Automatic waiting stopped because the durable " +
-                            "generation evidence no longer matches this " +
-                            "workflow.");
+                            Tripo.HostUi.TripoUiText.Get("Automatic waiting stopped because the durable generation evidence no longer matches this workflow."));
                     }
 
                     QueueDirectGlbAutoImportContinuation(
@@ -1887,8 +1842,7 @@ public sealed class TripoRhinoPanel : Panel, IPanel
                         intent,
                         Tripo.HostUi.DirectGlbCreateUiStage.Refused);
                     throw new InvalidOperationException(
-                        "Automatic waiting stopped because the panel identity " +
-                        "changed while it was being paused.");
+                        Tripo.HostUi.TripoUiText.Get("Automatic waiting stopped because the panel identity changed while it was being paused."));
                 }
 
                 _directGlbCreateUiStage =
@@ -1901,8 +1855,7 @@ public sealed class TripoRhinoPanel : Panel, IPanel
                 if (state.HasCredentialRefreshFailure)
                 {
                     throw new InvalidOperationException(
-                        "Restore a same-account session-only API key before " +
-                        "resuming automatic waiting.");
+                        Tripo.HostUi.TripoUiText.Get("Restore a same-account session-only API key before resuming automatic waiting."));
                 }
 
                 if (!intent.TryResumeWaiting(_sessionGeneration, state))
@@ -1913,9 +1866,7 @@ public sealed class TripoRhinoPanel : Panel, IPanel
                             intent,
                             Tripo.HostUi.DirectGlbCreateUiStage.Refused);
                         throw new InvalidOperationException(
-                            "Automatic waiting could not resume because the " +
-                            "durable generation evidence no longer matches this " +
-                            "workflow.");
+                            Tripo.HostUi.TripoUiText.Get("Automatic waiting could not resume because the durable generation evidence no longer matches this workflow."));
                     }
 
                     QueueDirectGlbAutoImportContinuation(
@@ -1931,8 +1882,7 @@ public sealed class TripoRhinoPanel : Panel, IPanel
                         intent,
                         Tripo.HostUi.DirectGlbCreateUiStage.Refused);
                     throw new InvalidOperationException(
-                        "Automatic waiting stopped because the panel identity " +
-                        "changed while it was being resumed.");
+                        Tripo.HostUi.TripoUiText.Get("Automatic waiting stopped because the panel identity changed while it was being resumed."));
                 }
 
                 _directGlbCreateUiStage =
@@ -1950,8 +1900,7 @@ public sealed class TripoRhinoPanel : Panel, IPanel
             else
             {
                 throw new InvalidOperationException(
-                    "Automatic waiting can change only while the confirmed " +
-                    "generation task is waiting.");
+                    Tripo.HostUi.TripoUiText.Get("Automatic waiting can change only while the confirmed generation task is waiting."));
             }
 
             RequestRender();
@@ -1978,7 +1927,7 @@ public sealed class TripoRhinoPanel : Panel, IPanel
             }
 
             EnsureNoAutomaticDirectGlbCreateMutation(
-                "start or retry generation");
+                Tripo.HostUi.TripoUiText.Get("start or retry generation"));
             EnsurePanelDocumentIsActive();
             if (_imageMode)
             {
@@ -2008,8 +1957,8 @@ public sealed class TripoRhinoPanel : Panel, IPanel
         RequestRender();
         if (!ConfirmPaidDispatch(
                 retry
-                    ? "Retry same generation operation?"
-                    : "Create Tripo generation task?",
+                    ? Tripo.HostUi.TripoUiText.Get("Retry same generation operation?")
+                    : Tripo.HostUi.TripoUiText.Get("Create Tripo generation task?"),
                 prepared.OperationId,
                 retry))
         {
@@ -2025,7 +1974,7 @@ public sealed class TripoRhinoPanel : Panel, IPanel
         if (_stagedImage is null)
         {
             throw new InvalidOperationException(
-                "Choose an image before generating from it.");
+                Tripo.HostUi.TripoUiText.Get("Choose an image before generating from it."));
         }
 
         bool retry = _session.State.GenerationRetryAllowed;
@@ -2039,8 +1988,8 @@ public sealed class TripoRhinoPanel : Panel, IPanel
         RequestRender();
         if (!ConfirmPaidDispatch(
                 retry
-                    ? "Retry same image generation operation?"
-                    : "Create Tripo image generation task?",
+                    ? Tripo.HostUi.TripoUiText.Get("Retry same image generation operation?")
+                    : Tripo.HostUi.TripoUiText.Get("Create Tripo image generation task?"),
                 prepared.OperationId,
                 retry))
         {
@@ -2234,7 +2183,7 @@ public sealed class TripoRhinoPanel : Panel, IPanel
         try
         {
             EnsureNoAutomaticDirectGlbCreateMutation(
-                "use OBJ compatibility");
+                Tripo.HostUi.TripoUiText.Get("use OBJ compatibility"));
             EnsurePanelDocumentIsActive();
             bool retry = _session.State.ConversionRetryAllowed;
             Tripo.HostUi.PreparedObjConversion prepared =
@@ -2245,8 +2194,8 @@ public sealed class TripoRhinoPanel : Panel, IPanel
             RequestRender();
             if (!ConfirmPaidDispatch(
                     retry
-                        ? "Retry same OBJ conversion operation?"
-                        : "Create Tripo OBJ conversion task?",
+                        ? Tripo.HostUi.TripoUiText.Get("Retry same OBJ conversion operation?")
+                        : Tripo.HostUi.TripoUiText.Get("Create Tripo OBJ conversion task?"),
                     prepared.OperationId,
                     retry))
             {
@@ -2267,7 +2216,7 @@ public sealed class TripoRhinoPanel : Panel, IPanel
         try
         {
             EnsureNoAutomaticDirectGlbCreateMutation(
-                "refresh OBJ conversion");
+                Tripo.HostUi.TripoUiText.Get("refresh OBJ conversion"));
             await _session.RefreshConversionStatusAsync();
         }
         catch (Exception exception)
@@ -2281,7 +2230,7 @@ public sealed class TripoRhinoPanel : Panel, IPanel
         try
         {
             EnsureNoAutomaticDirectGlbCreateMutation(
-                "start a manual import");
+                Tripo.HostUi.TripoUiText.Get("start a manual import"));
             EnsurePanelDocumentIsActive();
             if (_session.State.PreparedImport is null)
             {
@@ -2307,7 +2256,7 @@ public sealed class TripoRhinoPanel : Panel, IPanel
     {
         try
         {
-            EnsureNoAutomaticDirectGlbCreateMutation("reset the workflow");
+            EnsureNoAutomaticDirectGlbCreateMutation(Tripo.HostUi.TripoUiText.Get("reset the workflow"));
             Tripo.HostUi.TripoPanelState previousState = _session.State;
             _session.ResetWorkflow();
             _directGlbAutoImportIntent = null;
@@ -2340,9 +2289,7 @@ public sealed class TripoRhinoPanel : Panel, IPanel
         if (IsAutomaticDirectGlbCreateActive)
         {
             throw new InvalidOperationException(
-                "The confirmed one-click direct GLB workflow is active and " +
-                $"cannot {action}. Refresh its generation status or wait for " +
-                "its durable outcome instead.");
+                Tripo.HostUi.TripoUiText.Format("The confirmed one-click direct GLB workflow is active and cannot {0}. Refresh its generation status or wait for its durable outcome instead.", action));
         }
     }
 
@@ -2377,10 +2324,7 @@ public sealed class TripoRhinoPanel : Panel, IPanel
         }
 
         throw new InvalidOperationException(
-            "The API key cannot change while the one-click direct GLB " +
-            "workflow is active. If generation refresh fails after a durable " +
-            "task exists, restore a same-account session-only key from the " +
-            "enabled API-key action.");
+            Tripo.HostUi.TripoUiText.Get("The API key cannot change while the one-click direct GLB workflow is active. If generation refresh fails after a durable task exists, restore a same-account session-only key from the enabled API-key action."));
     }
 
     private void EnsureDirectGlbGenerationRefreshAllowed()
@@ -2399,8 +2343,7 @@ public sealed class TripoRhinoPanel : Panel, IPanel
         }
 
         throw new InvalidOperationException(
-            "Generation refresh is available for the one-click workflow only " +
-            "while it is waiting for or has paused the confirmed task.");
+            Tripo.HostUi.TripoUiText.Get("Generation refresh is available for the one-click workflow only while it is waiting for or has paused the confirmed task."));
     }
 
     private bool ConfirmPaidDispatch(
@@ -2410,13 +2353,10 @@ public sealed class TripoRhinoPanel : Panel, IPanel
         MessageBox.Show(
             this,
             (retry
-                ? "This retries the existing durable operation ID; it does not " +
-                  "create a replacement ID. The sidecar journal will replay a " +
-                  "receipt or fail closed. If no paid request was accepted " +
-                  "previously, this retry can consume Tripo credits.\n\n"
-                : "This action can consume Tripo credits.\n\n") +
-            $"Durable operation ID:\n{operationId}\n\n" +
-            "Keep this ID if the response is lost.",
+                ? Tripo.HostUi.TripoUiText.Get("This retries the existing durable operation ID; it does not create a replacement ID. The sidecar journal will replay a receipt or fail closed. If no paid request was accepted previously, this retry can consume Tripo credits.\n\n")
+                : Tripo.HostUi.TripoUiText.Get("This action can consume Tripo credits.\n\n")) +
+            Tripo.HostUi.TripoUiText.Format("Durable operation ID:\n{0}\n\n", operationId) +
+            Tripo.HostUi.TripoUiText.Get("Keep this ID if the response is lost."),
             title,
             MessageBoxButtons.YesNo,
             MessageBoxType.Warning,
@@ -2438,7 +2378,7 @@ public sealed class TripoRhinoPanel : Panel, IPanel
                 state,
                 recovery,
                 preparedText ?? throw new InvalidOperationException(
-                    "The confirmed generation identity is missing."),
+                    Tripo.HostUi.TripoUiText.Get("The confirmed generation identity is missing.")),
                 IsDirectGlbSelected());
         if (blockingReason is not null)
         {
@@ -2828,9 +2768,7 @@ public sealed class TripoRhinoPanel : Panel, IPanel
                 RequestRender();
                 ShowError(
                     new InvalidOperationException(
-                        "Automatic direct GLB import was refused because the " +
-                        "generation evidence did not match this workflow. " +
-                        "Nothing was imported; review Workflow details."));
+                        Tripo.HostUi.TripoUiText.Get("Automatic direct GLB import was refused because the generation evidence did not match this workflow. Nothing was imported; review Workflow details.")));
                 break;
         }
     }
@@ -2863,16 +2801,14 @@ public sealed class TripoRhinoPanel : Panel, IPanel
             {
                 recoveryBlocked = true;
                 throw new InvalidOperationException(
-                    "Automatic direct GLB import stopped before Rhino " +
-                    "mutation because recovery evidence requires review.");
+                    Tripo.HostUi.TripoUiText.Get("Automatic direct GLB import stopped before Rhino mutation because recovery evidence requires review."));
             }
 
             if (!IntentOwnsState(intent, current) ||
                 current.State.PreparedImport is not null)
             {
                 throw new InvalidOperationException(
-                    "Automatic direct GLB import stopped because the current " +
-                    "panel state no longer matches the confirmed workflow.");
+                    Tripo.HostUi.TripoUiText.Get("Automatic direct GLB import stopped because the current panel state no longer matches the confirmed workflow."));
             }
 
             if (current.State.Busy &&
@@ -3114,8 +3050,7 @@ public sealed class TripoRhinoPanel : Panel, IPanel
             active.RuntimeSerialNumber != _documentSerialNumber)
         {
             throw new InvalidOperationException(
-                "Activate the Rhino document that owns this Tripo panel before " +
-                "starting or retrying a workflow stage.");
+                Tripo.HostUi.TripoUiText.Get("Activate the Rhino document that owns this Tripo panel before starting or retrying a workflow stage."));
         }
     }
 
@@ -3138,18 +3073,15 @@ public sealed class TripoRhinoPanel : Panel, IPanel
 
     private static void ReportBackgroundConnectionFailure() =>
         global::Rhino.RhinoApp.WriteLine(
-            "Tripo: Automatic panel connection did not complete. Use " +
-            "Connect / Refresh in Advanced if needed.");
+            Tripo.HostUi.TripoUiText.Get("Tripo: Automatic panel connection did not complete. Use Connect / Refresh in Advanced if needed."));
 
     private static void ReportBackgroundGenerationRefreshFailure() =>
         global::Rhino.RhinoApp.WriteLine(
-            "Tripo: Automatic generation refresh paused. The same task is " +
-            "preserved; use Refresh generation to retry.");
+            Tripo.HostUi.TripoUiText.Get("Tripo: Automatic generation refresh paused. The same task is preserved; use Refresh generation to retry."));
 
     private static void ReportBackgroundPanelFailure(Exception _) =>
         global::Rhino.RhinoApp.WriteLine(
-            "Tripo: The panel could not apply a background layout update. " +
-            "Resize or reopen the panel to retry.");
+            Tripo.HostUi.TripoUiText.Get("Tripo: The panel could not apply a background layout update. Resize or reopen the panel to retry."));
 
     private async Task DisposeSessionAsync()
     {
@@ -3176,7 +3108,7 @@ public sealed class TripoRhinoPanel : Panel, IPanel
     {
         if (string.IsNullOrWhiteSpace(message))
         {
-            return "The Tripo operation failed.";
+            return Tripo.HostUi.TripoUiText.Get("The Tripo operation failed.");
         }
 
         string trimmed = message.Trim();

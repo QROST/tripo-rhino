@@ -782,3 +782,7 @@ This product is not affiliated with or endorsed by Tripo or McNeel. Users bring
 their own Tripo API key (BYOK) and remain subject to Tripo's terms of service
 for API usage. The Blender reference informed repository and product structure
 only; no upstream source code was copied.
+
+## Interface language
+
+The Rhino panel uses English as its base and fallback language. It follows Rhino’s interface language; only when that language is unavailable does it use the system UI language. Chinese Rhino/system locales (including Traditional Chinese locales) use the Simplified Chinese interface. Restart Rhino after changing its language. User prompts, object names, file names, IDs and protocol values are preserved. Unrecognized service/technical diagnostics remain in their original language. This does not change number parsing or the operating system’s culture settings.

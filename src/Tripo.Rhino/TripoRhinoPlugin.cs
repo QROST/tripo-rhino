@@ -23,18 +23,18 @@ public sealed class TripoRhinoPlugin : PlugIn, IDisposable
     internal static TripoRhinoPlugin Instance =>
         _instance ??
         throw new InvalidOperationException(
-            "The Tripo Rhino plug-in is not loaded.");
+            Tripo.HostUi.TripoUiText.Get("The Tripo Rhino plug-in is not loaded."));
 
     public static Tripo.Bridge.IHostSidecarConnector GetSidecarConnector() =>
         Instance._sidecarManager ??
         throw new InvalidOperationException(
-            "The Rhino sidecar manager is unavailable.");
+            Tripo.HostUi.TripoUiText.Get("The Rhino sidecar manager is unavailable."));
 
     public static string GetDocumentSessionId(
         global::Rhino.RhinoDoc document) =>
         (Instance._documentSessions ??
          throw new InvalidOperationException(
-             "The Rhino document-session registry is unavailable."))
+             Tripo.HostUi.TripoUiText.Get("The Rhino document-session registry is unavailable.")))
         .GetOrCreate(
             document ??
             throw new ArgumentNullException(nameof(document)));
@@ -45,6 +45,10 @@ public sealed class TripoRhinoPlugin : PlugIn, IDisposable
     {
         try
         {
+            int? languageId = null;
+            try { languageId = global::Rhino.UI.Localization.CurrentLanguageId; }
+            catch (Exception) { /* Host language can be unavailable during startup. Use system UI language. */ }
+            Tripo.HostUi.TripoUiText.Initialize(languageId, System.Globalization.CultureInfo.CurrentUICulture);
             _documentSessions = new RhinoDocumentSessions();
             _dispatcher = new RhinoBridgeDispatcher(_documentSessions);
             _bridgeServer = new Tripo.Bridge.NamedPipeBridgeServer(
@@ -61,7 +65,7 @@ public sealed class TripoRhinoPlugin : PlugIn, IDisposable
             string pluginDirectory = Path.GetDirectoryName(
                 Assembly.GetExecutingAssembly().Location)
                 ?? throw new InvalidOperationException(
-                    "The Rhino plug-in directory is unavailable.");
+                    Tripo.HostUi.TripoUiText.Get("The Rhino plug-in directory is unavailable."));
             _sidecarManager = new Tripo.Bridge.HostSidecarProcessManager(
                 "rhino",
                 Environment.ProcessId,
@@ -77,13 +81,12 @@ public sealed class TripoRhinoPlugin : PlugIn, IDisposable
             global::Rhino.RhinoDoc.CloseDocument += OnDocumentClosed;
             global::Rhino.RhinoApp.Closing += OnRhinoClosing;
             global::Rhino.RhinoApp.WriteLine(
-                $"[Tripo] Rhino bridge and Eto panel ready for PID " +
-                $"{Environment.ProcessId}.");
+                Tripo.HostUi.TripoUiText.Format("[Tripo] Rhino bridge and Eto panel ready for PID {0}.", Environment.ProcessId));
             return LoadReturnCode.Success;
         }
         catch (Exception exception)
         {
-            errorMessage = "The Tripo MCP bridge could not start: " + exception.Message;
+            errorMessage = Tripo.HostUi.TripoUiText.Get("The Tripo MCP bridge could not start: ") + exception.Message;
             Interlocked.CompareExchange(ref _instance, null, this);
             DisposeComponents();
             return LoadReturnCode.ErrorShowDialog;
@@ -158,13 +161,13 @@ public sealed class TripoRhinoPlugin : PlugIn, IDisposable
         Tripo.HostUi.TripoPanelSession session = new(
             _sidecarManager ??
             throw new InvalidOperationException(
-                "The Rhino sidecar manager is unavailable."),
+                Tripo.HostUi.TripoUiText.Get("The Rhino sidecar manager is unavailable.")),
             new Tripo.HostUi.TripoPanelRecoveryStore("rhino"));
         if (!_panelSessions.TryAdd(session, 0))
         {
             session.DisposeAsync().AsTask().GetAwaiter().GetResult();
             throw new InvalidOperationException(
-                "The Rhino panel session could not be registered.");
+                Tripo.HostUi.TripoUiText.Get("The Rhino panel session could not be registered."));
         }
 
         return session;
@@ -211,7 +214,7 @@ public sealed class TripoRhinoPlugin : PlugIn, IDisposable
             catch (Exception exception)
             {
                 System.Diagnostics.Trace.TraceError(
-                    "Tripo Rhino panel shutdown failed: {0}",
+                    Tripo.HostUi.TripoUiText.Get("Tripo Rhino panel shutdown failed: {0}"),
                     exception);
             }
         }
@@ -232,7 +235,7 @@ public sealed class TripoRhinoPlugin : PlugIn, IDisposable
         catch (Exception exception)
         {
             System.Diagnostics.Trace.TraceError(
-                "Tripo Rhino sidecar shutdown failed: {0}",
+                Tripo.HostUi.TripoUiText.Get("Tripo Rhino sidecar shutdown failed: {0}"),
                 exception);
         }
     }
@@ -247,7 +250,7 @@ public sealed class TripoRhinoPlugin : PlugIn, IDisposable
         catch (Exception exception)
         {
             System.Diagnostics.Trace.TraceError(
-                "Tripo Rhino bridge shutdown failed: {0}",
+                Tripo.HostUi.TripoUiText.Get("Tripo Rhino bridge shutdown failed: {0}"),
                 exception);
         }
     }
@@ -261,7 +264,7 @@ public sealed class TripoRhinoPlugin : PlugIn, IDisposable
         catch (Exception exception)
         {
             System.Diagnostics.Trace.TraceError(
-                "Tripo Rhino dispatcher shutdown failed: {0}",
+                Tripo.HostUi.TripoUiText.Get("Tripo Rhino dispatcher shutdown failed: {0}"),
                 exception);
         }
     }

@@ -47,9 +47,7 @@ public sealed record TripoApiKeyPromptPolicy(
                 replacing && !recoveryMode,
             workflowOperationId,
             PersistBlockedReason: storeUnavailable && !recoveryMode
-                ? "The credential store could not be read. This dialog can " +
-                  "set a session-only key. Saving stays refused until the " +
-                  "store can be read, so an existing key is not overwritten."
+                ? Tripo.HostUi.TripoUiText.Get("The credential store could not be read. This dialog can set a session-only key. Saving stays refused until the store can be read, so an existing key is not overwritten.")
                 : null);
     }
 }
@@ -69,26 +67,25 @@ public static class TripoPanelRecoveryReviewFormatter
                  snapshot.Recovery.Hints)
         {
             lines.Add(
-                $"Recovered document: {loaded.Hint.DocumentSessionId}");
+                Tripo.HostUi.TripoUiText.Format("Recovered document: {0}", loaded.Hint.DocumentSessionId));
             AppendPaidStatus(
                 lines,
                 inspections,
-                "Generation",
+                Tripo.HostUi.TripoUiText.Get("Generation"),
                 loaded.Hint.Generation);
             AppendPaidStatus(
                 lines,
                 inspections,
-                "Conversion",
+                Tripo.HostUi.TripoUiText.Get("Conversion"),
                 loaded.Hint.Conversion);
             if (loaded.Hint.Import is not null)
             {
-                lines.Add("Import");
+                lines.Add(Tripo.HostUi.TripoUiText.Get("Import"));
                 lines.Add(
-                    "Operation ID: " +
+                    Tripo.HostUi.TripoUiText.Get("Operation ID: ") +
                     loaded.Hint.Import.OperationId);
                 lines.Add(
-                    "Safety: The Rhino import may already have changed the " +
-                    "original document. Check that document before unlocking.");
+                    Tripo.HostUi.TripoUiText.Get("Safety: The Rhino import may already have changed the original document. Check that document before unlocking."));
             }
 
             lines.Add(string.Empty);
@@ -111,10 +108,10 @@ public static class TripoPanelRecoveryReviewFormatter
         }
 
         lines.Add(stage);
-        lines.Add($"Operation ID: {hint.OperationId}");
+        lines.Add(Tripo.HostUi.TripoUiText.Format("Operation ID: {0}", hint.OperationId));
         if (!string.IsNullOrWhiteSpace(hint.TaskId))
         {
-            lines.Add($"Recovered task ID: {hint.TaskId}");
+            lines.Add(Tripo.HostUi.TripoUiText.Format("Recovered task ID: {0}", hint.TaskId));
         }
 
         if (!inspections.TryGetValue(
@@ -123,18 +120,16 @@ public static class TripoPanelRecoveryReviewFormatter
             inspection.Receipt is null)
         {
             lines.Add(
-                "Local status: unavailable" +
+                Tripo.HostUi.TripoUiText.Get("Local status: unavailable") +
                 (string.IsNullOrWhiteSpace(inspection?.ErrorCode)
                     ? string.Empty
                     : $" ({inspection.ErrorCode})"));
             lines.Add(
-                "Safety: Local evidence cannot prove whether Tripo accepted " +
-                "or charged this request. Check Tripo task and billing history " +
-                "before unlocking.");
+                Tripo.HostUi.TripoUiText.Get("Safety: Local evidence cannot prove whether Tripo accepted or charged this request. Check Tripo task and billing history before unlocking."));
             if (!string.IsNullOrWhiteSpace(inspection?.ErrorMessage))
             {
                 lines.Add(
-                    "Technical detail: " +
+                    Tripo.HostUi.TripoUiText.Get("Technical detail: ") +
                     inspection.ErrorMessage);
             }
 
@@ -143,32 +138,32 @@ public static class TripoPanelRecoveryReviewFormatter
 
         Tripo.Bridge.HostControlOperationStatusReceipt status =
             inspection.Receipt;
-        lines.Add($"Request kind: {status.Kind}");
-        lines.Add($"Local state: {status.State}");
+        lines.Add(Tripo.HostUi.TripoUiText.Format("Request kind: {0}", status.Kind));
+        lines.Add(Tripo.HostUi.TripoUiText.Format("Local state: {0}", status.State));
         lines.Add(
-            $"Last local journal update: {status.UpdatedAtUtc:O}");
+            Tripo.HostUi.TripoUiText.Format("Last local journal update: {0:O}", status.UpdatedAtUtc));
         if (!string.IsNullOrWhiteSpace(status.SourceTaskId))
         {
-            lines.Add($"Source task ID: {status.SourceTaskId}");
+            lines.Add(Tripo.HostUi.TripoUiText.Format("Source task ID: {0}", status.SourceTaskId));
         }
 
         lines.Add(
             string.IsNullOrWhiteSpace(status.CreatedTaskId)
-                ? "Task ID: No task ID was recorded"
-                : $"Task ID: {status.CreatedTaskId}");
+                ? Tripo.HostUi.TripoUiText.Get("Task ID: No task ID was recorded")
+                : Tripo.HostUi.TripoUiText.Format("Task ID: {0}", status.CreatedTaskId));
         if (!string.IsNullOrWhiteSpace(status.FailureCode))
         {
-            lines.Add($"Failure code: {status.FailureCode}");
+            lines.Add(Tripo.HostUi.TripoUiText.Format("Failure code: {0}", status.FailureCode));
         }
 
         if (!string.IsNullOrWhiteSpace(status.FailureStage))
         {
-            lines.Add($"Failure stage: {status.FailureStage}");
+            lines.Add(Tripo.HostUi.TripoUiText.Format("Failure stage: {0}", status.FailureStage));
         }
 
         if (!string.IsNullOrWhiteSpace(status.FailureMessage))
         {
-            lines.Add($"Failure detail: {status.FailureMessage}");
+            lines.Add(Tripo.HostUi.TripoUiText.Format("Failure detail: {0}", status.FailureMessage));
         }
 
         if (status.OperationInProgress ||
@@ -178,14 +173,12 @@ public static class TripoPanelRecoveryReviewFormatter
                 StringComparison.Ordinal))
         {
             lines.Add(
-                "Safety: This operation is still active. Wait and refresh; " +
-                "Tripo will not unlock recovery while it is in progress.");
+                Tripo.HostUi.TripoUiText.Get("Safety: This operation is still active. Wait and refresh; Tripo will not unlock recovery while it is in progress."));
         }
         else if (status.TaskIdDurable)
         {
             lines.Add(
-                "Recovery: Refresh this task. Do not create a replacement " +
-                "request or UUID.");
+                Tripo.HostUi.TripoUiText.Get("Recovery: Refresh this task. Do not create a replacement request or UUID."));
         }
         else if (status.MayHaveCreatedRemoteTask ||
                  string.Equals(
@@ -194,20 +187,18 @@ public static class TripoPanelRecoveryReviewFormatter
                      StringComparison.Ordinal))
         {
             lines.Add(
-                "Safety: Tripo may have accepted and charged this request. " +
-                "Do not send a replacement request.");
+                Tripo.HostUi.TripoUiText.Get("Safety: Tripo may have accepted and charged this request. Do not send a replacement request."));
             lines.Add(
-                "Check Tripo task and billing history before unlocking.");
+                Tripo.HostUi.TripoUiText.Get("Check Tripo task and billing history before unlocking."));
         }
         else if (status.CanResumeCreation)
         {
             lines.Add(
-                "Recovery: Resume only with this same operation ID. A retry " +
-                "still requires explicit cost confirmation.");
+                Tripo.HostUi.TripoUiText.Get("Recovery: Resume only with this same operation ID. A retry still requires explicit cost confirmation."));
         }
         else
         {
-            lines.Add("Next action: " + status.NextAction);
+            lines.Add(Tripo.HostUi.TripoUiText.Get("Next action: ") + status.NextAction);
         }
     }
 }
@@ -239,8 +230,7 @@ internal static class DirectGlbFirstDispatchGuard
         ArgumentNullException.ThrowIfNull(prepared);
         if (!Equals(state.PreparedGeneration, prepared))
         {
-            return "The prepared generation no longer matches the confirmed " +
-                   "direct GLB workflow. Nothing was sent.";
+            return Tripo.HostUi.TripoUiText.Get("The prepared generation no longer matches the confirmed direct GLB workflow. Nothing was sent.");
         }
 
         return GetBlockingReason(
@@ -261,8 +251,7 @@ internal static class DirectGlbFirstDispatchGuard
         ArgumentNullException.ThrowIfNull(prepared);
         if (!Equals(state.PreparedImageGeneration, prepared))
         {
-            return "The prepared generation no longer matches the confirmed " +
-                   "direct GLB workflow. Nothing was sent.";
+            return Tripo.HostUi.TripoUiText.Get("The prepared generation no longer matches the confirmed direct GLB workflow. Nothing was sent.");
         }
 
         return GetBlockingReason(
@@ -286,26 +275,25 @@ internal static class DirectGlbFirstDispatchGuard
         ArgumentNullException.ThrowIfNull(recovery);
         if (recovery.HasBlock)
         {
-            return "Review recovered operation IDs before starting a " +
-                   "generation request that can consume credits.";
+            return Tripo.HostUi.TripoUiText.Get("Review recovered operation IDs before starting a generation request that can consume credits.");
         }
 
         if (!directGlbSelected)
         {
-            return "Direct GLB is no longer selected. Nothing was sent.";
+            return Tripo.HostUi.TripoUiText.Get("Direct GLB is no longer selected. Nothing was sent.");
         }
 
         if (!state.Connected ||
             state.Busy ||
             state.CredentialStatus?.HasApiKey != true)
         {
-            return "The refreshed Rhino connection is not ready for generation.";
+            return Tripo.HostUi.TripoUiText.Get("The refreshed Rhino connection is not ready for generation.");
         }
 
         Tripo.Bridge.HostContextReceipt? context = state.Context;
         if (context is null)
         {
-            return "The active Rhino document context is unavailable.";
+            return Tripo.HostUi.TripoUiText.Get("The active Rhino document context is unavailable.");
         }
 
         if (!string.Equals(
@@ -316,8 +304,7 @@ internal static class DirectGlbFirstDispatchGuard
                 Tripo.Bridge.BridgeConstants.ImportGlbMethod,
                 StringComparer.Ordinal))
         {
-            return "Direct GLB is unavailable in the refreshed plugin/sidecar " +
-                   "pair. No generation request was sent.";
+            return Tripo.HostUi.TripoUiText.Get("Direct GLB is unavailable in the refreshed plugin/sidecar pair. No generation request was sent.");
         }
 
         if (!string.Equals(
@@ -336,8 +323,7 @@ internal static class DirectGlbFirstDispatchGuard
             state.GenerationDispatchAttempted ||
             !state.CanDispatchPreparedGeneration)
         {
-            return "The prepared generation no longer matches the confirmed " +
-                   "direct GLB workflow. Nothing was sent.";
+            return Tripo.HostUi.TripoUiText.Get("The prepared generation no longer matches the confirmed direct GLB workflow. Nothing was sent.");
         }
 
         return null;
@@ -356,7 +342,7 @@ public sealed class TripoPanelPresentation
 
     public string CredentialStatus { get; private init; } = string.Empty;
 
-    public string ApiKeyText { get; private init; } = "API key…";
+    public string ApiKeyText { get; private init; } = Tripo.HostUi.TripoUiText.Get("API key\u2026");
 
     public string ApiKeyHelp { get; private init; } = string.Empty;
 
@@ -365,7 +351,7 @@ public sealed class TripoPanelPresentation
     public string RecoveryDetails { get; private init; } = string.Empty;
 
     public string RecoveryActionText { get; private init; } =
-        "Review recovery…";
+        Tripo.HostUi.TripoUiText.Get("Review recovery\u2026");
 
     public bool RecoveryHasBlock { get; private init; }
 
@@ -428,7 +414,7 @@ public sealed class TripoPanelPresentation
     internal bool CanStartDirectGlbCreate { get; private init; }
 
     public string CreateInRhinoText { get; private init; } =
-        "Create in Rhino";
+        Tripo.HostUi.TripoUiText.Get("Create in Rhino");
 
     public string CreateInRhinoHelp { get; private init; } = string.Empty;
 
@@ -439,7 +425,7 @@ public sealed class TripoPanelPresentation
     public bool DirectGlbWaitActionEnabled { get; private init; }
 
     public string DirectGlbWaitActionText { get; private init; } =
-        "Stop waiting";
+        Tripo.HostUi.TripoUiText.Get("Stop waiting");
 
     public string DirectGlbWaitActionHelp { get; private init; } =
         string.Empty;
@@ -450,11 +436,8 @@ public sealed class TripoPanelPresentation
 
     public string GenerateHelp { get; private init; } = string.Empty;
 
-    internal const string DirectGlbAdvancedGenerateHelp =
-        "Direct GLB is selected. Use Create in Rhino so the paid task " +
-        "imports automatically. This button stays off so it cannot start a " +
-        "separate charge. Choose OBJ compatibility to generate on the " +
-        "manual path.";
+    internal static string DirectGlbAdvancedGenerateHelp =>
+        Tripo.HostUi.TripoUiText.Get("Direct GLB is selected. Use Create in Rhino so the paid task imports automatically. This button stays off so it cannot start a separate charge. Choose OBJ compatibility to generate on the manual path.");
 
     internal static bool DirectGlbBlocksAdvancedGenerate(
         bool directGlbSelected,
@@ -646,71 +629,54 @@ public sealed class TripoPanelPresentation
         string resultStatus = directGlbCreateStage switch
         {
             DirectGlbCreateUiStage.Preflighting =>
-                "Checking the active Rhino document and direct GLB support…",
+                Tripo.HostUi.TripoUiText.Get("Checking the active Rhino document and direct GLB support\u2026"),
             DirectGlbCreateUiStage.WaitingForGeneration
                 when state.LastError is not null =>
-                "Generation refresh paused: " + state.LastError +
-                " Click Refresh generation to continue. No import has run.",
+                Tripo.HostUi.TripoUiText.Get("Generation refresh paused: ") + state.LastError +
+                Tripo.HostUi.TripoUiText.Get(" Click Refresh generation to continue. No import has run."),
             DirectGlbCreateUiStage.WaitingForGeneration =>
-                "Waiting for Tripo generation… Rhino will import the GLB " +
-                "automatically when it is ready.",
+                Tripo.HostUi.TripoUiText.Get("Waiting for Tripo generation\u2026 Rhino will import the GLB automatically when it is ready."),
             DirectGlbCreateUiStage.WaitingPaused
                 when state.HasCredentialRefreshFailure =>
-                "Automatic waiting is paused and the generation credential " +
-                "needs recovery. Restore a same-account session-only key, " +
-                "then resume; nothing will import while paused.",
+                Tripo.HostUi.TripoUiText.Get("Automatic waiting is paused and the generation credential needs recovery. Restore a same-account session-only key, then resume; nothing will import while paused."),
             DirectGlbCreateUiStage.WaitingPaused
                 when generationSucceeded =>
-                "Generation is ready, but automatic import is paused. Resume " +
-                "automatic waiting to import this task's GLB.",
+                Tripo.HostUi.TripoUiText.Get("Generation is ready, but automatic import is paused. Resume automatic waiting to import this task\u0027s GLB."),
             DirectGlbCreateUiStage.WaitingPaused =>
-                "Automatic waiting is paused. The remote Tripo task was not " +
-                "canceled. Refresh manually or resume automatic waiting; " +
-                "nothing will import while paused.",
+                Tripo.HostUi.TripoUiText.Get("Automatic waiting is paused. The remote Tripo task was not canceled. Refresh manually or resume automatic waiting; nothing will import while paused."),
             DirectGlbCreateUiStage.Importing =>
-                "Generation complete. Importing GLB into Rhino…",
+                Tripo.HostUi.TripoUiText.Get("Generation complete. Importing GLB into Rhino\u2026"),
             DirectGlbCreateUiStage.Completed
                 when importReceiptVerified =>
                 FriendlyImportResult(
                     state.ImportReceipt!.HostReceipt.TransactionStatus),
             DirectGlbCreateUiStage.Completed
                 when state.ImportReceipt is not null =>
-                "Import receipt conflicts with this Rhino workflow · " +
-                "Review details",
+                Tripo.HostUi.TripoUiText.Get("Import receipt conflicts with this Rhino workflow \u00B7 Review details"),
             DirectGlbCreateUiStage.RecoveryBlocked =>
-                "Automatic import stopped before Rhino mutation because " +
-                "recovery evidence requires review. Nothing was imported; " +
-                "review Recovery before continuing.",
+                Tripo.HostUi.TripoUiText.Get("Automatic import stopped before Rhino mutation because recovery evidence requires review. Nothing was imported; review Recovery before continuing."),
             DirectGlbCreateUiStage.TerminalWithoutImport =>
-                "Generation ended with " +
-                (state.GenerationStatus?.Status ?? "an unknown status") +
-                ". Nothing was imported.",
+                Tripo.HostUi.TripoUiText.Get("Generation ended with ") +
+                (state.GenerationStatus?.Status ?? Tripo.HostUi.TripoUiText.Get("an unknown status")) +
+                Tripo.HostUi.TripoUiText.Get(". Nothing was imported."),
             DirectGlbCreateUiStage.Refused =>
-                "Automatic import was refused because the generation evidence " +
-                "did not match this workflow. Nothing was imported; review " +
-                "Workflow details.",
+                Tripo.HostUi.TripoUiText.Get("Automatic import was refused because the generation evidence did not match this workflow. Nothing was imported; review Workflow details."),
             DirectGlbCreateUiStage.ImportFailed =>
                 state.LastError is null
-                    ? "Automatic direct GLB import stopped before Rhino saved " +
-                      "a durable import receipt. Nothing was imported by this " +
-                      "attempt."
-                    : "Automatic direct GLB import stopped: " + state.LastError,
+                    ? Tripo.HostUi.TripoUiText.Get("Automatic direct GLB import stopped before Rhino saved a durable import receipt. Nothing was imported by this attempt.")
+                    : Tripo.HostUi.TripoUiText.Get("Automatic direct GLB import stopped: ") + state.LastError,
             DirectGlbCreateUiStage.ImportRetryRequired =>
-                "Rhino did not receive a durable import receipt. The same " +
-                "operation ID may already have been applied; use Retry same " +
-                "UUID instead of creating a replacement operation.",
+                Tripo.HostUi.TripoUiText.Get("Rhino did not receive a durable import receipt. The same operation ID may already have been applied; use Retry same UUID instead of creating a replacement operation."),
             DirectGlbCreateUiStage.ManualReviewRequired =>
-                "Rhino could not prove the final document state. Do not retry " +
-                "this import; inspect the document and recovery operation ID.",
+                Tripo.HostUi.TripoUiText.Get("Rhino could not prove the final document state. Do not retry this import; inspect the document and recovery operation ID."),
             _ when state.LastError is not null => state.LastError,
-            _ when state.Busy => "Working…",
+            _ when state.Busy => Tripo.HostUi.TripoUiText.Get("Working\u2026"),
             _ when importReceiptVerified =>
                 FriendlyImportResult(
                     state.ImportReceipt!.HostReceipt.TransactionStatus),
             _ when state.ImportReceipt is not null =>
-                "Import receipt conflicts with this Rhino workflow · " +
-                "Review details",
-            _ => "Ready.",
+                Tripo.HostUi.TripoUiText.Get("Import receipt conflicts with this Rhino workflow \u00B7 Review details"),
+            _ => Tripo.HostUi.TripoUiText.Get("Ready."),
         };
         bool directGlbBlocksAdvancedGenerate =
             DirectGlbBlocksAdvancedGenerate(
@@ -721,26 +687,26 @@ public sealed class TripoPanelPresentation
         return new TripoPanelPresentation
         {
             DocumentStatus = state.Context is null
-                ? "Document: not connected"
-                : $"Document: {state.Context.DocumentTitle}",
+                ? Tripo.HostUi.TripoUiText.Get("Document: not connected")
+                : Tripo.HostUi.TripoUiText.Format("Document: {0}", state.Context.DocumentTitle),
             DocumentSessionId =
-                state.Context?.DocumentSessionId ?? "Not connected",
+                state.Context?.DocumentSessionId ?? Tripo.HostUi.TripoUiText.Get("Not connected"),
             CredentialStatus = FormatCredentialStatus(state),
             ApiKeyText = RecoveryApiKeyText(state, recovery),
             ApiKeyHelp = BuildApiKeyHelp(state, recoveryBlocked),
             RecoveryHeader = recoveryBlocked
                 ? recovery.Issues.Count > 0
-                    ? "Recovery · Manual attention required"
-                    : "Recovery · Review before continuing"
-                : "Recovery · Clear",
+                    ? Tripo.HostUi.TripoUiText.Get("Recovery \u00B7 Manual attention required")
+                    : Tripo.HostUi.TripoUiText.Get("Recovery \u00B7 Review before continuing")
+                : Tripo.HostUi.TripoUiText.Get("Recovery \u00B7 Clear"),
             RecoveryDetails =
                 BuildRecoveryDetails(
                     state,
                     recovery,
                     recoveryInspection),
             RecoveryActionText = state.HasWorkflowState
-                ? "Reload and review all work…"
-                : "Review recovery…",
+                ? Tripo.HostUi.TripoUiText.Get("Reload and review all work\u2026")
+                : Tripo.HostUi.TripoUiText.Get("Review recovery\u2026"),
             RecoveryHasBlock = recoveryBlocked,
             RecoveryToken = recovery.PresentationToken,
             LatestPreparedOperationId =
@@ -748,8 +714,8 @@ public sealed class TripoPanelPresentation
                 state.PreparedConversion?.OperationId ??
                 state.PreparedGenerationOperationId,
             GenerationOperationId =
-                state.PreparedGenerationOperationId ?? "Not prepared",
-            GenerationTaskId = generationTaskId ?? "Not created",
+                state.PreparedGenerationOperationId ?? Tripo.HostUi.TripoUiText.Get("Not prepared"),
+            GenerationTaskId = generationTaskId ?? Tripo.HostUi.TripoUiText.Get("Not created"),
             GenerationStatus = StageStatus(
                 generationTaskId,
                 state.GenerationOperationStatus,
@@ -763,8 +729,8 @@ public sealed class TripoPanelPresentation
                 state.GenerationStatus is not null,
             GenerationProgress = Progress(state.GenerationStatus),
             ConversionOperationId =
-                state.PreparedConversion?.OperationId ?? "Not prepared",
-            ConversionTaskId = conversionTaskId ?? "Not created",
+                state.PreparedConversion?.OperationId ?? Tripo.HostUi.TripoUiText.Get("Not prepared"),
+            ConversionTaskId = conversionTaskId ?? Tripo.HostUi.TripoUiText.Get("Not created"),
             ConversionStatus = StageStatus(
                 conversionTaskId,
                 state.ConversionOperationStatus,
@@ -777,12 +743,12 @@ public sealed class TripoPanelPresentation
                 state.ConversionStatus is not null,
             ConversionProgress = Progress(state.ConversionStatus),
             ImportOperationId =
-                state.PreparedImport?.OperationId ?? "Not prepared",
+                state.PreparedImport?.OperationId ?? Tripo.HostUi.TripoUiText.Get("Not prepared"),
             ImportCreatedObjectId =
-                state.ImportReceipt?.HostReceipt.CreatedId ?? "Not created",
+                state.ImportReceipt?.HostReceipt.CreatedId ?? Tripo.HostUi.TripoUiText.Get("Not created"),
             ImportTransactionStatus =
                 state.ImportReceipt?.HostReceipt.TransactionStatus ??
-                "Not available",
+                Tripo.HostUi.TripoUiText.Get("Not available"),
             ImportReceiptDetailsVisible = state.ImportReceipt is not null,
             ResultStatus = resultStatus,
             ResultVisible =
@@ -823,31 +789,31 @@ public sealed class TripoPanelPresentation
             CreateInRhinoText = directGlbCreateStage switch
             {
                 DirectGlbCreateUiStage.Preflighting =>
-                    "Checking…",
+                    Tripo.HostUi.TripoUiText.Get("Checking\u2026"),
                 DirectGlbCreateUiStage.WaitingForGeneration =>
-                    "Generating…",
+                    Tripo.HostUi.TripoUiText.Get("Generating\u2026"),
                 DirectGlbCreateUiStage.WaitingPaused =>
-                    "Waiting paused",
+                    Tripo.HostUi.TripoUiText.Get("Waiting paused"),
                 DirectGlbCreateUiStage.Importing =>
-                    "Importing GLB…",
+                    Tripo.HostUi.TripoUiText.Get("Importing GLB\u2026"),
                 DirectGlbCreateUiStage.Completed =>
                     !importReceiptVerified
-                        ? "Review required"
+                        ? Tripo.HostUi.TripoUiText.Get("Review required")
                         : state.ImportReceipt?.HostReceipt.TransactionStatus switch
                         {
-                            "committed" => "Created in Rhino",
-                            "already_exists" => "Already in Rhino",
-                            _ => "Review required",
+                            "committed" => Tripo.HostUi.TripoUiText.Get("Created in Rhino"),
+                            "already_exists" => Tripo.HostUi.TripoUiText.Get("Already in Rhino"),
+                            _ => Tripo.HostUi.TripoUiText.Get("Review required"),
                         },
                 DirectGlbCreateUiStage.TerminalWithoutImport or
                 DirectGlbCreateUiStage.RecoveryBlocked or
                 DirectGlbCreateUiStage.Refused or
                 DirectGlbCreateUiStage.ImportFailed or
                 DirectGlbCreateUiStage.ImportRetryRequired =>
-                    "Review required",
+                    Tripo.HostUi.TripoUiText.Get("Review required"),
                 DirectGlbCreateUiStage.ManualReviewRequired =>
-                    "Manual review required",
-                _ => "Create in Rhino",
+                    Tripo.HostUi.TripoUiText.Get("Manual review required"),
+                _ => Tripo.HostUi.TripoUiText.Get("Create in Rhino"),
             },
             CreateInRhinoHelp =
                 BuildCreateInRhinoHelp(
@@ -880,19 +846,15 @@ public sealed class TripoPanelPresentation
             DirectGlbWaitActionText =
                 directGlbCreateStage ==
                     DirectGlbCreateUiStage.WaitingPaused
-                    ? "Resume automatic waiting"
-                    : "Stop waiting",
+                    ? Tripo.HostUi.TripoUiText.Get("Resume automatic waiting")
+                    : Tripo.HostUi.TripoUiText.Get("Stop waiting"),
             DirectGlbWaitActionHelp =
                 directGlbCreateStage ==
                     DirectGlbCreateUiStage.WaitingPaused
                     ? state.HasCredentialRefreshFailure
-                        ? "Restore a same-account session-only API key before " +
-                          "resuming this same generation task."
-                        : "Resume local status polling and automatic direct GLB " +
-                          "import for this same generation task."
-                    : "Stop local status polling and automatic import. This " +
-                      "does not cancel the remote Tripo task or refund credits; " +
-                      "you can refresh manually or resume later.",
+                        ? Tripo.HostUi.TripoUiText.Get("Restore a same-account session-only API key before resuming this same generation task.")
+                        : Tripo.HostUi.TripoUiText.Get("Resume local status polling and automatic direct GLB import for this same generation task.")
+                    : Tripo.HostUi.TripoUiText.Get("Stop local status polling and automatic import. This does not cancel the remote Tripo task or refund credits; you can refresh manually or resume later."),
             GenerateEnabled =
                 controlsReady &&
                 !recoveryBlocked &&
@@ -905,25 +867,23 @@ public sealed class TripoPanelPresentation
                   (!state.GenerationDispatchAttempted ||
                    state.GenerationRetryAllowed))),
             GenerateText = directGlbBlocksAdvancedGenerate
-                ? "Use Create in Rhino"
+                ? Tripo.HostUi.TripoUiText.Get("Use Create in Rhino")
                 : !generationPrepared
                 ? imageMode
-                    ? "Generate from image"
-                    : "Generate"
+                    ? Tripo.HostUi.TripoUiText.Get("Generate from image")
+                    : Tripo.HostUi.TripoUiText.Get("Generate")
                 : state.GenerationRetryAllowed
-                    ? "Retry same UUID"
+                    ? Tripo.HostUi.TripoUiText.Get("Retry same UUID")
                     : state.GenerationRetryRequired
-                        ? "Refresh before retry"
+                        ? Tripo.HostUi.TripoUiText.Get("Refresh before retry")
                         : state.CanDispatchPreparedGeneration
-                            ? "Send prepared"
-                            : "Request sent",
+                            ? Tripo.HostUi.TripoUiText.Get("Send prepared")
+                            : Tripo.HostUi.TripoUiText.Get("Request sent"),
             GenerateHelp = directGlbBlocksAdvancedGenerate
                 ? DirectGlbAdvancedGenerateHelp
                 : generationPrepared && state.GenerationRetryAllowed
-                    ? "Retry the same generation UUID. This does not create " +
-                      "a new operation."
-                    : "Create a Tripo generation task on the manual path. " +
-                      "Import is a later, separate step.",
+                    ? Tripo.HostUi.TripoUiText.Get("Retry the same generation UUID. This does not create a new operation.")
+                    : Tripo.HostUi.TripoUiText.Get("Create a Tripo generation task on the manual path. Import is a later, separate step."),
             RefreshGenerationEnabled =
                 ready &&
                 !recoveryBlocked &&
@@ -939,14 +899,14 @@ public sealed class TripoPanelPresentation
                   (!state.ConversionDispatchAttempted ||
                    state.ConversionRetryAllowed))),
             ConvertText = !conversionPrepared
-                ? "Convert to OBJ"
+                ? Tripo.HostUi.TripoUiText.Get("Convert to OBJ")
                 : state.ConversionRetryAllowed
-                    ? "Retry same UUID"
+                    ? Tripo.HostUi.TripoUiText.Get("Retry same UUID")
                     : state.ConversionRetryRequired
-                        ? "Refresh before retry"
+                        ? Tripo.HostUi.TripoUiText.Get("Refresh before retry")
                         : state.CanDispatchPreparedConversion
-                            ? "Send prepared"
-                            : "Request sent",
+                            ? Tripo.HostUi.TripoUiText.Get("Send prepared")
+                            : Tripo.HostUi.TripoUiText.Get("Request sent"),
             RefreshConversionEnabled =
                 ready &&
                 !recoveryBlocked &&
@@ -961,30 +921,24 @@ public sealed class TripoPanelPresentation
                     : state.CanDispatchPreparedImport),
             ImportText = state.PreparedImport is null
                 ? directGlbRoute
-                    ? "Import GLB (recommended)"
-                    : "Import OBJ into Rhino"
+                    ? Tripo.HostUi.TripoUiText.Get("Import GLB (recommended)")
+                    : Tripo.HostUi.TripoUiText.Get("Import OBJ into Rhino")
                 : state.ImportRequiresManualReview
-                    ? "Manual review required"
+                    ? Tripo.HostUi.TripoUiText.Get("Manual review required")
                 : state.ImportRetryRequired
-                    ? "Retry same UUID"
+                    ? Tripo.HostUi.TripoUiText.Get("Retry same UUID")
                     : state.CanDispatchPreparedImport
-                        ? "Import prepared"
-                        : "Imported",
+                        ? Tripo.HostUi.TripoUiText.Get("Import prepared")
+                        : Tripo.HostUi.TripoUiText.Get("Imported"),
             ImportSourceEnabled =
                 controlsReady && state.PreparedImport is null,
             ImportGuidance = state.ImportRequiresManualReview
-                ? "Rhino could not prove the final document state. Do not " +
-                  "retry this import; inspect the document and recovery " +
-                  "operation ID manually."
+                ? Tripo.HostUi.TripoUiText.Get("Rhino could not prove the final document state. Do not retry this import; inspect the document and recovery operation ID manually.")
                 : directGlbRoute
                     ? directGlbSupported
-                    ? "Recommended: import the generation GLB directly with " +
-                      "Rhino-native materials when available. No OBJ conversion " +
-                      "task is created."
-                    : "Direct GLB is unavailable in this plugin/sidecar pair. " +
-                      "Install the matching build or select OBJ compatibility."
-                : "Compatibility path: create and finish a separate OBJ " +
-                  "conversion before importing.",
+                    ? Tripo.HostUi.TripoUiText.Get("Recommended: import the generation GLB directly with Rhino-native materials when available. No OBJ conversion task is created.")
+                    : Tripo.HostUi.TripoUiText.Get("Direct GLB is unavailable in this plugin/sidecar pair. Install the matching build or select OBJ compatibility.")
+                : Tripo.HostUi.TripoUiText.Get("Compatibility path: create and finish a separate OBJ conversion before importing."),
             ResetEnabled = resetEnabled,
             ResetVisible =
                 resetEnabled &&
@@ -1034,8 +988,7 @@ public sealed class TripoPanelPresentation
     {
         if (directGlbCreateStage == DirectGlbCreateUiStage.Preflighting)
         {
-            return "Refreshing the active document, credential, and direct " +
-                   "GLB capability before any request that can consume credits.";
+            return Tripo.HostUi.TripoUiText.Get("Refreshing the active document, credential, and direct GLB capability before any request that can consume credits.");
         }
 
         if (directGlbCreateStage ==
@@ -1044,66 +997,47 @@ public sealed class TripoPanelPresentation
             if (state.LastError is not null)
             {
                 return state.HasCredentialRefreshFailure
-                    ? "Generation refresh is paused. Restore a same-account " +
-                      "API key for this workflow, or click Refresh generation " +
-                      "to retry. The key remains session-only; no import has run."
-                    : "Generation refresh is paused. Click Refresh generation " +
-                      "to retry. API-key changes remain locked because the " +
-                      "sidecar did not report a credential failure; no import " +
-                      "has run.";
+                    ? Tripo.HostUi.TripoUiText.Get("Generation refresh is paused. Restore a same-account API key for this workflow, or click Refresh generation to retry. The key remains session-only; no import has run.")
+                    : Tripo.HostUi.TripoUiText.Get("Generation refresh is paused. Click Refresh generation to retry. API-key changes remain locked because the sidecar did not report a credential failure; no import has run.");
             }
 
-            return "Waiting for the same generation task. Rhino will " +
-                   "import its GLB directly when it reports success; no OBJ " +
-                   "conversion task is created.";
+            return Tripo.HostUi.TripoUiText.Get("Waiting for the same generation task. Rhino will import its GLB directly when it reports success; no OBJ conversion task is created.");
         }
 
         if (directGlbCreateStage ==
             DirectGlbCreateUiStage.WaitingPaused)
         {
             return state.HasCredentialRefreshFailure
-                ? "Local polling and automatic direct GLB import are paused. " +
-                  "Restore a same-account session-only API key before resuming; " +
-                  "the same task and durable operation ID are kept."
-                : "Local polling and automatic direct GLB import are paused. " +
-                   "The same remote task and durable operation ID are kept; " +
-                   "resume waiting when you want Rhino to import on success.";
+                ? Tripo.HostUi.TripoUiText.Get("Local polling and automatic direct GLB import are paused. Restore a same-account session-only API key before resuming; the same task and durable operation ID are kept.")
+                : Tripo.HostUi.TripoUiText.Get("Local polling and automatic direct GLB import are paused. The same remote task and durable operation ID are kept; resume waiting when you want Rhino to import on success.");
         }
 
         if (directGlbCreateStage == DirectGlbCreateUiStage.Importing)
         {
-            return "The generation succeeded and Rhino is importing that " +
-                   "task's GLB directly.";
+            return Tripo.HostUi.TripoUiText.Get("The generation succeeded and Rhino is importing that task\u0027s GLB directly.");
         }
 
         if (directGlbCreateStage == DirectGlbCreateUiStage.Completed)
         {
-            return "The confirmed generation GLB has a durable Rhino import " +
-                   "receipt.";
+            return Tripo.HostUi.TripoUiText.Get("The confirmed generation GLB has a durable Rhino import receipt.");
         }
 
         if (directGlbCreateStage ==
             DirectGlbCreateUiStage.ManualReviewRequired)
         {
-            return "Rhino could not prove whether the document mutation " +
-                   "committed. Do not retry; inspect the owning document and " +
-                   "recovery operation ID.";
+            return Tripo.HostUi.TripoUiText.Get("Rhino could not prove whether the document mutation committed. Do not retry; inspect the owning document and recovery operation ID.");
         }
 
         if (directGlbCreateStage ==
             DirectGlbCreateUiStage.ImportRetryRequired)
         {
-            return "The import receipt is missing. The existing import action " +
-                   "can retry the same durable UUID; do not create a replacement " +
-                   "operation.";
+            return Tripo.HostUi.TripoUiText.Get("The import receipt is missing. The existing import action can retry the same durable UUID; do not create a replacement operation.");
         }
 
         if (directGlbCreateStage ==
             DirectGlbCreateUiStage.RecoveryBlocked)
         {
-            return "Automatic import stopped before Rhino mutation because " +
-                   "recovery evidence requires review. Nothing was imported; " +
-                   "open Recovery and reconcile the durable operation IDs.";
+            return Tripo.HostUi.TripoUiText.Get("Automatic import stopped before Rhino mutation because recovery evidence requires review. Nothing was imported; open Recovery and reconcile the durable operation IDs.");
         }
 
         if (directGlbCreateStage is
@@ -1111,25 +1045,22 @@ public sealed class TripoPanelPresentation
             DirectGlbCreateUiStage.Refused or
             DirectGlbCreateUiStage.ImportFailed)
         {
-            return "Nothing was imported. Review the generation status and " +
-                   "Workflow details, then start a new workflow when safe.";
+            return Tripo.HostUi.TripoUiText.Get("Nothing was imported. Review the generation status and Workflow details, then start a new workflow when safe.");
         }
 
         if (state.Busy)
         {
-            return "Wait for the current panel operation to finish.";
+            return Tripo.HostUi.TripoUiText.Get("Wait for the current panel operation to finish.");
         }
 
         if (!state.Connected)
         {
-            return "Connect to the active Rhino document first. The manual " +
-                   "Connect / Refresh action is in Advanced.";
+            return Tripo.HostUi.TripoUiText.Get("Connect to the active Rhino document first. The manual Connect / Refresh action is in Advanced.");
         }
 
         if (recoveryBlocked)
         {
-            return "Review the recovered operation IDs before starting new " +
-                   "generation work that can consume credits.";
+            return Tripo.HostUi.TripoUiText.Get("Review the recovered operation IDs before starting new generation work that can consume credits.");
         }
 
         if (string.Equals(
@@ -1137,56 +1068,45 @@ public sealed class TripoPanelPresentation
                 Tripo.Bridge.HostControlConstants.CredentialSourceUnavailable,
                 StringComparison.Ordinal))
         {
-            return "The credential store could not be read. Open Settings to " +
-                   "set a session-only key, or retry after the store is " +
-                   "available. Saving a key stays refused.";
+            return Tripo.HostUi.TripoUiText.Get("The credential store could not be read. Open Settings to set a session-only key, or retry after the store is available. Saving a key stays refused.");
         }
 
         if (state.CredentialStatus?.HasApiKey != true)
         {
-            return "Open Settings and set a Tripo API key before starting " +
-                   "generation that can consume credits.";
+            return Tripo.HostUi.TripoUiText.Get("Open Settings and set a Tripo API key before starting generation that can consume credits.");
         }
 
         if (!directGlbSelected)
         {
-            return "Direct GLB is required for the one-click Rhino workflow. " +
-                   "OBJ compatibility is selected in Advanced and remains a " +
-                   "separate manual path.";
+            return Tripo.HostUi.TripoUiText.Get("Direct GLB is required for the one-click Rhino workflow. OBJ compatibility is selected in Advanced and remains a separate manual path.");
         }
 
         if (!directGlbSupported)
         {
-            return "Direct GLB is unavailable in this plugin/sidecar pair. " +
-                   "Install the matching build before starting generation that " +
-                   "can consume credits.";
+            return Tripo.HostUi.TripoUiText.Get("Direct GLB is unavailable in this plugin/sidecar pair. Install the matching build before starting generation that can consume credits.");
         }
 
         if (state.HasWorkflowState)
         {
-            return "Finish or reset the current workflow before starting " +
-                   "another model.";
+            return Tripo.HostUi.TripoUiText.Get("Finish or reset the current workflow before starting another model.");
         }
 
         if (imageMode && !hasImage)
         {
-            return "Choose an image before starting image-to-model generation.";
+            return Tripo.HostUi.TripoUiText.Get("Choose an image before starting image-to-model generation.");
         }
 
         if (!imageMode && !hasPrompt)
         {
-            return "The prompt must contain 1 to 1024 characters.";
+            return Tripo.HostUi.TripoUiText.Get("The prompt must contain 1 to 1024 characters.");
         }
 
         if (!hasObjectName)
         {
-            return "The Rhino object name in Settings must contain 1 to 128 " +
-                   "characters.";
+            return Tripo.HostUi.TripoUiText.Get("The Rhino object name in Settings must contain 1 to 128 characters.");
         }
 
-        return "Clicking Create in Rhino authorizes one Tripo generation " +
-               "task that can consume credits. Its GLB imports directly into " +
-               "Rhino. No separate OBJ conversion request is sent.";
+        return Tripo.HostUi.TripoUiText.Get("Clicking Create in Rhino authorizes one Tripo generation task that can consume credits. Its GLB imports directly into Rhino. No separate OBJ conversion request is sent.");
     }
 
     private static string BuildApiKeyHelp(
@@ -1195,12 +1115,12 @@ public sealed class TripoPanelPresentation
     {
         if (state.Busy)
         {
-            return "Wait for the current panel operation to finish.";
+            return Tripo.HostUi.TripoUiText.Get("Wait for the current panel operation to finish.");
         }
 
         if (!state.Connected)
         {
-            return "Connect to the active Rhino document first.";
+            return Tripo.HostUi.TripoUiText.Get("Connect to the active Rhino document first.");
         }
 
         if (state.CredentialStatus is
@@ -1209,23 +1129,19 @@ public sealed class TripoPanelPresentation
                 Source: "environment",
             })
         {
-            return "TRIPO_API_KEY from the environment overrides panel keys. " +
-                   "Change it outside Rhino, then restart Rhino.";
+            return Tripo.HostUi.TripoUiText.Get("TRIPO_API_KEY from the environment overrides panel keys. Change it outside Rhino, then restart Rhino.");
         }
 
         if (state.RequiresCredentialRecovery)
         {
             return state.HasUnresolvedPaidDispatch
-                ? "Restore the exact original API key for this workflow. The " +
-                  "recovery key remains session-only."
-                : "Use a key for the same Tripo account. The recovery key " +
-                  "remains session-only until reset.";
+                ? Tripo.HostUi.TripoUiText.Get("Restore the exact original API key for this workflow. The recovery key remains session-only.")
+                : Tripo.HostUi.TripoUiText.Get("Use a key for the same Tripo account. The recovery key remains session-only until reset.");
         }
 
         if (recoveryBlocked)
         {
-            return "Review the previous request before setting or changing " +
-                   "the key.";
+            return Tripo.HostUi.TripoUiText.Get("Review the previous request before setting or changing the key.");
         }
 
         if (string.Equals(
@@ -1233,12 +1149,10 @@ public sealed class TripoPanelPresentation
                 Tripo.Bridge.HostControlConstants.CredentialSourceUnavailable,
                 StringComparison.Ordinal))
         {
-            return "The credential store could not be read. A session-only " +
-                   "key can still be set. Saving and removing a stored key " +
-                   "stay refused until the store can be read.";
+            return Tripo.HostUi.TripoUiText.Get("The credential store could not be read. A session-only key can still be set. Saving and removing a stored key stay refused until the store can be read.");
         }
 
-        return "Set or replace the Tripo v3 API key.";
+        return Tripo.HostUi.TripoUiText.Get("Set or replace the Tripo v3 API key.");
     }
 
     private static string BuildClearApiKeyHelp(
@@ -1247,23 +1161,22 @@ public sealed class TripoPanelPresentation
     {
         if (state.Busy)
         {
-            return "Wait for the current panel operation to finish.";
+            return Tripo.HostUi.TripoUiText.Get("Wait for the current panel operation to finish.");
         }
 
         if (!state.Connected)
         {
-            return "Connect to the active Rhino document first.";
+            return Tripo.HostUi.TripoUiText.Get("Connect to the active Rhino document first.");
         }
 
         if (recoveryBlocked)
         {
-            return "Reconcile the recovered operation IDs before removing keys.";
+            return Tripo.HostUi.TripoUiText.Get("Reconcile the recovered operation IDs before removing keys.");
         }
 
         if (state.HasCredentialBoundWorkflow)
         {
-            return "Finish or reconcile this account-bound workflow and " +
-                   "explicitly reset it before removing the saved key.";
+            return Tripo.HostUi.TripoUiText.Get("Finish or reconcile this account-bound workflow and explicitly reset it before removing the saved key.");
         }
 
         if (state.CredentialStatus is
@@ -1272,8 +1185,7 @@ public sealed class TripoPanelPresentation
                 Source: "environment",
             })
         {
-            return "TRIPO_API_KEY is active. Change it outside Rhino and " +
-                   "restart Rhino before managing saved keys.";
+            return Tripo.HostUi.TripoUiText.Get("TRIPO_API_KEY is active. Change it outside Rhino and restart Rhino before managing saved keys.");
         }
 
         Tripo.Bridge.HostControlCredentialStatusReceipt? credentials =
@@ -1281,29 +1193,27 @@ public sealed class TripoPanelPresentation
         if (credentials is null ||
             !credentials.StoredKeyPresenceKnown)
         {
-            return "Saved-key presence is unknown; refresh the connection first.";
+            return Tripo.HostUi.TripoUiText.Get("Saved-key presence is unknown; refresh the connection first.");
         }
 
         if (!credentials.StoredKeyPresent)
         {
-            return "No OS-stored Tripo API key is present.";
+            return Tripo.HostUi.TripoUiText.Get("No OS-stored Tripo API key is present.");
         }
 
         if (!credentials.CanClearStoredKey)
         {
-            return "The current credential backend cannot clear the saved key.";
+            return Tripo.HostUi.TripoUiText.Get("The current credential backend cannot clear the saved key.");
         }
 
         return credentials.Source switch
         {
             "environment" =>
-                "Remove the OS-stored and session Tripo API keys. The " +
-                "environment key remains effective.",
+                Tripo.HostUi.TripoUiText.Get("Remove the OS-stored and session Tripo API keys. The environment key remains effective."),
             "session" =>
-                "Remove the current session key and OS-stored Tripo API key.",
+                Tripo.HostUi.TripoUiText.Get("Remove the current session key and OS-stored Tripo API key."),
             _ =>
-                "Remove the known OS-stored Tripo API key. The same operation " +
-                "also clears any active session override.",
+                Tripo.HostUi.TripoUiText.Get("Remove the known OS-stored Tripo API key. The same operation also clears any active session override."),
         };
     }
 
@@ -1311,34 +1221,34 @@ public sealed class TripoPanelPresentation
     {
         if (state.CredentialStatus is null)
         {
-            return "API key: unknown";
+            return Tripo.HostUi.TripoUiText.Get("API key: unknown");
         }
 
         string fallback = state.CredentialStatus.UsesWeakerFileFallback
-            ? " · private-file fallback"
+            ? Tripo.HostUi.TripoUiText.Get(" \u00B7 private-file fallback")
             : string.Empty;
         if (string.Equals(
                 state.CredentialStatus.Source,
                 Tripo.Bridge.HostControlConstants.CredentialSourceUnavailable,
                 StringComparison.Ordinal))
         {
-            return "API key: credential store unavailable" + fallback;
+            return Tripo.HostUi.TripoUiText.Get("API key: credential store unavailable") + fallback;
         }
 
         if (!state.CredentialStatus.HasApiKey)
         {
-            return "API key: not configured" + fallback;
+            return Tripo.HostUi.TripoUiText.Get("API key: not configured") + fallback;
         }
 
         string source = state.CredentialStatus.Source switch
         {
-            "store" => "saved",
-            "session" => "session only",
-            "environment" => "environment override",
-            "macOS Keychain" => "saved in macOS Keychain",
+            "store" => Tripo.HostUi.TripoUiText.Get("saved"),
+            "session" => Tripo.HostUi.TripoUiText.Get("session only"),
+            "environment" => Tripo.HostUi.TripoUiText.Get("environment override"),
+            "macOS Keychain" => Tripo.HostUi.TripoUiText.Get("saved in macOS Keychain"),
             _ => state.CredentialStatus.Source,
         };
-        return $"API key: {source}{fallback}";
+        return Tripo.HostUi.TripoUiText.Format("API key: {0}{1}", source, fallback);
     }
 
     private static string RecoveryApiKeyText(
@@ -1347,24 +1257,24 @@ public sealed class TripoPanelPresentation
     {
         if (recovery.Issues.Count > 0)
         {
-            return "Recovery needs attention…";
+            return Tripo.HostUi.TripoUiText.Get("Recovery needs attention\u2026");
         }
 
         if (state.RequiresCredentialRecovery)
         {
             return recovery.HasBlock
-                ? "Review, then restore key…"
-                : "Restore API key…";
+                ? Tripo.HostUi.TripoUiText.Get("Review, then restore key\u2026")
+                : Tripo.HostUi.TripoUiText.Get("Restore API key\u2026");
         }
 
         if (!recovery.HasBlock)
         {
-            return "API key…";
+            return Tripo.HostUi.TripoUiText.Get("API key\u2026");
         }
 
         return state.CredentialStatus?.HasApiKey == true
-            ? "Review, then change key…"
-            : "Review, then set key…";
+            ? Tripo.HostUi.TripoUiText.Get("Review, then change key\u2026")
+            : Tripo.HostUi.TripoUiText.Get("Review, then set key\u2026");
     }
 
     private static string BuildRecoveryDetails(
@@ -1375,64 +1285,55 @@ public sealed class TripoPanelPresentation
         List<string> lines = [];
         if (!recovery.HasBlock)
         {
-            lines.Add("No recovered operation IDs require reconciliation.");
+            lines.Add(Tripo.HostUi.TripoUiText.Get("No recovered operation IDs require reconciliation."));
         }
         else
         {
             if (recovery.Issues.Count > 0)
             {
                 lines.Add(
-                    "Tripo cannot safely read one or more local recovery " +
-                    "records. API-key changes and new paid work remain paused.");
+                    Tripo.HostUi.TripoUiText.Get("Tripo cannot safely read one or more local recovery records. API-key changes and new paid work remain paused."));
                 lines.Add(
-                    "The plug-in will not delete or overwrite this evidence. " +
-                    "Inspect or move the named files aside manually, then " +
-                    "refresh recovery.");
+                    Tripo.HostUi.TripoUiText.Get("The plug-in will not delete or overwrite this evidence. Inspect or move the named files aside manually, then refresh recovery."));
             }
             else
             {
                 lines.Add(
-                    "Tripo paused new paid work and API-key changes because an " +
-                    "earlier request may have reached Tripo. This prevents an " +
-                    "accidental duplicate charge.");
+                    Tripo.HostUi.TripoUiText.Get("Tripo paused new paid work and API-key changes because an earlier request may have reached Tripo. This prevents an accidental duplicate charge."));
                 if (state.HasWorkflowState)
                 {
                     lines.Add(
-                        "This panel also has current workflow state. Choose " +
-                        "“Reload and review all work…” to preserve dispatched " +
-                        "operation IDs, clear only unsent setup, and review " +
-                        "everything together.");
+                        Tripo.HostUi.TripoUiText.Get("This panel also has current workflow state. Choose \u201CReload and review all work\u2026\u201D to preserve dispatched operation IDs, clear only unsent setup, and review everything together."));
                 }
                 else
                 {
                     lines.Add(
-                        "Choose “Review recovery…” to inspect the saved " +
-                        "operation status, then confirm what you checked.");
+                        Tripo.HostUi.TripoUiText.Get("Choose \u201CReview recovery\u2026\u201D to inspect the saved operation status, then confirm what you checked."));
                 }
             }
 
             foreach (LoadedTripoPanelRecoveryHint loaded in recovery.Hints)
             {
                 lines.Add(
-                    $"Document session: {loaded.Hint.DocumentSessionId}");
+                    Tripo.HostUi.TripoUiText.Format("Document session: {0}", loaded.Hint.DocumentSessionId));
                 if (loaded.Hint.Generation is not null)
                 {
                     lines.Add(
-                        "Generation UUID: " +
+                        Tripo.HostUi.TripoUiText.Get("Generation UUID: ") +
                         loaded.Hint.Generation.OperationId);
                 }
 
                 if (loaded.Hint.Conversion is not null)
                 {
                     lines.Add(
-                        "Conversion UUID: " +
+                        Tripo.HostUi.TripoUiText.Get("Conversion UUID: ") +
                         loaded.Hint.Conversion.OperationId);
                 }
 
                 if (loaded.Hint.Import is not null)
                 {
                     lines.Add(
-                        "Import UUID: " +
+                        Tripo.HostUi.TripoUiText.Get("Import UUID: ") +
                         loaded.Hint.Import.OperationId);
                 }
             }
@@ -1440,14 +1341,13 @@ public sealed class TripoPanelPresentation
             foreach (TripoPanelRecoveryIssue issue in recovery.Issues)
             {
                 lines.Add(
-                    $"Blocked recovery file {issue.FileName}: " +
-                    $"{issue.Code}. {issue.Message}");
+                    Tripo.HostUi.TripoUiText.Format("Blocked recovery file {0}: {1}. {2}", issue.FileName, issue.Code, issue.Message));
             }
         }
 
         if (!string.IsNullOrWhiteSpace(recoveryInspection))
         {
-            lines.Add("Latest local inspection:");
+            lines.Add(Tripo.HostUi.TripoUiText.Get("Latest local inspection:"));
             lines.Add(recoveryInspection);
         }
 
@@ -1461,17 +1361,17 @@ public sealed class TripoPanelPresentation
     {
         if (task is not null)
         {
-            return $"{TitleCase(task.Status)} · " +
+            return $"{TripoUiText.Get(TitleCase(task.Status))} · " +
                    $"{task.Progress}%";
         }
 
         if (taskId is not null)
         {
-            return "Task created · Refresh to check status";
+            return Tripo.HostUi.TripoUiText.Get("Task created \u00B7 Refresh to check status");
         }
 
         return operation is null
-            ? "Not started"
+            ? Tripo.HostUi.TripoUiText.Get("Not started")
             : FriendlyOperationStatus(operation.State);
     }
 
@@ -1486,52 +1386,52 @@ public sealed class TripoPanelPresentation
         List<string> lines = [];
         if (operation is not null)
         {
-            lines.Add($"Operation state: {operation.State}");
-            lines.Add($"Next action: {operation.NextAction}");
+            lines.Add(Tripo.HostUi.TripoUiText.Format("Operation state: {0}", operation.State));
+            lines.Add(Tripo.HostUi.TripoUiText.Format("Next action: {0}", operation.NextAction));
         }
 
         if (task is not null)
         {
-            lines.Add($"Task status: {task.Status}");
-            lines.Add($"Task progress: {task.Progress}%");
+            lines.Add(Tripo.HostUi.TripoUiText.Format("Task status: {0}", task.Status));
+            lines.Add(Tripo.HostUi.TripoUiText.Format("Task progress: {0}%", task.Progress));
         }
 
         return lines.Count == 0
-            ? "No diagnostic state available."
+            ? Tripo.HostUi.TripoUiText.Get("No diagnostic state available.")
             : string.Join(Environment.NewLine, lines);
     }
 
     private static string FriendlyOperationStatus(string state) =>
         state switch
         {
-            "prepared" => "Prepared · Ready to send",
+            "prepared" => Tripo.HostUi.TripoUiText.Get("Prepared \u00B7 Ready to send"),
             "operation_in_progress" or
                 "dispatching" or
                 "image_upload_dispatching" or
                 "image_generation_dispatching" =>
-                "Request in progress · Wait, then refresh",
+                Tripo.HostUi.TripoUiText.Get("Request in progress \u00B7 Wait, then refresh"),
             "image_file_token_persisted" =>
-                "Upload saved · Ready to resume",
+                Tripo.HostUi.TripoUiText.Get("Upload saved \u00B7 Ready to resume"),
             "task_id_persisted" =>
-                "Task created · Refresh status",
+                Tripo.HostUi.TripoUiText.Get("Task created \u00B7 Refresh status"),
             "outcome_unknown" =>
-                "Outcome unknown · Do not resend",
-            _ => "Status requires inspection",
+                Tripo.HostUi.TripoUiText.Get("Outcome unknown \u00B7 Do not resend"),
+            _ => Tripo.HostUi.TripoUiText.Get("Status requires inspection"),
         };
 
     private static string FriendlyImportResult(string transactionStatus) =>
         transactionStatus switch
         {
-            "committed" => "Imported into Rhino",
-            "already_exists" => "Already imported in Rhino",
-            _ => "Import receipt available · See details",
+            "committed" => Tripo.HostUi.TripoUiText.Get("Imported into Rhino"),
+            "already_exists" => Tripo.HostUi.TripoUiText.Get("Already imported in Rhino"),
+            _ => Tripo.HostUi.TripoUiText.Get("Import receipt available \u00B7 See details"),
         };
 
     private static string TitleCase(string value)
     {
         if (string.IsNullOrWhiteSpace(value))
         {
-            return "Unknown";
+            return Tripo.HostUi.TripoUiText.Get("Unknown");
         }
 
         string trimmed = value.Trim();
