@@ -2,6 +2,12 @@
 
 English | [简体中文](./README.zh-CN.md)
 
+**0.2.1-beta.1 · macOS preview · CuriousArc / qrost.** The interface defaults to
+English, follows Rhino's language when available, and falls back to the system
+UI language; Chinese locales use Simplified Chinese. Restart Rhino after updating.
+Native bilingual layout, optional Grasshopper loading, and Windows acceptance
+remain pending for this release.
+
 Tripo-Rhino is an independent community adapter for Rhino 8. AEC users can run
 text-to-model or local-image-to-model workflows from a per-document Eto panel,
 or use the optional Grasshopper GHA for explicit text/local-image generation

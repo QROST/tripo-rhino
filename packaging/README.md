@@ -22,7 +22,7 @@ runs it on macOS and Windows. These tests do not load Rhino or publish anything.
 dotnet restore Tripo.Rhino.sln
 dotnet build Tripo.Rhino.sln --configuration Release --no-restore
 dotnet test Tripo.Rhino.sln --configuration Release --no-build
-./packaging/New-ReleaseCandidate.ps1 -Version v0.2.0
+./packaging/New-ReleaseCandidate.ps1 -Version v0.2.1-beta.1
 ```
 
 The tag workflow uploads only a short-lived GitHub Actions artifact. It does
@@ -74,34 +74,46 @@ To build the `.yak` file from a fresh Release output:
 
 ```bash
 # 1. Assemble a flat package directory
-PKG=/tmp/yak-pkg
-rm -rf "$PKG" && mkdir -p "$PKG"
-cp -R src/Tripo.Rhino/bin/Release/net7.0/. "$PKG/"
+PKG=$(mktemp -d /tmp/tripo-yak.XXXXXX)
+cp src/Tripo.Rhino/bin/Release/net7.0/Tripo.Rhino.rhp "$PKG/"
+cp src/Tripo.Rhino/bin/Release/net7.0/Tripo.Rhino.deps.json "$PKG/"
+cp src/Tripo.Rhino/bin/Release/net7.0/Tripo.Bridge.dll "$PKG/"
+cp src/Tripo.Rhino/bin/Release/net7.0/Tripo.HostUi.dll "$PKG/"
+rsync -a --exclude='*.pdb' src/Tripo.Rhino/bin/Release/net7.0/sidecar/ "$PKG/sidecar/"
 cp src/Tripo.Rhino.Grasshopper/bin/Release/net7.0/Tripo.Rhino.Grasshopper.gha "$PKG/"
 cp packaging/icon.png packaging/icon-128.png packaging/icon-256.png "$PKG/"
 cp packaging/manifest.yml "$PKG/"
+cp LICENSE NOTICE README.md README.zh-CN.md "$PKG/"
 
-# 2. Build (platform=any declares Windows + macOS; see note below)
+# 2. Build this macOS preview
 YAK="/Applications/Rhino 8.app/Contents/Resources/bin/yak"
-( cd "$PKG" && "$YAK" build --platform any )
-# → produces tripo-rhino-<version>-rh8_32-any.yak
+( cd "$PKG" && "$YAK" build --platform mac )
+# → produces tripo-rhino-<version>-rh8_32-mac.yak
 ```
 
 `yak build` emits two informational warnings that do not block packaging:
 
 - *Content version doesn't match manifest* — the assembly carries a
-  SourceLink-derived `0.2.0+<git-sha>` while the manifest declares `0.2.0`.
+  SourceLink-derived `0.2.1-beta.1+<git-sha>` while the manifest declares `0.2.1-beta.1`.
   This is expected under `Deterministic=true`; the manifest version wins for
   the Yak index.
 - *Content name doesn't match manifest* — the assembly is `Tripo.Rhino` but
   the Yak package name is the lowercase-dashed `tripo-rhino` required by
   the Yak naming rule.
 
-**Platform scope.** `platform: any` declares both Windows and macOS. The
+**Platform scope.** The current manifest and build target macOS only. `any`
+declares both Windows and macOS. The
 `sidecar/runtimes/` directory ships `win/` (for `System.Diagnostics.EventLog`)
 and relies on the .NET 8 framework fallback elsewhere. Only declare `any`
 when both platforms have been exercised; otherwise use `--platform win` or
 `--platform mac` to narrow the claim.
+
+This preview includes the English fallback and Rhino/system-language selection
+for Simplified Chinese, plus CuriousArc publisher metadata. Managed checks and
+archive integrity do not establish native bilingual layout, optional Grasshopper
+loading, or Windows host acceptance. Build from a clean committed tree, retain
+the source commit and SHA-256 of the archive, and verify installed bytes before
+reporting installation. Debug symbols and local credentials are not distributed.
 
 **Publishing.** `yak push <file.yak>` uploads to the central Yak repository
 (`https://yak.rhino3d.com/`) after a one-time `yak login` with the same Rhino

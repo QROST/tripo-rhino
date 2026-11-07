@@ -2,6 +2,10 @@
 
 [English](./README.md) | 简体中文
 
+**0.2.1-beta.1 · macOS 预览版 · CuriousArc / qrost。** 界面默认英文，优先跟随
+Rhino 语言；无法读取时使用系统界面语言，中文区域使用简体中文。更新后请重启 Rhino。
+本版本的原生中英界面布局、可选 Grasshopper 加载及 Windows 实机验收仍待完成。
+
 Tripo-Rhino 是面向 Rhino 8 的独立社区适配器。AEC 用户可以在 per-document Eto
 panel 中使用 text-to-model 或本地图生 3D workflow，也可以通过可选 Grasshopper
 GHA 显式执行 text/本地图生 3D 并得到 Grasshopper mesh value；agentic client 可通过

@@ -19,9 +19,10 @@
 #   - description: YAML folded style for multi-line
 
 name: tripo-rhino
-version: 0.2.0
+version: 0.2.1-beta.1
 authors:
-  - QROST / Zhongding Cui (addincui)
+  - CuriousArc
+  - qrost
   - tripo-rhino contributors
 description: >-
   Tripo for Rhino is an independent community adapter that brings Tripo's
@@ -29,9 +30,10 @@ description: >-
   models from a per-document Eto panel or optional Grasshopper components,
   and import the result as a native PBR block. An MCP server is included
   for agentic clients. Not an official Tripo or McNeel product; users bring
-  their own Tripo API key (BYOK).
+  their own Tripo API key (BYOK). This macOS preview defaults to English
+  and follows Rhino or system language settings for Chinese UI.
 url: https://github.com/QROST/tripo-rhino
-platform: any
+platform: mac
 icon: icon.png
 keywords:
   - tripo

@@ -6,7 +6,11 @@
     <LangVersion>latest</LangVersion>
     <Nullable>enable</Nullable>
     <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
-    <VersionPrefix>0.2.0</VersionPrefix>
+    <VersionPrefix>0.2.1</VersionPrefix>
+    <VersionSuffix>beta.1</VersionSuffix>
+    <Company>CuriousArc</Company>
+    <Authors>CuriousArc; qrost</Authors>
+    <PathMap>$(MSBuildThisFileDirectory)=/_/tripo-rhino/</PathMap>
     <RepositoryUrl>https://github.com/QROST/tripo-rhino</RepositoryUrl>
   </PropertyGroup>
 </Project>

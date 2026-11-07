@@ -1,4 +1,5 @@
 using Xunit;
+using System.Xml.Linq;
 
 namespace Tripo.Mcp.Tests;
 
@@ -12,11 +13,11 @@ public sealed class ProductVersionTests
         string manifest = ReadRepositoryFile(
             Path.Combine("packaging", "manifest.yml"));
 
-        Assert.Matches("^[0-9]+\\.[0-9]+\\.[0-9]+$", version);
-        Assert.Contains(
-            "<VersionPrefix>" + version + "</VersionPrefix>",
-            props,
-            StringComparison.Ordinal);
+        Assert.Matches("^[0-9]+\\.[0-9]+\\.[0-9]+(?:-[0-9A-Za-z.-]+)?$", version);
+        XElement properties = XElement.Parse(props).Element("PropertyGroup")!;
+        string prefix = properties.Element("VersionPrefix")!.Value;
+        string? suffix = properties.Element("VersionSuffix")?.Value;
+        Assert.Equal(version, string.IsNullOrEmpty(suffix) ? prefix : prefix + "-" + suffix);
         Assert.Contains(
             "version: " + version,
             manifest,
